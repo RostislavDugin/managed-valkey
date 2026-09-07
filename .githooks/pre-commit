@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+# Проверка фронта перед коммитом: формат, линтеры, сборка.
+# Форматированные файлы возвращаются в индекс, поэтому в коммит попадает уже
+# отформатированный код. Падение линта или сборки отменяет коммит.
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+staged_web=$(git diff --cached --name-only --diff-filter=ACMR -z -- web | tr '\0' '\n' | sed '/^$/d')
+if [ -z "$staged_web" ]; then
+  exit 0
+fi
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-commit: pnpm не найден, проверки фронта пропустить нельзя" >&2
+  exit 1
+fi
+
+cd web
+
+echo "pre-commit: формат"
+printf '%s\n' "$staged_web" | sed 's|^web/||' | tr '\n' '\0' | xargs -0 --no-run-if-empty pnpm exec oxfmt --
+
+# Файл мог исчезнуть или превратиться в каталог после форматирования — берём только то,
+# что реально лежит на диске, иначе git add оборвёт хук.
+cd "$repo_root"
+printf '%s\n' "$staged_web" | while IFS= read -r file; do
+  [ -f "$file" ] && git add -- "$file"
+done
+
+cd web
+
+echo "pre-commit: линт"
+pnpm lint
+
+echo "pre-commit: сборка"
+pnpm build
