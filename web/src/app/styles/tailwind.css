@@ -1,0 +1,103 @@
+/* Отображение токенов из tokens.css в тему Tailwind 4.
+   Значения не дублируются: каждая переменная Tailwind ссылается на `--h3-*`,
+   поэтому классы вроде `bg-h3-bg-1` переключаются вместе со схемой Mantine.
+   Точки изменения раскладки заданы литералами: внутри media-запросов var() не работает. */
+
+@theme inline {
+  --font-sans: var(--h3-font-family);
+  --font-mono: var(--h3-font-family-mono);
+
+  --font-weight-h3-regular: var(--h3-fw-regular);
+  --font-weight-h3-medium: var(--h3-fw-medium);
+  --font-weight-h3-bold: var(--h3-fw-bold);
+
+  --text-h3-xs: var(--h3-fs-xs);
+  --text-h3-xs--line-height: var(--h3-lh-xs);
+  --text-h3-sm: var(--h3-fs-sm);
+  --text-h3-sm--line-height: var(--h3-lh-sm);
+  --text-h3-md: var(--h3-fs-md);
+  --text-h3-md--line-height: var(--h3-lh-md);
+  --text-h3-lg: var(--h3-fs-lg);
+  --text-h3-lg--line-height: var(--h3-lh-lg);
+  --text-h3-xl: var(--h3-fs-xl);
+  --text-h3-xl--line-height: var(--h3-lh-xl);
+  --text-headline-xs: var(--h3-headline-xs);
+  --text-headline-xs--line-height: var(--h3-headline-lh-xs);
+  --text-headline-sm: var(--h3-headline-sm);
+  --text-headline-sm--line-height: var(--h3-headline-lh-sm);
+  --text-headline-md: var(--h3-headline-md);
+  --text-headline-md--line-height: var(--h3-headline-lh-md);
+  --text-headline-lg: var(--h3-headline-lg);
+  --text-headline-lg--line-height: var(--h3-headline-lh-lg);
+  --text-headline-xl: var(--h3-headline-xl);
+  --text-headline-xl--line-height: var(--h3-headline-lh-xl);
+
+  --color-h3-gray-0: var(--h3-gray-0);
+  --color-h3-gray-1: var(--h3-gray-1);
+  --color-h3-gray-2: var(--h3-gray-2);
+  --color-h3-gray-3: var(--h3-gray-3);
+  --color-h3-gray-4: var(--h3-gray-4);
+  --color-h3-gray-5: var(--h3-gray-5);
+  --color-h3-gray-6: var(--h3-gray-6);
+  --color-h3-gray-7: var(--h3-gray-7);
+  --color-h3-gray-8: var(--h3-gray-8);
+  --color-h3-gray-9: var(--h3-gray-9);
+  --color-h3-mint-0: var(--h3-mint-0);
+  --color-h3-mint-1: var(--h3-mint-1);
+  --color-h3-mint-2: var(--h3-mint-2);
+  --color-h3-mint-3: var(--h3-mint-3);
+  --color-h3-mint-4: var(--h3-mint-4);
+  --color-h3-mint-5: var(--h3-mint-5);
+  --color-h3-mint-6: var(--h3-mint-6);
+  --color-h3-mint-7: var(--h3-mint-7);
+  --color-h3-mint-8: var(--h3-mint-8);
+  --color-h3-mint-9: var(--h3-mint-9);
+
+  --color-h3-bg: var(--h3-bg);
+  --color-h3-bg-1: var(--h3-bg-1);
+  --color-h3-bg-2: var(--h3-bg-2);
+  --color-h3-bg-3: var(--h3-bg-3);
+  --color-h3-bg-inverse: var(--h3-bg-inverse);
+  --color-h3-bg-inverse-1: var(--h3-bg-inverse-1);
+  --color-h3-bg-accent: var(--h3-bg-accent);
+  --color-h3-bg-accent-1: var(--h3-bg-accent-1);
+  --color-h3-bg-accent-2: var(--h3-bg-accent-2);
+  --color-h3-text: var(--h3-text);
+  --color-h3-text-1: var(--h3-text-1);
+  --color-h3-text-2: var(--h3-text-2);
+  --color-h3-text-inverse: var(--h3-text-inverse);
+  --color-h3-text-accent: var(--h3-text-accent);
+  --color-h3-text-accent-1: var(--h3-text-accent-1);
+  --color-h3-border: var(--h3-border);
+  --color-h3-border-1: var(--h3-border-1);
+  --color-h3-border-accent: var(--h3-border-accent);
+  --color-h3-border-control: var(--h3-border-control);
+  --color-h3-border-focus: var(--h3-border-focus);
+  --color-h3-error: var(--h3-error);
+
+  --spacing-h3-xs: var(--h3-space-xs);
+  --spacing-h3-sm: var(--h3-space-sm);
+  --spacing-h3-md: var(--h3-space-md);
+  --spacing-h3-lg: var(--h3-space-lg);
+  --spacing-h3-xl: var(--h3-space-xl);
+
+  --radius-h3-none: var(--h3-radius-none);
+  --radius-h3-xs: var(--h3-radius-xs);
+  --radius-h3-sm: var(--h3-radius-sm);
+  --radius-h3-md: var(--h3-radius-md);
+  --radius-h3-lg: var(--h3-radius-lg);
+  --radius-h3-xl: var(--h3-radius-xl);
+  --radius-h3-full: var(--h3-radius-full);
+
+  --shadow-h3-default: var(--h3-shadow-default);
+  --shadow-h3-primary: var(--h3-shadow-primary);
+
+  --container-h3-page: var(--h3-container-page);
+}
+
+@theme {
+  --breakpoint-mobile: 48rem;
+  --breakpoint-tablet: 64rem;
+  --breakpoint-aside: 80rem;
+  --breakpoint-wide: 88rem;
+}

@@ -1,0 +1,20 @@
+/* Переменные компонентов Mantine, которые сама тема задать не может.
+   Input хранит цвета границы и фона в переменных на обёртке поля и берёт их
+   из палитр gray/dark напрямую. Правила ниже переопределяют обёртку, а
+   состояния фокуса и ошибки оставляют штатным правилам Mantine: они читают
+   `--input-bd-focus` и `--mantine-color-error`. */
+@layer components {
+  .mantine-Input-wrapper[data-variant='default'] {
+    --input-bg: var(--h3-bg);
+    --input-bd-focus: var(--h3-border-focus);
+  }
+
+  .mantine-Input-wrapper[data-variant='default']:not([data-error]) {
+    --input-bd: var(--h3-border-control);
+  }
+
+  .mantine-Input-wrapper[data-variant='filled'] {
+    --input-bg: var(--h3-bg-1);
+    --input-bd-focus: var(--h3-border-focus);
+  }
+}

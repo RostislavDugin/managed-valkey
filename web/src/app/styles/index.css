@@ -1,0 +1,41 @@
+/* Порядок слоёв: Mantine лежит ниже утилит Tailwind, чтобы класс Tailwind
+   мог переопределить стиль компонента, а Preflight не подключается вовсе. */
+@layer theme, base, mantine, components, utilities;
+
+@import '@fontsource-variable/manrope';
+@import '@fontsource-variable/roboto-mono';
+
+@import '@mantine/core/styles.layer.css';
+@import '@mantine/notifications/styles.layer.css';
+@import '@mantine/charts/styles.layer.css';
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@import './tokens.css';
+@import './tailwind.css';
+@import './mantine.css';
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    background-color: var(--h3-bg);
+    color: var(--h3-text);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
