@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="ru" data-mantine-color-scheme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>h3llo.cloud — стайл-гайд</title>
+<style>
+/* ==========================================================================
+   Токены. Копия ../tokens/tokens.css, вкопана инлайном, чтобы файл открывался
+   двойным кликом без сервера.
+   ========================================================================== */
+:root {
+  --h3-gray-0:#f8f8f8; --h3-gray-1:#f2f2f2; --h3-gray-2:#e9e9e9; --h3-gray-3:#dad9da;
+  --h3-gray-4:#b6b6b6; --h3-gray-5:#969696; --h3-gray-6:#6e6e6e; --h3-gray-7:#5a5a5a;
+  --h3-gray-8:#3b3b3b; --h3-gray-9:#1b1b1b;
+
+  --h3-dark-gray-0:#f8f8f8; --h3-dark-gray-1:#f3f3f3; --h3-dark-gray-2:#e9e9e9;
+  --h3-dark-gray-3:#adadad; --h3-dark-gray-4:#8f8f8f; --h3-dark-gray-5:#787878;
+  --h3-dark-gray-6:#414141; --h3-dark-gray-7:#373737; --h3-dark-gray-8:#272727;
+  --h3-dark-gray-9:#1b1b1b;
+
+  --h3-mint-0:#e4ffef; --h3-mint-1:#d5fde7; --h3-mint-2:#b6fdd7; --h3-mint-3:#86fcbc;
+  --h3-mint-4:#6cdb9f; --h3-mint-5:#51ba81; --h3-mint-6:#379a64; --h3-mint-7:#1c7946;
+  --h3-mint-8:#025829; --h3-mint-9:#053c1e;
+  --h3-primary-filled:var(--h3-mint-3);
+  --h3-primary-filled-hover:var(--h3-mint-2);
+
+  --h3-font-family:'manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --h3-font-family-mono:'robotoMono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;
+  --h3-fw-regular:450; --h3-fw-medium:600; --h3-fw-bold:700;
+
+  --h3-fs-xs:.8125rem; --h3-fs-sm:.9375rem; --h3-fs-md:1.0625rem;
+  --h3-fs-lg:1.1875rem; --h3-fs-xl:1.3125rem;
+  --h3-lh-xs:.9375rem; --h3-lh-sm:1.1875rem; --h3-lh-md:1.4375rem;
+  --h3-lh-lg:1.5625rem; --h3-lh-xl:1.8125rem;
+
+  --h3-headline-xs:1.5625rem; --h3-headline-sm:1.875rem; --h3-headline-md:2.1875rem;
+  --h3-headline-lg:2.5rem; --h3-headline-xl:3.125rem;
+
+  --h3-space-xs:.5rem; --h3-space-sm:.75rem; --h3-space-md:1rem;
+  --h3-space-lg:1.5rem; --h3-space-xl:2rem;
+
+  --h3-radius-none:0; --h3-radius-xs:.25rem; --h3-radius-sm:.375rem;
+  --h3-radius-md:.5rem; --h3-radius-lg:.75rem; --h3-radius-xl:1rem; --h3-radius-full:624.9375rem;
+
+  --h3-shadow-default:0 1px 3px 0 rgb(from #1b1b1b r g b / 50%);
+  --h3-shadow-primary:0 2px 4px 0 rgba(0,0,0,.1), 0 0 8px 0 rgba(134,252,188,.5);
+}
+:root, [data-mantine-color-scheme="light"] {
+  --h3-bg:#ffffff; --h3-bg-1:#f8f8f8; --h3-bg-2:#f2f2f2; --h3-bg-3:#e9e9e9;
+  --h3-bg-inverse:#1b1b1b; --h3-bg-inverse-1:#5a5a5a;
+  --h3-bg-accent:#86fcbc; --h3-bg-accent-1:#e4ffef; --h3-bg-accent-2:#b6fdd7;
+  --h3-text:#1b1b1b; --h3-text-1:#969696; --h3-text-2:#6e6e6e; --h3-text-inverse:#ffffff;
+  --h3-text-accent:#51ba81; --h3-text-accent-1:#86fcbc;
+  --h3-border:#e9e9e9; --h3-border-1:#b6b6b6; --h3-border-accent:#6cdb9f;
+  --h3-variant-accent:var(--h3-bg-inverse);
+  --h3-variant-accent-hover:var(--h3-bg-inverse-1);
+  --h3-disabled:var(--h3-gray-2); --h3-disabled-color:var(--h3-gray-3);
+}
+[data-mantine-color-scheme="dark"] {
+  --h3-bg:#1b1b1b; --h3-bg-1:#272727; --h3-bg-2:#373737; --h3-bg-3:#414141;
+  --h3-bg-inverse:#e9e9e9; --h3-bg-inverse-1:#adadad;
+  --h3-bg-accent:#86fcbc; --h3-bg-accent-1:rgba(108, 219, 159, 0.4); --h3-bg-accent-2:#b6fdd7;
+  --h3-text:#ffffff; --h3-text-1:#787878; --h3-text-2:#8f8f8f; --h3-text-inverse:#1b1b1b;
+  --h3-text-accent:#51ba81; --h3-text-accent-1:#86fcbc;
+  --h3-border:#373737; --h3-border-1:#787878; --h3-border-accent:#6cdb9f;
+  --h3-variant-accent:var(--h3-primary-filled);
+  --h3-variant-accent-hover:var(--h3-primary-filled-hover);
+  --h3-disabled:var(--h3-gray-7); --h3-disabled-color:var(--h3-gray-6);
+}
+
+/* ==========================================================================
+   Каркас витрины
+   ========================================================================== */
+*,*::before,*::after { box-sizing:border-box; }
+body {
+  margin:0; background:var(--h3-bg); color:var(--h3-text);
+  font-family:var(--h3-font-family); font-weight:var(--h3-fw-regular);
+  font-size:var(--h3-fs-md); line-height:var(--h3-lh-md);
+  -webkit-font-smoothing:antialiased;
+}
+a { color:var(--h3-text); }
+code, .mono { font-family:var(--h3-font-family-mono); font-size:.85em; }
+
+.sg-top {
+  position:sticky; top:0; z-index:10; height:52px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 var(--h3-space-lg);
+  background:var(--h3-bg); border-bottom:1px solid var(--h3-border);
+}
+.sg-top strong { font-size:var(--h3-fs-md); }
+.sg-top span { color:var(--h3-text-2); font-size:var(--h3-fs-sm); }
+.sg-wrap { max-width:1040px; margin:0 auto; padding:0 var(--h3-space-lg) 120px; }
+.sg-section { padding-top:64px; }
+.sg-section > h2 {
+  font-size:var(--h3-headline-xs); line-height:1.2; font-weight:var(--h3-fw-bold);
+  margin:0 0 var(--h3-space-xs);
+}
+.sg-section > p.lead { color:var(--h3-text-2); margin:0 0 var(--h3-space-lg); max-width:70ch; }
+.sg-block { margin-bottom:var(--h3-space-xl); }
+.sg-block > h3 {
+  font-size:var(--h3-fs-md); line-height:var(--h3-lh-md); font-weight:var(--h3-fw-medium);
+  margin:0 0 var(--h3-space-sm); color:var(--h3-text-2);
+}
+.sg-row { display:flex; flex-wrap:wrap; gap:var(--h3-space-sm); align-items:center; }
+.sg-note {
+  border-left:2px solid var(--h3-border-accent); background:var(--h3-bg-1);
+  padding:var(--h3-space-sm) var(--h3-space-md); border-radius:var(--h3-radius-sm);
+  font-size:var(--h3-fs-sm); line-height:var(--h3-lh-sm); color:var(--h3-text-2);
+  margin:var(--h3-space-md) 0;
+}
+.sg-warn { border-left-color:#fa5252; }
+table.sg { border-collapse:collapse; width:100%; font-size:var(--h3-fs-sm); }
+table.sg th, table.sg td {
+  text-align:left; padding:8px 12px; border-bottom:1px solid var(--h3-border);
+  vertical-align:middle;
+}
+table.sg th { color:var(--h3-text-2); font-weight:var(--h3-fw-medium); }
+.chip { width:28px; height:28px; border-radius:var(--h3-radius-xs); border:1px solid var(--h3-border); display:inline-block; vertical-align:middle; }
+
+/* палитра */
+.ramp { display:grid; grid-template-columns:repeat(10,1fr); gap:2px; margin-bottom:var(--h3-space-md); }
+.ramp div {
+  aspect-ratio:1/1.1; display:flex; flex-direction:column; justify-content:flex-end;
+  padding:6px; font-family:var(--h3-font-family-mono); font-size:10px; line-height:1.3;
+  border-radius:var(--h3-radius-xs);
+}
+.ramp b { font-weight:var(--h3-fw-bold); font-size:11px; }
+
+/* ==========================================================================
+   Компоненты
+   ========================================================================== */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:var(--h3-space-xs);
+  height:42px; padding:0 var(--h3-space-md); border-radius:var(--h3-radius-sm);
+  font-family:inherit; font-size:var(--h3-fs-md); font-weight:var(--h3-fw-medium);
+  cursor:pointer; white-space:nowrap; transition:background-color 200ms ease;
+  border:1px solid transparent;
+}
+.btn:focus-visible { outline:2px solid var(--h3-mint-6); outline-offset:2px; }
+.btn[disabled] { cursor:not-allowed; background:var(--h3-disabled);
+  color:var(--h3-disabled-color); border-color:transparent; }
+.btn--accent { background:var(--h3-variant-accent); color:var(--h3-text-inverse); }
+.btn--accent:hover:not([disabled]) { background:var(--h3-variant-accent-hover); }
+.btn--secondary { background:var(--h3-bg-2); color:var(--h3-text); }
+.btn--secondary:hover:not([disabled]) { background:var(--h3-bg-3); }
+.btn--stroke { background:transparent; color:var(--h3-text); border-color:var(--h3-border); }
+.btn--stroke:hover:not([disabled]) { background:var(--h3-bg-2); }
+.btn--ghost { background:transparent; color:var(--h3-text); }
+.btn--ghost:hover:not([disabled]) { background:var(--h3-bg-2); }
+.btn--xs { height:30px; padding:0 10px; font-size:var(--h3-fs-xs); }
+.btn--block { width:100%; }
+
+.ai {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:36px; height:36px; border-radius:var(--h3-radius-sm);
+  border:1px solid transparent; cursor:pointer; color:var(--h3-text);
+  background:transparent; transition:background-color 200ms ease;
+}
+.ai:focus-visible { outline:2px solid var(--h3-mint-6); outline-offset:2px; }
+.ai--ghost:hover { background:var(--h3-bg-2); }
+.ai--secondary { background:var(--h3-bg-2); }
+.ai--secondary:hover { background:var(--h3-bg-3); }
+.ai--stroke { border-color:var(--h3-border); }
+.ai--stroke:hover { background:var(--h3-bg-2); }
+
+.field { display:flex; align-items:center; gap:4px; width:100%; }
+.input {
+  width:100%; height:42px; padding:0 var(--h3-space-sm);
+  background:var(--h3-bg); color:var(--h3-text);
+  border:1px solid var(--h3-border); border-radius:var(--h3-radius-sm);
+  font-family:inherit; font-size:var(--h3-fs-md);
+}
+.input::placeholder { color:var(--h3-text-1); }
+.input:focus-visible { outline:2px solid var(--h3-mint-6); outline-offset:-1px; }
+.input--sm { height:36px; font-size:var(--h3-fs-sm); }
+.input-wrap { position:relative; width:100%; }
+.input-wrap .sec { position:absolute; right:8px; top:50%; transform:translateY(-50%); display:flex; gap:4px; }
+select.input { appearance:none; cursor:pointer; padding-right:32px; }
+
+.card-radio {
+  border:1px solid var(--h3-border); border-radius:var(--h3-radius-sm);
+  padding:10px; display:flex; align-items:center; gap:var(--h3-space-xs);
+  background:var(--h3-bg); cursor:pointer;
+}
+.card-radio[data-checked="true"] { border-color:var(--h3-border-accent); box-shadow:0 0 0 1px var(--h3-border-accent); }
+.card-radio label { display:flex; align-items:center; gap:var(--h3-space-xs); flex:1 1 auto;
+  min-width:0; cursor:pointer; font-weight:var(--h3-fw-medium); }
+.card-radio .nm { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.card-radio select { width:110px; min-width:0; flex:0 1 110px; }
+.cards-grid { display:grid; gap:10px; grid-template-columns:minmax(0,1fr); }
+@media (min-width:768px) { .cards-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (min-width:992px) { .cards-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+
+input[type="radio"].rd {
+  appearance:none; width:20px; height:20px; margin:0; flex:0 0 auto;
+  border:1px solid var(--h3-border-1); border-radius:var(--h3-radius-full);
+  background:var(--h3-bg); cursor:pointer; display:grid; place-content:center;
+}
+input[type="radio"].rd:checked { background:var(--h3-bg-accent); border-color:var(--h3-bg-accent); }
+input[type="radio"].rd:checked::after {
+  content:""; width:8px; height:8px; border-radius:var(--h3-radius-full); background:var(--h3-mint-8);
+}
+input[type="radio"].rd:focus-visible { outline:2px solid var(--h3-mint-6); outline-offset:2px; }
+
+.sw { display:inline-flex; align-items:center; gap:var(--h3-space-xs); cursor:pointer; }
+.sw input { appearance:none; width:38px; height:22px; margin:0; border-radius:var(--h3-radius-full);
+  background:var(--h3-bg-3); cursor:pointer; position:relative; transition:background-color 200ms ease; }
+.sw input:checked { background:var(--h3-mint-4); }
+.sw input::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px;
+  border-radius:var(--h3-radius-full); background:#fff; transition:transform 200ms ease; }
+.sw input:checked::after { transform:translateX(16px); }
+.sw input:focus-visible { outline:2px solid var(--h3-mint-6); outline-offset:2px; }
+
+.slider { padding:4px 0 22px; position:relative; }
+.slider .track { height:6px; border-radius:var(--h3-radius-md); background:var(--h3-bg-3); position:relative; }
+.slider .bar { position:absolute; inset:0 auto 0 0; border-radius:var(--h3-radius-md); background:var(--h3-border-accent); }
+.slider .thumb { position:absolute; top:50%; width:16px; height:16px; transform:translate(-50%,-50%);
+  border-radius:var(--h3-radius-xs); background:var(--h3-bg-accent); border:1px solid var(--h3-border-accent); }
+.slider .marks { position:absolute; left:0; right:0; top:18px; display:flex; justify-content:space-between;
+  font-size:var(--h3-fs-xs); color:var(--h3-text-2); font-family:var(--h3-font-family-mono); }
+
+.navlink {
+  display:flex; align-items:center; gap:var(--h3-space-xs);
+  padding:8px 12px; border-radius:var(--h3-radius-sm); color:var(--h3-text);
+  text-decoration:none; font-size:var(--h3-fs-md); cursor:pointer;
+}
+.navlink:hover { background:var(--h3-bg-3); }
+.crumbs { display:flex; align-items:center; gap:var(--h3-space-xs); font-size:var(--h3-fs-sm); flex-wrap:wrap; }
+.crumbs .sep { color:var(--h3-text-2); }
+.crumbs span:last-child { color:var(--h3-text); }
+.crumbs a { color:var(--h3-text); text-decoration:none; }
+.crumbs a:hover { text-decoration:underline; }
+
+.seg { display:inline-flex; padding:4px; background:var(--h3-bg-2); border-radius:var(--h3-radius-sm); gap:2px; }
+.seg button { border:0; background:transparent; color:var(--h3-text); font-family:inherit;
+  font-size:var(--h3-fs-sm); padding:4px 14px; border-radius:var(--h3-radius-xs); cursor:pointer; }
+.seg button[aria-pressed="true"] { background:var(--h3-bg); box-shadow:var(--h3-shadow-default); }
+
+.calc { background:var(--h3-bg-2); border-radius:var(--h3-radius-sm); padding:3px; max-width:300px; }
+.calc .body { background:var(--h3-bg); border-radius:5px; padding:4px 0; margin-top:2px; }
+.calc .line { display:flex; justify-content:space-between; gap:10px; padding:10px 12px;
+  font-size:var(--h3-fs-sm); line-height:var(--h3-lh-sm); }
+.calc .total { font-size:var(--h3-fs-lg); }
+
+.demo-shell { border:1px solid var(--h3-border); border-radius:var(--h3-radius-md); overflow:hidden; }
+@media (min-width:1100px) {
+  .demo-shell { width:min(1200px, calc(100vw - 48px));
+    margin-left:calc(50% - min(600px, 50vw - 24px)); }
+}
+.demo-head { height:52px; display:flex; align-items:center; padding:0 var(--h3-space-md);
+  border-bottom:1px solid var(--h3-border); }
+.demo-body { display:grid; grid-template-columns:minmax(0,1fr) 300px;
+  gap:var(--h3-space-lg); padding:var(--h3-space-lg); }
+.demo-body > * { min-width:0; }
+@media (max-width:900px) { .demo-body { grid-template-columns:minmax(0,1fr); } }
+.form-row { display:grid; grid-template-columns:220px 1fr; gap:var(--h3-space-md);
+  align-items:center; min-height:60px; }
+@media (max-width:640px) { .form-row { grid-template-columns:1fr; } }
+.form-label { display:flex; align-items:center; gap:4px; font-size:var(--h3-fs-md); }
+.form-label svg { color:var(--h3-text-1); }
+
+.swatch-line { display:flex; align-items:center; gap:var(--h3-space-sm); }
+.ratio-bad { color:#e03131; font-weight:var(--h3-fw-medium); }
+.on-white { background:#fff; padding:2px 8px; border-radius:var(--h3-radius-xs); display:inline-block; }
+.ratio-ok { color:var(--h3-mint-7); font-weight:var(--h3-fw-medium); }
+[data-mantine-color-scheme="dark"] .ratio-ok { color:var(--h3-mint-3); }
+
+@media (prefers-reduced-motion:reduce) {
+  *,*::before,*::after { transition-duration:.01ms !important; animation-duration:.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="sg-top">
+  <div><strong>h3llo.cloud</strong> <span>стайл-гайд</span></div>
+  <button class="ai ai--ghost" id="scheme" aria-label="Переключить тему">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+  </button>
+</header>
+
+<div class="sg-wrap">
+
+  <section class="sg-section">
+    <h2>Что это</h2>
+    <p class="lead">
+      Витрина токенов и компонентов h3llo.cloud. Значения перенесены из собранной
+      Mantine-темы <code>app.h3llo.cloud</code>. Переключатель в шапке меняет
+      <code>data-mantine-color-scheme</code> на корне документа — тем же способом,
+      что и в консоли.
+    </p>
+    <div class="sg-note">
+      Шрифты Manrope и Roboto Mono самохостятся в продукте и здесь не подключены:
+      страница показывает системный запасной стек. Пропорции размеров и интерлиньяжа
+      при этом верные.
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Палитры</h2>
+    <p class="lead">Примитивы. В компонентах напрямую не используются, кроме отдельных случаев вроде точки внутри радио.</p>
+
+    <div class="sg-block">
+      <h3>h3_gray — светлая схема</h3>
+      <div class="ramp" id="ramp-gray"></div>
+      <h3>h3_dark_gray — тёмная схема</h3>
+      <div class="ramp" id="ramp-dark"></div>
+      <h3>h3_mint — первичный цвет</h3>
+      <div class="ramp" id="ramp-mint"></div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Семантические токены</h2>
+    <p class="lead">Значения меняются вместе со схемой. Переключи тему и посмотри, что происходит с каждым.</p>
+    <table class="sg"><thead><tr><th style="width:40px"></th><th>Токен</th><th>Роль</th></tr></thead>
+    <tbody id="sem"></tbody></table>
+  </section>
+
+  <section class="sg-section">
+    <h2>Типографика</h2>
+    <div class="sg-block">
+      <h3>Заголовочная шкала</h3>
+      <div style="font-size:var(--h3-headline-xl);line-height:1.042;font-weight:700">headline_xl 50</div>
+      <div style="font-size:var(--h3-headline-lg);line-height:1;font-weight:700">headline_lg 40</div>
+      <div style="font-size:var(--h3-headline-md);line-height:1.029;font-weight:700">headline_md 35</div>
+      <div style="font-size:var(--h3-headline-sm);line-height:1.067;font-weight:700">headline_sm 30 — h1</div>
+      <div style="font-size:var(--h3-headline-xs);line-height:1.2;font-weight:700">headline_xs 25 — h2</div>
+    </div>
+    <div class="sg-block">
+      <h3>Интерфейсная шкала</h3>
+      <div style="font-size:var(--h3-fs-xl);line-height:var(--h3-lh-xl);font-weight:700">h3_xl 21/29 — h3</div>
+      <div style="font-size:var(--h3-fs-lg);line-height:var(--h3-lh-lg);font-weight:700">h3_lg 19/25 — h4</div>
+      <div style="font-size:var(--h3-fs-md);line-height:var(--h3-lh-md)">h3_md 17/23 — основной текст и подписи полей</div>
+      <div style="font-size:var(--h3-fs-sm);line-height:var(--h3-lh-sm);color:var(--h3-text-2)">h3_sm 15/19 — вторичный текст, крошки, строки расчёта</div>
+      <div style="font-size:var(--h3-fs-xs);line-height:var(--h3-lh-xs);color:var(--h3-text-2)">h3_xs 13/15 — служебные подписи</div>
+    </div>
+    <div class="sg-block">
+      <h3>Начертания и моноширинный</h3>
+      <div style="font-weight:450">450 regular — основной текст</div>
+      <div style="font-weight:600">600 medium — подписи и названия</div>
+      <div style="font-weight:700">700 bold — заголовки</div>
+      <div class="mono" style="font-size:var(--h3-fs-md);margin-top:8px">robotoMono — virtual-machine-1474 · 192.168.0.1 · 1 926,00 ₽</div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Отступы, радиусы, тени</h2>
+    <div class="sg-block">
+      <h3>Отступы</h3>
+      <div class="sg-row" id="spaces"></div>
+    </div>
+    <div class="sg-block">
+      <h3>Радиусы</h3>
+      <div class="sg-row" id="radii"></div>
+    </div>
+    <div class="sg-block">
+      <h3>Тени</h3>
+      <div class="sg-row">
+        <div style="width:170px;height:64px;border-radius:var(--h3-radius-sm);background:var(--h3-bg);box-shadow:var(--h3-shadow-default);display:grid;place-content:center;font-size:var(--h3-fs-sm)">h3_default</div>
+        <div style="width:170px;height:64px;border-radius:var(--h3-radius-sm);background:var(--h3-bg);box-shadow:var(--h3-shadow-primary);display:grid;place-content:center;font-size:var(--h3-fs-sm)">h3_primary</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Кнопки</h2>
+    <p class="lead">Вариант выбирается по весу действия. Главная кнопка меняет цвет вместе со схемой: чёрная в светлой, мятная в тёмной.</p>
+    <div class="sg-block">
+      <h3>Варианты</h3>
+      <div class="sg-row">
+        <button class="btn btn--accent">Собрать и запустить</button>
+        <button class="btn btn--secondary">Второстепенное</button>
+        <button class="btn btn--stroke">С границей</button>
+        <button class="btn btn--ghost">Без веса</button>
+        <button class="btn btn--accent" disabled>Заблокировано</button>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Размеры</h3>
+      <div class="sg-row">
+        <button class="btn btn--ghost btn--xs">Создать проект
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>
+        </button>
+        <button class="btn btn--accent">По умолчанию, 42px</button>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Иконочные кнопки</h3>
+      <div class="sg-row">
+        <button class="ai ai--ghost" aria-label="Профиль"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/></svg></button>
+        <button class="ai ai--secondary" aria-label="Уменьшить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+        <button class="ai ai--secondary" aria-label="Увеличить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+        <button class="ai ai--stroke" aria-label="Сгенерировать случайное имя"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+      </div>
+      <div class="sg-note">Каждая иконочная кнопка здесь имеет <code>aria-label</code>. Без него скринридер прочитает её как «кнопка».</div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Поля</h2>
+    <div class="sg-block">
+      <h3>Текстовое поле с действием</h3>
+      <div class="field" style="max-width:420px">
+        <div class="input-wrap"><input class="input" value="virtual-machine-1474" aria-label="Имя виртуальной машины"></div>
+        <button class="ai ai--stroke" style="height:42px;width:42px" aria-label="Сгенерировать случайное имя"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Числовое поле</h3>
+      <div class="input-wrap" style="max-width:420px">
+        <input class="input" value="15 ГБ" aria-label="Размер диска" style="padding-right:88px">
+        <div class="sec">
+          <button class="ai ai--secondary" aria-label="Уменьшить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+          <button class="ai ai--secondary" aria-label="Увеличить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+        </div>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Список и пустой список</h3>
+      <div class="sg-row" style="max-width:640px">
+        <select class="input" style="max-width:300px" aria-label="Сеть"><option>default-network</option></select>
+        <select class="input input--sm" style="max-width:300px" aria-label="SSH ключ"><option value="">Выберите ключ</option></select>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Радиогруппа карточками</h3>
+      <div class="cards-grid" id="oslist"></div>
+    </div>
+    <div class="sg-block">
+      <h3>Слайдер</h3>
+      <div style="max-width:420px">
+        <div class="slider">
+          <div class="track"><div class="bar" style="width:33%"></div><div class="thumb" style="left:33%"></div></div>
+          <div class="marks"><span>1</span><span>2</span><span>4</span><span>8</span><span>16</span><span>32</span><span>64</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Переключатель</h3>
+      <label class="sw"><input type="checkbox" checked><span>Вкл</span></label>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Навигация</h2>
+    <div class="sg-block">
+      <h3>Хлебные крошки</h3>
+      <div class="crumbs">
+        <a href="#">Мои проекты</a><span class="sep">/</span>
+        <a href="#">Проект</a><span class="sep">/</span>
+        <a href="#">Виртуальные машины</a><span class="sep">/</span>
+        <span>Создание ВМ</span>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Пункты навигации и вложенность</h3>
+      <div style="max-width:280px;border:1px solid var(--h3-border);border-radius:var(--h3-radius-sm);padding:4px">
+        <a class="navlink" href="#"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>Инстансы</a>
+        <a class="navlink" href="#" style="padding-left:20px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Сеть</a>
+        <a class="navlink" href="#" style="padding-left:40px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg>default-network</a>
+      </div>
+    </div>
+    <div class="sg-block">
+      <h3>Сегментированный контрол</h3>
+      <div class="seg" role="group" aria-label="Период">
+        <button aria-pressed="true">Месяц</button><button aria-pressed="false">День</button><button aria-pressed="false">Час</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Экран целиком</h2>
+    <p class="lead">Форма создания ресурса: подпись слева, контрол справа, живой расчёт стоимости справа от формы.</p>
+    <div class="demo-shell">
+      <div class="demo-head">
+        <div class="crumbs">
+          <a href="#">Мои проекты</a><span class="sep">/</span>
+          <a href="#">Проект</a><span class="sep">/</span>
+          <span>Создание ВМ</span>
+        </div>
+      </div>
+      <div class="demo-body">
+        <div>
+          <h1 style="font-size:var(--h3-headline-sm);line-height:1.067;font-weight:700;margin:0 0 32px">Конфигурация виртуальной машины</h1>
+
+          <div style="margin-bottom:var(--h3-space-md)">
+            <div class="form-label" style="margin-bottom:12px">ОС
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            </div>
+            <div class="cards-grid" id="oslist2"></div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">vCPU <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <div class="slider">
+              <div class="track"><div class="bar" style="width:0%"></div><div class="thumb" style="left:0%"></div></div>
+              <div class="marks"><span>1</span><span>2</span><span>4</span><span>8</span><span>16</span><span>32</span><span>64</span></div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">RAM <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <div class="slider">
+              <div class="track"><div class="bar" style="width:0%"></div><div class="thumb" style="left:0%"></div></div>
+              <div class="marks"><span>2 ГБ</span><span>4 ГБ</span><span>8 ГБ</span><span>16 ГБ</span></div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Диски <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <div class="input-wrap">
+              <input class="input" value="15 ГБ" aria-label="Размер диска" style="padding-right:88px">
+              <div class="sec">
+                <button class="ai ai--secondary" aria-label="Уменьшить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+                <button class="ai ai--secondary" aria-label="Увеличить"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Имя виртуальной машины <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <div class="field">
+              <div class="input-wrap"><input class="input" value="virtual-machine-1474" aria-label="Имя виртуальной машины"></div>
+              <button class="ai ai--stroke" style="height:42px;width:42px" aria-label="Сгенерировать случайное имя"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg></button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Сеть <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <select class="input" aria-label="Сеть"><option>default-network</option></select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-label">Публичный IPv4 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></div>
+            <label class="sw"><input type="checkbox" checked><span>Вкл</span></label>
+          </div>
+
+          <div class="form-row">
+            <div></div>
+            <button class="btn btn--accent btn--block" style="margin-top:16px">Собрать и запустить</button>
+          </div>
+        </div>
+
+        <aside>
+          <div class="calc">
+            <div class="seg" role="group" aria-label="Период" style="background:transparent">
+              <button aria-pressed="true">Месяц</button><button aria-pressed="false">День</button><button aria-pressed="false">Час</button>
+            </div>
+            <div class="body">
+              <div class="line"><span>1 vCPU</span><span>900,00&nbsp;₽</span></div>
+              <div class="line"><span>2 ГБ RAM</span><span>720,00&nbsp;₽</span></div>
+              <div class="line"><span>15 ГБ Диск</span><span>216,00&nbsp;₽</span></div>
+              <div class="line"><span>Публичный IP (1)</span><span>90,00&nbsp;₽</span></div>
+              <div class="line"><span><span class="total">1&nbsp;926,00&nbsp;₽</span> в месяц</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="color:var(--h3-text-1)" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <section class="sg-section">
+    <h2>Контраст</h2>
+    <p class="lead">Пары из светлой схемы. Примеры набраны на белом независимо от текущей темы,
+      потому что разговор именно про светлый фон. В тёмной схеме те же токены ведут себя иначе:
+      мятный текст там даёт 7.13&nbsp;:&nbsp;1.</p>
+    <table class="sg">
+      <thead><tr><th>Пример</th><th>Пара</th><th>Ratio в светлой</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="on-white" style="color:#51BA81">+ бонус 3 844,12 ₽</span></td>
+          <td><code>h3_text_accent</code> на <code>h3_bg</code></td>
+          <td class="ratio-bad">2.42 : 1</td>
+        </tr>
+        <tr>
+          <td><span class="on-white" style="color:#969696">Выберите ключ</span></td>
+          <td><code>h3_text_1</code> на <code>h3_bg</code></td>
+          <td class="ratio-bad">2.96 : 1</td>
+        </tr>
+        <tr>
+          <td><span class="on-white" style="color:#6E6E6E">Вторичный текст</span></td>
+          <td><code>h3_text_2</code> на <code>h3_bg</code></td>
+          <td class="ratio-ok">5.10 : 1</td>
+        </tr>
+        <tr>
+          <td><span class="on-white" style="color:#1C7946">+ бонус 3 844,12 ₽</span></td>
+          <td><code>h3_mint-7</code> на <code>h3_bg</code> — предлагаемая замена</td>
+          <td class="ratio-ok">5.42 : 1</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="sg-note sg-warn">
+      Полный разбор и рекомендации — в <code>../quality/contrast-audit.md</code>.
+    </div>
+  </section>
+
+</div>
+
+<script>
+const palettes = {
+  'ramp-gray': ['#F8F8F8','#F2F2F2','#E9E9E9','#DAD9DA','#B6B6B6','#969696','#6E6E6E','#5A5A5A','#3B3B3B','#1B1B1B'],
+  'ramp-dark': ['#F8F8F8','#F3F3F3','#E9E9E9','#ADADAD','#8F8F8F','#787878','#414141','#373737','#272727','#1B1B1B'],
+  'ramp-mint': ['#E4FFEF','#D5FDE7','#B6FDD7','#86FCBC','#6CDB9F','#51BA81','#379A64','#1C7946','#025829','#053C1E'],
+};
+function lum(h){h=h.replace('#','');const c=[0,2,4].map(i=>parseInt(h.substr(i,2),16)/255)
+  .map(x=>x<=0.04045?x/12.92:Math.pow((x+0.055)/1.055,2.4));
+  return 0.2126*c[0]+0.7152*c[1]+0.0722*c[2];}
+function readable(hex){return lum(hex)>0.35?'#1B1B1B':'#FFFFFF';}
+for (const [id, colors] of Object.entries(palettes)) {
+  document.getElementById(id).innerHTML = colors.map((c,i)=>
+    `<div style="background:${c};color:${readable(c)}"><b>${i}</b>${c}</div>`).join('');
+}
+
+const semantic = [
+  ['h3_bg','фон страницы и карточек'],
+  ['h3_bg_1','приподнятый блок, панель'],
+  ['h3_bg_2','заливка второстепенной кнопки'],
+  ['h3_bg_3','наведение на пункт навигации'],
+  ['h3_bg_inverse','заливка главной кнопки в светлой схеме'],
+  ['h3_bg_inverse_1','её наведение'],
+  ['h3_bg_accent','выбранное состояние, плашка цены'],
+  ['h3_bg_accent_1','мягкая подсветка блока'],
+  ['h3_bg_accent_2','наведение на акцентную поверхность'],
+  ['h3_text','основной текст'],
+  ['h3_text_2','вторичный текст, подписи'],
+  ['h3_text_1','плейсхолдер, неактивное'],
+  ['h3_text_inverse','текст на инверсной заливке'],
+  ['h3_text_accent','акцентный текст'],
+  ['h3_text_accent_1','акцентный текст на тёмном'],
+  ['h3_border','рамка поля, разделитель'],
+  ['h3_border_1','усиленная граница'],
+  ['h3_border_accent','слайдер, выбранная карточка'],
+];
+document.getElementById('sem').innerHTML = semantic.map(([t,role])=>{
+  const v = '--' + t.replace(/_/g,'-');
+  return `<tr><td><span class="chip" style="background:var(${v})"></span></td><td><code>${t}</code></td><td>${role}</td></tr>`;
+}).join('');
+
+const spaces = [['xs','8'],['sm','12'],['md','16'],['lg','24'],['xl','32']];
+document.getElementById('spaces').innerHTML = spaces.map(([k,px])=>
+  `<div style="text-align:center"><div style="width:${px}px;height:48px;background:var(--h3-bg-accent);border-radius:2px"></div>
+   <div style="font-size:12px;color:var(--h3-text-2);margin-top:6px">${k}<br>${px}</div></div>`).join('');
+
+const radii = [['none','0'],['xs','4'],['sm','6'],['md','8'],['lg','12'],['xl','16'],['full','∞']];
+document.getElementById('radii').innerHTML = radii.map(([k,px])=>
+  `<div style="text-align:center"><div style="width:56px;height:56px;background:var(--h3-bg-2);border:1px solid var(--h3-border);border-radius:${px==='∞'?'999px':px+'px'}"></div>
+   <div style="font-size:12px;color:var(--h3-text-2);margin-top:6px">${k}<br>${px}</div></div>`).join('');
+
+const os = [['Ubuntu','25.10',true],['Centos','10',false],['Fedora','43',false],
+            ['Debian','13',false],['AlmaLinux','10',false],['VyOS Stream','2026.03',false]];
+function osCards(name){
+  return os.map(([n,v,checked],i)=>`
+  <div class="card-radio" data-checked="${checked}">
+    <label><input type="radio" class="rd" name="${name}" ${checked?'checked':''}><span class="nm">${n}</span></label>
+    <select class="input input--sm card-select" style="width:110px" aria-label="Версия ${n}" ${checked?'':'disabled'}>
+      <option>${v}</option>
+    </select>
+  </div>`).join('');
+}
+document.getElementById('oslist').innerHTML = osCards('os1');
+document.getElementById('oslist2').innerHTML = osCards('os2');
+document.querySelectorAll('.card-radio input[type=radio]').forEach(r=>{
+  r.addEventListener('change', ()=>{
+    document.querySelectorAll(`input[name="${r.name}"]`).forEach(o=>{
+      const card = o.closest('.card-radio');
+      card.dataset.checked = o.checked;
+      card.querySelector('select').disabled = !o.checked;
+    });
+  });
+});
+
+document.querySelectorAll('.seg').forEach(seg=>{
+  seg.addEventListener('click', e=>{
+    const b = e.target.closest('button'); if(!b) return;
+    seg.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', String(x===b)));
+  });
+});
+
+const root = document.documentElement;
+// Схему можно задать адресом (?scheme=dark) и она запоминается между заходами.
+const fromUrl = new URLSearchParams(location.search).get('scheme');
+const saved = (() => { try { return localStorage.getItem('sg-scheme'); } catch { return null; } })();
+const initial = fromUrl || saved;
+if (initial === 'dark' || initial === 'light') root.dataset.mantineColorScheme = initial;
+
+document.getElementById('scheme').addEventListener('click', ()=>{
+  const next = root.dataset.mantineColorScheme === 'dark' ? 'light' : 'dark';
+  root.dataset.mantineColorScheme = next;
+  try { localStorage.setItem('sg-scheme', next); } catch {}
+});
+</script>
+</body>
+</html>
