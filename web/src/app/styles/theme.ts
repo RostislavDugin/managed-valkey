@@ -1,4 +1,5 @@
 import {
+  Container,
   createTheme,
   defaultVariantColorsResolver,
   rem,
@@ -184,6 +185,11 @@ export const theme = createTheme({
   },
   other: {
     fontWeights: { regular: 450, medium: 600, bold: 700 },
+  },
+
+  components: {
+    /** Боковой отступ страницы 24px: столько же между колонкой навигации и текстом в оригинале консоли. */
+    Container: Container.extend({ defaultProps: { px: 'h3_lg' } }),
   },
 
   colors: {

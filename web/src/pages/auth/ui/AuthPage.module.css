@@ -1,0 +1,46 @@
+.page {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: var(--h3-space-xl) var(--h3-space-md);
+}
+
+.content {
+  display: flex;
+  width: min(100%, 25rem);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--h3-space-lg);
+}
+
+.card {
+  width: 100%;
+  border: 1px solid var(--h3-border);
+  border-radius: var(--h3-radius-sm);
+  background: var(--h3-bg);
+  padding: var(--h3-space-lg);
+}
+
+.logo {
+  color: var(--h3-text);
+}
+
+.email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint {
+  display: flex;
+  align-items: center;
+  gap: var(--h3-space-xs);
+}
+
+.hints {
+  margin-top: var(--h3-space-xs);
+}
+
+.hints:empty {
+  margin-top: 0;
+}

@@ -1,0 +1,160 @@
+.shell {
+  min-height: 100dvh;
+  background: var(--h3-bg);
+}
+
+.desktopNavigation {
+  position: fixed;
+  inset: 0 auto 0 0;
+  display: none;
+  width: var(--h3-navbar-width);
+  border-right: 1px solid var(--h3-border);
+  background: var(--h3-bg);
+}
+
+.navigation {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  padding: var(--h3-space-xs) 0 0;
+}
+
+.logo {
+  flex: none;
+  /* 13px слева и 16px сверху вместе с отступом колонки: замер по оригиналу консоли. */
+  margin: var(--h3-space-xs) 0 var(--h3-space-xl) 0.8125rem;
+  color: var(--h3-text);
+}
+
+/* Ряд иконочных кнопок нижнего блока: 6px по вертикали вне шкалы отступов,
+   чтобы ряд встал в те же 40px, что и в оригинале консоли. */
+.iconRow {
+  padding: 0.375rem var(--h3-space-xs);
+}
+
+/* Отключённая кнопка справки остаётся прозрачной: заливка Mantine по умолчанию
+   выглядит как активное состояние. */
+.iconRow button[data-disabled] {
+  background: transparent;
+}
+
+.navigationBody {
+  flex: 1;
+}
+
+.navLink {
+  display: flex;
+  min-height: 2.25rem; /* 36px — плотная строка навигации */
+  align-items: center;
+  gap: var(--h3-space-xs);
+  padding: var(--h3-space-xs) var(--h3-space-sm);
+  color: var(--h3-text);
+  font-size: var(--h3-fs-sm);
+  line-height: var(--h3-lh-sm);
+  text-decoration: none;
+}
+
+.navLink:hover {
+  background: var(--h3-bg-3);
+}
+
+.navLinkActive,
+.navLinkActive:hover {
+  background: var(--h3-bg-2);
+}
+
+.navigationFooter {
+  flex: none;
+}
+
+.emailRow {
+  display: flex;
+  width: 100%;
+  min-height: 2.25rem;
+  min-width: 0;
+  align-items: center;
+  gap: var(--h3-space-xs);
+  padding: var(--h3-space-xs) var(--h3-space-sm);
+  color: var(--h3-text);
+}
+
+.emailRow:hover {
+  background: var(--h3-bg-3);
+}
+
+.email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobileHeader {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  height: var(--h3-header-height);
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--h3-border);
+  background: var(--h3-bg);
+  padding: 0 var(--h3-space-md);
+}
+
+.main {
+  min-height: 100dvh;
+}
+
+.drawerBody {
+  height: 100dvh;
+  padding: 0;
+  background: var(--h3-bg);
+}
+
+.progress {
+  position: fixed;
+  z-index: 1000;
+  inset: 0 0 auto;
+}
+
+.skipLink {
+  position: fixed;
+  z-index: 1100;
+  top: var(--h3-space-xs);
+  left: var(--h3-space-xs);
+  transform: translateY(-200%);
+  border-radius: var(--h3-radius-sm);
+  background: var(--h3-bg-inverse);
+  color: var(--h3-text-inverse);
+  padding: var(--h3-space-xs) var(--h3-space-sm);
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+}
+
+@media (min-width: 64em) {
+  .desktopNavigation {
+    display: block;
+  }
+
+  .mobileHeader {
+    display: none;
+  }
+
+  .main {
+    margin-left: var(--h3-navbar-width);
+  }
+}
+
+@media (min-width: 88em) {
+  .desktopNavigation {
+    width: var(--h3-navbar-width-wide);
+  }
+
+  .main {
+    margin-left: var(--h3-navbar-width-wide);
+  }
+}

@@ -1,9 +1,28 @@
+import { useSyncExternalStore } from 'react';
 import { RouterProvider } from 'react-router';
-import { MantineProvider } from '@mantine/core';
+import { Center, Loader, MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { router } from './routes';
 import { cssVariablesResolver, theme } from './styles/theme';
 import './styles/index.css';
+
+function subscribeToRouter(onStoreChange: () => void) {
+  return router.subscribe(onStoreChange);
+}
+
+function InitialSessionLoader() {
+  return (
+    <Center mih="100dvh">
+      <Loader aria-label="Проверка сессии" color="h3_bg_accent" />
+    </Center>
+  );
+}
+
+function AppRouter() {
+  const initialized = useSyncExternalStore(subscribeToRouter, () => router.state.initialized);
+
+  return initialized ? <RouterProvider router={router} /> : <InitialSessionLoader />;
+}
 
 export function App() {
   return (
@@ -13,7 +32,7 @@ export function App() {
       defaultColorScheme="auto"
     >
       <Notifications position="top-right" containerWidth={440} />
-      <RouterProvider router={router} />
+      <AppRouter />
     </MantineProvider>
   );
 }
