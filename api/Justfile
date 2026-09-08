@@ -19,14 +19,14 @@ test:
         docker compose -f docker-compose.dev.yml exec -T postgres \
             createdb --username "${POSTGRES_USER:-managed_valkey}" managed_valkey_test; \
     fi
-    cd {{ root }} && go tool goose -dir migrations postgres {{ quote(test_database_url) }} up
+    cd {{ root }} && go tool goose -allow-missing -dir migrations postgres {{ quote(test_database_url) }} up
     cd {{ root }} && TEST_DATABASE_URL={{ quote(test_database_url) }} go test ./api/... ./internal/...
 
 migration-up:
-    cd {{ root }} && go tool goose -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" up
+    cd {{ root }} && go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" up
 
 migration-down:
-    cd {{ root }} && go tool goose -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" down
+    cd {{ root }} && go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" down
 
 migration-generate name:
-    cd {{ root }} && go tool goose -dir migrations create {{ name }} sql
+    cd {{ root }} && go tool goose -allow-missing -dir migrations create {{ name }} sql

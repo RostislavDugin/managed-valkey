@@ -36,5 +36,5 @@ FROM ${RUNTIME_IMAGE} AS migrate
 COPY --from=goose-build /out/goose /usr/local/bin/goose
 COPY migrations /migrations
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/goose", "-dir", "/migrations"]
+ENTRYPOINT ["/usr/local/bin/goose", "-allow-missing", "-dir", "/migrations"]
 CMD ["up"]
