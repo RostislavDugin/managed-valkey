@@ -49,6 +49,7 @@ function PasswordHints({ capsLock = false, value }: { capsLock?: boolean; value:
           Включён CapsLock
         </Text>
       )}
+
       {CYRILLIC_PATTERN.test(value) && (
         <Text c="h3_text_2" size="h3_sm" className={styles.hint}>
           <AlertTriangle aria-hidden="true" size={16} strokeWidth={1.5} />
@@ -62,10 +63,12 @@ function PasswordHints({ capsLock = false, value }: { capsLock?: boolean; value:
 export function AuthPage() {
   const { reason, returnTo } = useLoaderData() as AuthRouteData;
   const navigate = useNavigate();
+
   const [step, setStep] = useState<AuthStep>('email');
   const [loading, setLoading] = useState(false);
-  const capsLock = useCapsLock();
   const [stepMessage, setStepMessage] = useState<string | null>(null);
+
+  const capsLock = useCapsLock();
 
   const form = useForm<AuthFormValues>({
     mode: 'controlled',
@@ -99,8 +102,10 @@ export function AuthPage() {
   const submitEmail = async (values: AuthFormValues) => {
     setLoading(true);
     setStepMessage(null);
+
     try {
       const result = await checkEmail({ email: values.email });
+
       form.setFieldValue('email', values.email.trim().toLowerCase());
       setStep(result.exists ? 'login' : 'register');
     } catch (error) {
@@ -113,12 +118,14 @@ export function AuthPage() {
   const submitPassword = async (values: AuthFormValues) => {
     setLoading(true);
     setStepMessage(null);
+
     try {
       if (step === 'register') {
         await register({ email: values.email, password: values.password });
       } else {
         await login({ email: values.email, password: values.password });
       }
+
       await navigate(returnTo || routes.home, { replace: true });
     } catch (error) {
       form.setFieldValue('password', '');
@@ -138,11 +145,26 @@ export function AuthPage() {
   const returnToEmail = () => {
     form.setFieldValue('password', '');
     form.setFieldValue('confirmPassword', '');
+
     form.clearFieldError('password');
     form.clearFieldError('confirmPassword');
+
     setStepMessage(null);
     setStep('email');
   };
+
+  const title =
+    step === 'email' ? 'Вход в консоль' : step === 'login' ? 'Введите пароль' : 'Создайте аккаунт';
+
+  const description =
+    step === 'email'
+      ? 'Введите почту. Если аккаунта ещё нет, мы предложим его создать.'
+      : step === 'login'
+        ? 'Введите пароль от аккаунта.'
+        : 'Задайте пароль не короче 8 символов.';
+
+  const submitLabel =
+    step === 'email' ? 'Продолжить' : step === 'login' ? 'Войти' : 'Создать аккаунт';
 
   return (
     <main className={styles.page}>
@@ -157,18 +179,11 @@ export function AuthPage() {
             <Stack gap="h3_md">
               <div>
                 <Title id="auth-title" order={2}>
-                  {step === 'email'
-                    ? 'Вход в консоль'
-                    : step === 'login'
-                      ? 'Введите пароль'
-                      : 'Создайте аккаунт'}
+                  {title}
                 </Title>
+
                 <Text c="h3_text_2" mt="h3_xs" size="h3_sm">
-                  {step === 'email'
-                    ? 'Введите почту. Если аккаунта ещё нет, мы предложим его создать.'
-                    : step === 'login'
-                      ? 'Введите пароль от аккаунта.'
-                      : 'Задайте пароль не короче 8 символов.'}
+                  {description}
                 </Text>
               </div>
 
@@ -218,13 +233,14 @@ export function AuthPage() {
                 </>
               )}
 
-              <Button loading={loading} type="submit" variant={buttonVariants.accent} fullWidth>
-                {step === 'email' ? 'Продолжить' : step === 'login' ? 'Войти' : 'Создать аккаунт'}
+              <Button fullWidth loading={loading} type="submit" variant={buttonVariants.accent}>
+                {submitLabel}
               </Button>
 
               {step !== 'email' && (
                 <Anchor component="button" onClick={returnToEmail} type="button" underline="hover">
-                  <ArrowLeft aria-hidden="true" size={16} strokeWidth={1.5} /> Сменить почту
+                  <ArrowLeft aria-hidden="true" size={16} strokeWidth={1.5} />
+                  {' Сменить почту'}
                 </Anchor>
               )}
             </Stack>
