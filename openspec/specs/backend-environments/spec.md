@@ -106,11 +106,20 @@ Bootstrap SHALL создать отдельные kubeconfig API и операт
 - **WHEN** проверяется разрешённая конфигурация production compose
 - **THEN** каждый внешний образ имеет конкретную версию и ни один сервис не ссылается на `latest`
 
-### Requirement: Compose-файлы запускаются напрямую
+### Requirement: Локальная разработка запускается через корневой Justfile
 
-Репозиторий MUST NOT содержать корневой `Justfile`. Dev- и production-окружения SHALL запускаться Docker Compose с явным путём к нужному файлу.
+Репозиторий SHALL содержать корневой `Justfile` с рецептом `run`. Рецепт SHALL запускать `docker-compose.dev.yml`, ждать готовности сервисов, затем параллельно запускать `api/Justfile:run` и `pnpm run dev` в `web`. Оператор MUST NOT запускаться этим рецептом.
 
-#### Scenario: Запуск dev-окружения
+#### Scenario: Запуск локальной разработки
+
+- **WHEN** инфраструктура и bootstrap готовы, а разработчик из корня запускает `just run`
+- **THEN** Docker Compose запускает dev-инфраструктуру, API и фронтенд работают на хосте, а оператор не запускается
+
+### Requirement: Compose-файлы можно запускать напрямую
+
+Dev- и production-окружения SHALL запускаться Docker Compose с явным путём к нужному файлу.
+
+#### Scenario: Прямой запуск dev-окружения
 
 - **WHEN** разработчик из корня запускает `docker compose -f docker-compose.dev.yml up -d --remove-orphans`
 - **THEN** Docker Compose использует dev-конфигурацию и удаляет контейнеры сервисов, которых в ней больше нет
