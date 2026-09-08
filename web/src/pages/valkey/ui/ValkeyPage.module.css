@@ -143,6 +143,7 @@
   margin-inline: auto;
   gap: var(--h3-space-lg);
   text-align: center;
+  transform: translateY(-100px);
 }
 
 .emptyButton {
