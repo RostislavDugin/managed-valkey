@@ -13,6 +13,8 @@ import { createInstance, listInstances } from '../api/valkey-storage';
 import type { ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
 import * as credentialsModel from '../model/valkey-credentials';
 
+vi.mock('./ValkeyMonitoringPage', () => ({ ValkeyMonitoringPage: () => null }));
+
 const WAIT = { timeout: 10_000 };
 
 function plan(vcpu: number, ramGb: number) {

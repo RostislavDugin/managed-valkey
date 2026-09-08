@@ -56,7 +56,7 @@ export function useValkeyInstance() {
 const TABS: Array<{ label: string; tab?: ValkeyInstanceTab; value: string }> = [
   { value: 'management', label: 'Управление' },
   { value: 'monitoring', label: 'Мониторинг', tab: 'monitoring' },
-  { value: 'audit-logs', label: 'Аудит логи', tab: 'audit-logs' },
+  { value: 'audit-logs', label: 'Аудит', tab: 'audit-logs' },
 ];
 
 function getActiveTab(pathname: string) {

@@ -167,16 +167,6 @@ export function formatVcpu(vcpu: number) {
   return `${groupDigits(String(vcpu))}${NBSP}vCPU`;
 }
 
-const DATE_TIME_FORMAT = new Intl.DateTimeFormat('ru-RU', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-});
-
-export function formatDateTime(isoDate: string) {
-  const date = new Date(isoDate);
-  return Number.isNaN(date.getTime()) ? isoDate : DATE_TIME_FORMAT.format(date);
-}
-
 export function formatSize(size: ValkeySize) {
   return `${formatVcpu(size.vcpu)} / ${formatRam(size.ramGb)}`;
 }

@@ -58,30 +58,29 @@ describe('маршруты раздела Valkey', () => {
     );
   });
 
-  it('открывает заглушку мониторинга базы по прямой ссылке', async () => {
+  it('открывает мониторинг базы по прямой ссылке', async () => {
     seedOne();
 
     renderAt('/valkey/management/instance-1/monitoring');
 
     expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Раздел появится позже')).toBeVisible();
+    expect(screen.queryByText('Демонстрационные данные')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Мониторинг' })).toHaveAttribute(
       'aria-selected',
       'true'
     );
   });
 
-  it('открывает заглушку журнала аудита базы по прямой ссылке', async () => {
+  it('открывает аудит базы по прямой ссылке', async () => {
     seedOne();
 
     renderAt('/valkey/management/instance-1/audit-logs');
 
-    expect(await screen.findByRole('heading', { name: 'Аудит логи' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Раздел появится позже')).toBeVisible();
-    expect(screen.getByRole('tab', { name: 'Аудит логи' })).toHaveAttribute(
-      'aria-selected',
-      'true'
-    );
+    expect(await screen.findByRole('heading', { name: 'Аудит' }, WAIT)).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: 'Действий с базой пока не было' }, WAIT)
+    ).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Аудит' })).toHaveAttribute('aria-selected', 'true');
   });
 });
 
@@ -108,8 +107,8 @@ describe('вкладки принадлежат выбранной базе', ()
 
     await screen.findByRole('heading', { name: 'valkey-1474' }, WAIT);
 
-    await user.click(screen.getByRole('tab', { name: 'Аудит логи' }));
-    expect(await screen.findByRole('heading', { name: 'Аудит логи' }, WAIT)).toBeVisible();
+    await user.click(screen.getByRole('tab', { name: 'Аудит' }));
+    expect(await screen.findByRole('heading', { name: 'Аудит' }, WAIT)).toBeVisible();
     expect(router.state.location.pathname).toBe('/valkey/management/instance-1/audit-logs');
 
     await router.navigate(-1);

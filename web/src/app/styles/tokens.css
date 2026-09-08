@@ -150,6 +150,10 @@
   /* Граница поля в фокусе: состояние видно только цветом рамки, поэтому mint-6 (3.52:1). */
   --h3-border-focus: #379a64;
 
+  --h3-chart-1: #1c7946;
+  --h3-chart-2: #1864ab;
+  --h3-chart-3: #6741d9;
+
   /* Заливка главной кнопки: в светлой схеме она чёрная, не мятная */
   --h3-variant-accent: var(--h3-bg-inverse);
   --h3-variant-accent-hover: var(--h3-bg-inverse-1);
@@ -196,6 +200,10 @@
   --h3-border-accent: #6cdb9f;
   --h3-border-control: #787878;
   --h3-border-focus: #6cdb9f;
+
+  --h3-chart-1: #51ba81;
+  --h3-chart-2: #74c0fc;
+  --h3-chart-3: #b197fc;
 
   /* Заливка главной кнопки: в тёмной схеме она мятная */
   --h3-variant-accent: var(--h3-primary-filled);

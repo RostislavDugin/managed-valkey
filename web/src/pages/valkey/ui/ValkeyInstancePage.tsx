@@ -1,12 +1,9 @@
-import dayjs from 'dayjs';
-import 'dayjs/locale/ru';
-import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Button, Container, Group, Skeleton, Stack, Text } from '@mantine/core';
 import { buttonVariants } from '@/shared/config';
+import { formatDateTime, formatRelativeTime } from '@/shared/lib';
 import { getValkeyCredentials } from '../api/valkey-credentials';
 import {
-  formatDateTime,
   formatInstanceAddress,
   formatInstanceHost,
   formatRam,
@@ -23,9 +20,6 @@ import { ResizeInstanceModal } from './ResizeInstanceModal';
 import { useValkeyInstance } from './ValkeyInstanceLayout';
 import { ValkeyPasswordModal } from './ValkeyPasswordModal';
 import styles from './ValkeyPage.module.css';
-
-dayjs.extend(relativeTime);
-dayjs.locale('ru');
 
 function PropertyRow({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -213,7 +207,7 @@ export function ValkeyInstancePage() {
             label="Создана"
             value={
               <Text c="h3_text_2" size="h3_sm">
-                {formatDateTime(instance.createdAt)} ({dayjs(instance.createdAt).fromNow()})
+                {formatDateTime(instance.createdAt)} ({formatRelativeTime(instance.createdAt)})
               </Text>
             }
           />

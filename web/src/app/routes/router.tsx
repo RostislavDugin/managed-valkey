@@ -8,11 +8,12 @@ import { AuthPage } from '@/pages/auth';
 import { NotFoundPage } from '@/pages/not-found';
 import {
   CreateValkeyPage,
+  ValkeyAuditPage,
   ValkeyInstanceLayout,
   ValkeyInstancePage,
   ValkeyLayout,
   ValkeyManagementPage,
-  ValkeyPlaceholderPage,
+  ValkeyMonitoringPage,
 } from '@/pages/valkey';
 import { ApiError, getSession } from '@/shared/api';
 import { routes } from '@/shared/config';
@@ -111,11 +112,11 @@ export const routeTable: RouteObject[] = [
               },
               {
                 path: 'monitoring',
-                Component: () => <ValkeyPlaceholderPage title="Мониторинг" />,
+                Component: ValkeyMonitoringPage,
               },
               {
                 path: 'audit-logs',
-                Component: () => <ValkeyPlaceholderPage title="Аудит логи" />,
+                Component: ValkeyAuditPage,
               },
             ],
           },

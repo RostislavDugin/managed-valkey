@@ -8,11 +8,12 @@ import { codeHighlightAdapter } from '@/app/styles/code-highlight';
 import { cssVariablesResolver, theme } from '@/app/styles/theme';
 import {
   CreateValkeyPage,
+  ValkeyAuditPage,
   ValkeyInstanceLayout,
   ValkeyInstancePage,
   ValkeyLayout,
   ValkeyManagementPage,
-  ValkeyPlaceholderPage,
+  ValkeyMonitoringPage,
 } from '@/pages/valkey';
 import { AUTH_TOKEN_KEY, AUTH_USERS_KEY, type Session } from '@/shared/api';
 
@@ -138,8 +139,8 @@ export function renderValkeySection(initialPath: string, session: Session = seed
                 Component: ValkeyInstanceLayout,
                 children: [
                   { index: true, Component: ValkeyInstancePage },
-                  { path: 'monitoring', element: <ValkeyPlaceholderPage title="Мониторинг" /> },
-                  { path: 'audit-logs', element: <ValkeyPlaceholderPage title="Аудит логи" /> },
+                  { path: 'monitoring', Component: ValkeyMonitoringPage },
+                  { path: 'audit-logs', Component: ValkeyAuditPage },
                 ],
               },
             ],

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ApiError } from '@/shared/api';
 import type { ValkeyInstance } from '../model/valkey';
+import type { AuditLogEntry } from '../model/valkey-observability';
 import {
   createInstance as createStoredInstance,
-  type AuditLogEntry,
   type CreateInstanceInput,
   deleteInstance,
   getInstance,

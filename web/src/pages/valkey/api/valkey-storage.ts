@@ -17,20 +17,7 @@ import {
   validateValkeyPassword,
   type ValkeyCredentials,
 } from '../model/valkey-credentials';
-export type AuditAction =
-  | 'instance.create'
-  | 'instance.update'
-  | 'instance.resize'
-  | 'instance.password.rotate'
-  | 'instance.delete';
-
-export interface AuditLogEntry {
-  id: string;
-  instanceId: string;
-  action: AuditAction;
-  userEmail: string;
-  createdAt: string;
-}
+import type { AuditAction, AuditLogEntry } from '../model/valkey-observability';
 
 export const VALKEY_INSTANCES_KEY = 'mv_valkey_instances';
 
