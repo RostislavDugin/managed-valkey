@@ -1,0 +1,28 @@
+{
+  "description": "Review plans and completed changes before Codex stops.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.agent-hooks/review_stop.py\" snapshot",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.agent-hooks/review_stop.py\" codex",
+            "timeout": 600,
+            "statusMessage": "Reviewing the plan and changes"
+          }
+        ]
+      }
+    ]
+  }
+}

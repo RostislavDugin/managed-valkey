@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": ["ok", "reason"],
+  "additionalProperties": false
+}
