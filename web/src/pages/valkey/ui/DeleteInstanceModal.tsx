@@ -70,7 +70,11 @@ export function DeleteInstanceModal({
             Отмена
           </Button>
 
-          <Button color="red" loading={loading} onClick={() => void confirm()}>
+          <Button
+            color="var(--mantine-color-error)"
+            loading={loading}
+            onClick={() => void confirm()}
+          >
             Удалить базу
           </Button>
         </Group>
