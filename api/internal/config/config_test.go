@@ -9,6 +9,7 @@ import (
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv(config.EnvDatabaseURL, "")
+	t.Setenv(config.EnvJWTSecret, "test-secret")
 
 	_, err := config.Load()
 	if !errors.Is(err, config.ErrDatabaseURLRequired) {
@@ -16,8 +17,19 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresJWTSecret(t *testing.T) {
+	t.Setenv(config.EnvDatabaseURL, "postgres://user:pass@postgres:45432/managed_valkey")
+	t.Setenv(config.EnvJWTSecret, "")
+
+	_, err := config.Load()
+	if !errors.Is(err, config.ErrJWTSecretRequired) {
+		t.Fatalf("ошибка %v, ожидалась %v", err, config.ErrJWTSecretRequired)
+	}
+}
+
 func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv(config.EnvDatabaseURL, "postgres://user:pass@postgres:45432/managed_valkey")
+	t.Setenv(config.EnvJWTSecret, "test-secret")
 	t.Setenv(config.EnvHTTPAddr, "")
 
 	cfg, err := config.Load()
@@ -27,6 +39,10 @@ func TestLoadUsesDefaults(t *testing.T) {
 
 	if cfg.HTTPAddr != config.DefaultHTTPAddr {
 		t.Errorf("адрес %q, ожидался %q", cfg.HTTPAddr, config.DefaultHTTPAddr)
+	}
+
+	if cfg.JWTSecret != "test-secret" {
+		t.Errorf("JWT secret %q, ожидался заданный", cfg.JWTSecret)
 	}
 
 	if cfg.Logging.ServiceName != config.ServiceName {

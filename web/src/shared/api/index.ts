@@ -1,6 +1,5 @@
 export {
   AUTH_TOKEN_KEY,
-  AUTH_USERS_KEY,
   checkEmail,
   getSession,
   login,
@@ -13,7 +12,10 @@ export {
   AUTH_INVALIDATED_EVENT,
   ApiError,
   apiRequest,
+  executeApiRequest,
   parseApiResponse,
   type ApiErrorCode,
   type ApiErrorPayload,
+  type ApiRequestInit,
+  type RequestExecutorDependencies,
 } from './client';

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
+	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
@@ -50,7 +51,14 @@ func run() error {
 		}
 	}()
 
-	router, err := api.NewRouter(logger, database)
+	clock := auth.SystemClock{}
+	tokens := auth.NewTokenService(cfg.JWTSecret, clock)
+	authService, err := auth.NewService(database, tokens, clock)
+	if err != nil {
+		return fmt.Errorf("создать сервис авторизации: %w", err)
+	}
+
+	router, err := api.NewRouter(logger, database, authService)
 	if err != nil {
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}

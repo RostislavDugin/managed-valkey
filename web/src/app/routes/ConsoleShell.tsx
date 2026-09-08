@@ -21,6 +21,8 @@ import { buttonVariants, routes } from '@/shared/config';
 import { LogoWide } from '@/shared/ui';
 import styles from './ConsoleShell.module.css';
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 function ConsoleNavigation({ email, onNavigate }: { email: string; onNavigate?: () => void }) {
   const navigate = useNavigate();
   const computedColorScheme = useComputedColorScheme('light');
@@ -118,14 +120,25 @@ export function ConsoleShell() {
   }, [navigate]);
 
   useEffect(() => {
-    const remaining = session.expiresAt - Date.now();
-    if (remaining <= 0) {
-      void endExpiredSession();
-      return;
-    }
+    let timeout: number | undefined;
 
-    const timeout = window.setTimeout(() => void endExpiredSession(), remaining);
-    return () => window.clearTimeout(timeout);
+    const scheduleExpiration = () => {
+      const remaining = session.expiresAt - Date.now();
+      if (remaining <= 0) {
+        void endExpiredSession();
+        return;
+      }
+
+      timeout = window.setTimeout(scheduleExpiration, Math.min(remaining, MAX_TIMER_DELAY_MS));
+    };
+
+    scheduleExpiration();
+
+    return () => {
+      if (timeout !== undefined) {
+        window.clearTimeout(timeout);
+      }
+    };
   }, [endExpiredSession, session.expiresAt]);
 
   useEffect(() => {

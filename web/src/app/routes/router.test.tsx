@@ -1,7 +1,8 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { renderRoutes, seedInstances, seedSession } from '../../../test/render';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTH_INVALIDATED_EVENT, AUTH_TOKEN_KEY } from '@/shared/api';
+import { renderRoutes, seedInstances, seedSession, TEST_USER_ID } from '../../../test/render';
 import { routeTable } from './router';
 
 const WAIT = { timeout: 10_000 };
@@ -174,5 +175,64 @@ describe('хлебные крошки', () => {
 
     await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT);
     expect(crumbText()).toBe('Базы данных/Valkey/valkey-1474');
+  });
+});
+
+describe('завершение сессии', () => {
+  it('кнопка «Выйти» удаляет токен и открывает /auth', async () => {
+    const user = userEvent.setup();
+    const { router } = renderAt('/valkey/management');
+
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+    await user.click(screen.getByRole('button', { name: 'user@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Выйти', hidden: true }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/auth'), WAIT);
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+  });
+
+  it('заканчивает сессию после удаления токена в другой вкладке', async () => {
+    const { router } = renderAt('/valkey/management');
+
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: AUTH_TOKEN_KEY,
+        oldValue: localStorage.getItem(AUTH_TOKEN_KEY),
+        newValue: null,
+      })
+    );
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/auth'), WAIT);
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+  });
+
+  it('заканчивает сессию после 401 и по таймеру exp', async () => {
+    const first = renderAt('/valkey/management');
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+    window.dispatchEvent(new Event(AUTH_INVALIDATED_EVENT));
+    await waitFor(() => expect(first.router.state.location.pathname).toBe('/auth'), WAIT);
+    first.unmount();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    seedSession();
+    const second = renderAt('/valkey/management');
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    await vi.waitFor(() => expect(second.router.state.location.pathname).toBe('/auth'));
+    vi.useRealTimers();
+  });
+
+  it('не завершает десятилетнюю сессию из-за предела setTimeout', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    seedSession(TEST_USER_ID, 'user@example.com', 10 * 365 * 24 * 60 * 60);
+    const { router } = renderAt('/valkey/management');
+
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(router.state.location.pathname).toBe('/valkey/management');
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).not.toBeNull();
+    vi.useRealTimers();
   });
 });

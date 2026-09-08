@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
 )
 
 // Готовность зависит только от PostgreSQL. Недоступный Kubernetes не делает API
@@ -18,7 +20,14 @@ func RegisterHealth(engine *gin.Engine, database Probe) {
 		if err := database.Ping(c.Request.Context()); err != nil {
 			LoggerFrom(c.Request.Context()).Warn("проверка готовности не прошла", "error", err)
 
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unavailable", "dependency": "postgresql"})
+			apierr.Write(
+				c,
+				apierr.New(
+					apierr.CodeUnavailable,
+					"Сервис временно недоступен",
+					map[string]any{"dependency": "postgresql"},
+				),
+			)
 
 			return
 		}

@@ -246,10 +246,6 @@ export function AuthPage() {
             </Stack>
           </form>
         </section>
-
-        <Text c="h3_text_2" size="h3_sm" ta="center">
-          Демонстрационный режим: аккаунт и пароль хранятся только в этом браузере.
-        </Text>
       </div>
     </main>
   );

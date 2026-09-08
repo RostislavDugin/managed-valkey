@@ -3,11 +3,12 @@ package api
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
 )
 
 const (
@@ -49,7 +50,7 @@ func RequestLog(logger *slog.Logger) gin.HandlerFunc {
 
 		c.Next()
 
-		requestLogger.Info("http-запрос обработан",
+		LoggerFrom(c.Request.Context()).Info("http-запрос обработан",
 			"method", c.Request.Method,
 			"path", c.FullPath(),
 			"status", c.Writer.Status(),
@@ -72,7 +73,7 @@ func Recovery() gin.HandlerFunc {
 				"path", c.FullPath(),
 			)
 
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal_error"})
+			apierr.Write(c, apierr.New(apierr.CodeInternal, "Внутренняя ошибка сервера", nil))
 		}()
 
 		c.Next()

@@ -1,27 +1,20 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { AUTH_TOKEN_KEY, AUTH_USERS_KEY, getSession, login, register } from './auth';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTH_TOKEN_KEY, checkEmail, getSession, login, register } from './auth';
 import { ApiError } from './client';
 
-const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const USER_ID = '01992b7e-7818-7000-8000-000000000001';
 
-function readTokenPayload(token: string) {
-  const normalized = token.split('.')[1].replaceAll('-', '+').replaceAll('_', '/');
-  const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
-  return JSON.parse(atob(`${normalized}${padding}`)) as { sub: string; exp: number };
-}
-
-function createLegacyToken(sub: string, exp: number) {
+function createToken(exp = Math.floor(Date.now() / 1000) + 3600) {
   const encode = (value: object) =>
     btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub, exp })}.demo`;
+  return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: USER_ID, exp })}.signature`;
 }
 
-function readUsers() {
-  return JSON.parse(localStorage.getItem(AUTH_USERS_KEY) ?? '[]') as Array<{
-    id?: string;
-    email: string;
-    password: string;
-  }>;
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 beforeEach(() => {
@@ -29,81 +22,112 @@ beforeEach(() => {
 });
 
 describe('регистрация и вход', () => {
-  it('выдаёт аккаунту UUIDv7 и кладёт его в sub', async () => {
-    const { token } = await register({ email: 'User@Example.com', password: 'password1' });
+  it('проверяет почту через API', async () => {
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(jsonResponse({ exists: true }));
 
-    const [user] = readUsers();
-    expect(user.id).toMatch(UUID_V7_PATTERN);
-    expect(user.email).toBe('user@example.com');
-    expect(readTokenPayload(token).sub).toBe(user.id);
+    await expect(checkEmail({ email: 'User@Example.com' })).resolves.toEqual({ exists: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/v1/auth/check-email');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ email: 'User@Example.com' }));
   });
 
-  it('вход выдаёт токен с идентификатором того же аккаунта', async () => {
-    await register({ email: 'user@example.com', password: 'password1' });
-    const [user] = readUsers();
+  it('повторяет регистрацию с тем же Idempotency-Key и сохраняет серверный JWT', async () => {
+    const token = createToken();
+    const fetchMock = vi
+      .spyOn(window, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ error: { code: 'UNAVAILABLE' } }, 503))
+      .mockResolvedValueOnce(jsonResponse({ token }));
+    vi.spyOn(Math, 'random').mockReturnValue(0);
 
-    const { token } = await login({ email: 'user@example.com', password: 'password1' });
+    await expect(register({ email: 'user@example.com', password: 'password1' })).resolves.toEqual({
+      token,
+    });
 
-    expect(readTokenPayload(token).sub).toBe(user.id);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const first = fetchMock.mock.calls[0][1];
+    const second = fetchMock.mock.calls[1][1];
+    const firstHeaders = new Headers(first?.headers);
+    const secondHeaders = new Headers(second?.headers);
+    expect(firstHeaders.get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+    expect(secondHeaders.get('X-Request-Id')).toBe(firstHeaders.get('X-Request-Id'));
+    expect(second?.body).toBe(first?.body);
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBe(token);
+  });
+
+  it('передаёт CONFLICT и UNAUTHORIZED вызывающему коду', async () => {
+    vi.spyOn(window, 'fetch')
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'CONFLICT', message: 'Аккаунт уже существует' } }, 409)
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'Неверные данные' } }, 401)
+      );
+
+    await expect(
+      register({ email: 'user@example.com', password: 'password1' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    await expect(
+      login({ email: 'user@example.com', password: 'wrong-password' })
+    ).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
   });
 });
 
 describe('восстановление сессии', () => {
-  it('возвращает userId и почту после перезагрузки', async () => {
-    await register({ email: 'user@example.com', password: 'password1' });
-    const [user] = readUsers();
+  it('проверяет действующий токен через /me', async () => {
+    const token = createToken();
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
+      jsonResponse({
+        user: { id: USER_ID, email: 'user@example.com' },
+        quota: { max_vcpu: 4, max_ram_gb: 16 },
+        usage: { used_vcpu: 0, used_ram_gb: 0 },
+      })
+    );
 
-    const session = await getSession();
+    await expect(getSession()).resolves.toEqual({
+      userId: USER_ID,
+      email: 'user@example.com',
+      expiresAt: expect.any(Number),
+      token,
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/v1/me', expect.any(Object));
+  });
 
-    expect(session?.userId).toBe(user.id);
-    expect(session?.email).toBe('user@example.com');
+  it('удаляет истёкший токен без запроса', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, createToken(Math.floor(Date.now() / 1000) - 1));
+    const fetchMock = vi.spyOn(window, 'fetch');
+
+    await expect(getSession()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+  });
+
+  it('удаляет токен после блокировки и передаёт временную ошибку после повторов', async () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, createToken());
+    vi.spyOn(window, 'fetch').mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'Сессия недействительна' } }, 401)
+    );
+
+    await expect(getSession()).rejects.toBeInstanceOf(ApiError);
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+
+    localStorage.setItem(AUTH_TOKEN_KEY, createToken());
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.spyOn(window, 'fetch').mockResolvedValue(
+      jsonResponse({ error: { code: 'UNAVAILABLE', message: 'Недоступно' } }, 503)
+    );
+    await expect(getSession()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
 
   it('без токена сессии нет', async () => {
     await expect(getSession()).resolves.toBeNull();
-  });
-});
-
-describe('миграция данных браузера', () => {
-  it('назначает UUIDv7 записи без идентификатора и сохраняет её', async () => {
-    localStorage.setItem(
-      AUTH_USERS_KEY,
-      JSON.stringify([{ email: 'user@example.com', password: 'password1' }])
-    );
-
-    const { token } = await login({ email: 'user@example.com', password: 'password1' });
-
-    const [user] = readUsers();
-    expect(user.id).toMatch(UUID_V7_PATTERN);
-    expect(user.email).toBe('user@example.com');
-    expect(user.password).toBe('password1');
-    expect(readTokenPayload(token).sub).toBe(user.id);
-  });
-
-  it('заменяет токен с почтой в sub токеном с user_id и прежним exp', async () => {
-    const exp = Math.floor(Date.now() / 1000) + 3600;
-    localStorage.setItem(
-      AUTH_USERS_KEY,
-      JSON.stringify([{ email: 'user@example.com', password: 'password1' }])
-    );
-    localStorage.setItem(AUTH_TOKEN_KEY, createLegacyToken('user@example.com', exp));
-
-    const session = await getSession();
-
-    const [user] = readUsers();
-    expect(session?.userId).toBe(user.id);
-    expect(session?.email).toBe('user@example.com');
-
-    const stored = readTokenPayload(localStorage.getItem(AUTH_TOKEN_KEY) as string);
-    expect(stored.sub).toBe(user.id);
-    expect(stored.exp).toBe(exp);
-  });
-
-  it('удаляет токен, который нельзя связать с аккаунтом', async () => {
-    const exp = Math.floor(Date.now() / 1000) + 3600;
-    localStorage.setItem(AUTH_TOKEN_KEY, createLegacyToken('missing@example.com', exp));
-
-    await expect(getSession()).rejects.toBeInstanceOf(ApiError);
-    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
   });
 });

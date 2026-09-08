@@ -16,7 +16,7 @@ import (
 )
 
 func TestServeFinishesStartedRequestAndStopsAccepting(t *testing.T) {
-	router, _ := newTestRouter(t, stubProbe{})
+	router := gin.New()
 
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})

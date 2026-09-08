@@ -15,24 +15,24 @@ import {
   ValkeyManagementPage,
   ValkeyMonitoringPage,
 } from '@/pages/valkey';
-import { AUTH_TOKEN_KEY, AUTH_USERS_KEY, type Session } from '@/shared/api';
+import { AUTH_TOKEN_KEY, type Session } from '@/shared/api';
 
 export const TEST_USER_ID = '01930000-0000-7000-8000-000000000001';
 export const TEST_AUTHOR = { userId: TEST_USER_ID, email: 'user@example.com' };
 export const TEST_VALKEY_PASSWORD = 'abcdEFGHijklMNOPqrstUVWXyz01_234';
 
-export function seedSession(userId = TEST_USER_ID, email = 'user@example.com') {
+export function seedSession(
+  userId = TEST_USER_ID,
+  email = 'user@example.com',
+  expiresInSeconds = 3600
+) {
   const encode = (value: object) =>
     btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
 
   localStorage.setItem(
-    AUTH_USERS_KEY,
-    JSON.stringify([{ id: userId, email, password: 'password1' }])
-  );
-  localStorage.setItem(
     AUTH_TOKEN_KEY,
-    `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: userId, exp })}.demo`
+    `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: userId, exp })}.signature`
   );
 
   return { userId, email, expiresAt: exp * 1000, token: 'demo' } satisfies Session;
