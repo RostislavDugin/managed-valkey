@@ -2,22 +2,22 @@ import { useRef, useState } from 'react';
 import { Button, Code, Group, Modal, Stack, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { buttonVariants } from '@/shared/config';
-import { deleteInstance } from '../api/valkey-storage';
+import { deleteInstance, type MutationAuthor } from '../api/valkey-storage';
 import type { ValkeyInstance } from '../model/valkey';
 import { getRequestErrorMessage } from '../model/valkey-form';
 
 interface DeleteInstanceModalProps {
+  author: MutationAuthor;
   instance: ValkeyInstance | null;
-  ownerId: string;
   onClose: () => void;
   onDeleted: (instanceId: string) => void;
 }
 
 export function DeleteInstanceModal({
+  author,
   instance,
   onClose,
   onDeleted,
-  ownerId,
 }: DeleteInstanceModalProps) {
   const submittingRef = useRef(false);
   const [loading, setLoading] = useState(false);
@@ -31,7 +31,7 @@ export function DeleteInstanceModal({
     setLoading(true);
 
     try {
-      await deleteInstance(ownerId, instance.id);
+      await deleteInstance(author, instance.id);
 
       onDeleted(instance.id);
       notifications.show({ message: `База ${instance.name} удалена.`, title: 'База удалена' });

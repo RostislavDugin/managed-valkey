@@ -1,7 +1,13 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderValkeySection, seedSession, TEST_USER_ID, wholeText } from '../../../../test/render';
+import {
+  renderValkeySection,
+  seedSession,
+  TEST_AUTHOR,
+  TEST_VALKEY_PASSWORD,
+  wholeText,
+} from '../../../../test/render';
 import { createInstance } from '../api/valkey-storage';
 
 const WAIT = { timeout: 10_000 };
@@ -28,12 +34,13 @@ beforeEach(() => {
 
 describe('узкий экран', () => {
   it('открывает панель использования из выдвижного блока', async () => {
-    await createInstance(TEST_USER_ID, {
+    await createInstance(TEST_AUTHOR, {
       name: 'valkey-1474',
       prefix: 'valkey',
       mode: 'single',
       vcpu: 1,
       ramGb: 2,
+      password: TEST_VALKEY_PASSWORD,
     });
     useNarrowScreen();
     const user = userEvent.setup();
@@ -66,12 +73,13 @@ describe('узкий экран', () => {
 
 describe('доступность', () => {
   it('у каждой кнопки и поля списка есть подпись', async () => {
-    await createInstance(TEST_USER_ID, {
+    await createInstance(TEST_AUTHOR, {
       name: 'valkey-1474',
       prefix: 'valkey',
       mode: 'single',
       vcpu: 1,
       ramGb: 2,
+      password: TEST_VALKEY_PASSWORD,
     });
 
     renderValkeySection('/valkey/management');
@@ -94,6 +102,35 @@ describe('доступность', () => {
       ...screen.queryAllByRole('slider'),
       ...screen.getAllByRole('radio'),
       ...screen.getAllByRole('switch'),
+    ]) {
+      expect(control).toHaveAccessibleName();
+    }
+  });
+
+  it('окно смены пароля открывается с клавиатуры и подписывает все контролы', async () => {
+    const instance = await createInstance(TEST_AUTHOR, {
+      name: 'valkey-1474',
+      prefix: 'valkey',
+      mode: 'single',
+      vcpu: 1,
+      ramGb: 2,
+      password: TEST_VALKEY_PASSWORD,
+    });
+    const user = userEvent.setup();
+
+    renderValkeySection(`/valkey/management/${instance.id}`);
+
+    const action = await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    action.focus();
+    expect(action).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    const modal = screen.getByRole('dialog');
+    expect(modal).toHaveTextContent('Подключения будут разорваны');
+
+    for (const control of [
+      ...within(modal).getAllByRole('button'),
+      ...within(modal).queryAllByRole('textbox'),
     ]) {
       expect(control).toHaveAccessibleName();
     }

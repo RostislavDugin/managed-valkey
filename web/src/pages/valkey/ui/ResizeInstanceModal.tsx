@@ -3,7 +3,7 @@ import { AlertTriangle, Info } from 'lucide-react';
 import { Alert, Anchor, Button, Group, List, Modal, Stack, Text } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { buttonVariants } from '@/shared/config';
-import { resizeInstance } from '../api/valkey-storage';
+import { resizeInstance, type MutationAuthor } from '../api/valkey-storage';
 import {
   formatPriceWithPeriod,
   formatRam,
@@ -27,19 +27,19 @@ import { SizePlans } from './SizePlans';
 import styles from './ValkeyPage.module.css';
 
 interface ResizeInstanceModalProps {
+  author: MutationAuthor;
   instance: ValkeyInstance | null;
   instances: ValkeyInstance[];
-  ownerId: string;
   onClose: () => void;
   onResized: (instance: ValkeyInstance) => void;
 }
 
 export function ResizeInstanceModal({
+  author,
   instance,
   instances,
   onClose,
   onResized,
-  ownerId,
 }: ResizeInstanceModalProps) {
   const [size, setSize] = useState<ValkeySize>({ vcpu: 1, ramGb: 1 });
   const [loading, setLoading] = useState(false);
@@ -67,7 +67,7 @@ export function ResizeInstanceModal({
     setLoading(true);
 
     try {
-      const updated = await resizeInstance(ownerId, instance.id, {
+      const updated = await resizeInstance(author, instance.id, {
         vcpu: size.vcpu as ValkeyVcpu,
         ramGb: size.ramGb as ValkeyRamGb,
       });

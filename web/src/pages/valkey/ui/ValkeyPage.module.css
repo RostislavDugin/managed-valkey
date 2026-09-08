@@ -267,6 +267,12 @@
   padding: 0.5rem var(--h3-space-md);
   border-radius: var(--h3-radius-sm);
   background: var(--h3-bg);
+  font-weight: var(--h3-fw-regular);
+}
+
+.credentialsError {
+  grid-column: 1 / -1;
+  border-radius: var(--h3-radius-sm);
 }
 
 .resizeModeRow {
@@ -300,18 +306,31 @@
   white-space: nowrap;
 }
 
+.passwordInput input {
+  font-family: var(--h3-font-family-mono);
+}
+
 .inlineAction {
   appearance: none;
   border: 0;
   background: transparent;
   color: var(--h3-text-accent);
   cursor: pointer;
-  font: inherit;
+  font-family: var(--mantine-font-family);
+  font-size: var(--mantine-font-size-h3_sm);
+  font-weight: var(--h3-fw-regular);
+  line-height: var(--mantine-line-height-h3_sm);
   padding: 0;
 }
 
 .inlineAction:hover {
   text-decoration: underline;
+}
+
+.inlineAction:disabled {
+  color: var(--h3-text-1);
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 .inlineAction:focus-visible {

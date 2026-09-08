@@ -17,6 +17,8 @@ import {
 import { AUTH_TOKEN_KEY, AUTH_USERS_KEY, type Session } from '@/shared/api';
 
 export const TEST_USER_ID = '01930000-0000-7000-8000-000000000001';
+export const TEST_AUTHOR = { userId: TEST_USER_ID, email: 'user@example.com' };
+export const TEST_VALKEY_PASSWORD = 'abcdEFGHijklMNOPqrstUVWXyz01_234';
 
 export function seedSession(userId = TEST_USER_ID, email = 'user@example.com') {
   const encode = (value: object) =>
@@ -51,12 +53,16 @@ export function seedInstances(
   localStorage.setItem(
     'mv_valkey_instances',
     JSON.stringify({
-      version: 3,
+      version: 5,
+      auditLogs: [],
       instances: instances.map((instance) => ({
         ownerId: TEST_USER_ID,
         status: 'running',
         isWhitelistEnabled: false,
         whitelistCidrs: [],
+        passwordHint: 'demo*****',
+        passwordVersion: 1,
+        appliedPasswordVersion: 1,
         prefix: 'valkey',
         slug: `valkey-${instance.id}`,
         createdAt: now,

@@ -47,6 +47,7 @@ import {
   type ValkeyMode,
   type ValkeySize,
 } from '../model/valkey';
+import { generateValkeyPassword } from '../model/valkey-credentials';
 import {
   checkCandidateQuota,
   getCreateFormDefaults,
@@ -151,7 +152,7 @@ function SupportNote({ haMaximum, quota, singleMaximum }: SupportNoteProps) {
 }
 
 export function CreateValkeyPage() {
-  const { session, setTrailingCrumb } = useValkeySection();
+  const { session, setEphemeralPassword, setTrailingCrumb } = useValkeySection();
   const navigate = useNavigate();
 
   const [instances, setInstances] = useState<ValkeyInstance[] | null>(null);
@@ -222,14 +223,16 @@ export function CreateValkeyPage() {
 
   const submit = async (formValues: CreateFormValues) => {
     setSubmitting(true);
+    const password = generateValkeyPassword();
 
     try {
-      const created = await createInstance(session.userId, {
+      const created = await createInstance(session, {
         name: formValues.name.trim(),
         prefix: formValues.prefix.trim(),
         mode: formValues.mode,
         vcpu: formValues.vcpu,
         ramGb: formValues.ramGb,
+        password,
         isWhitelistEnabled: formValues.isWhitelistEnabled,
         whitelistCidrs: formValues.isWhitelistEnabled
           ? parseWhitelistCidrs(formValues.whitelist)
@@ -238,6 +241,7 @@ export function CreateValkeyPage() {
 
       notifications.show({ message: `База ${created.name} готова.`, title: 'База создана' });
       await navigate(valkeyInstancePath(created.id));
+      setEphemeralPassword({ instanceId: created.id, password, source: 'creation' });
     } catch (error) {
       if (
         error instanceof ApiError &&

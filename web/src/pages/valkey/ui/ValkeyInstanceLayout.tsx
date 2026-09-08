@@ -265,17 +265,17 @@ export function ValkeyInstanceLayout() {
       </ValkeyInstanceContext>
 
       <DeleteInstanceModal
+        author={session}
         instance={deleteOpened ? context.instance : null}
         onClose={() => setDeleteOpened(false)}
         onDeleted={() => void navigate(routes.valkeyManagement)}
-        ownerId={session.userId}
       />
 
       <RenameInstanceModal
+        author={session}
         instance={renameOpened ? context.instance : null}
         onClose={() => setRenameOpened(false)}
         onRenamed={applyUpdate}
-        ownerId={session.userId}
       />
     </>
   );

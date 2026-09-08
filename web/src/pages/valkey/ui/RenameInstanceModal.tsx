@@ -4,23 +4,23 @@ import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { ApiError } from '@/shared/api';
 import { buttonVariants } from '@/shared/config';
-import { renameInstance } from '../api/valkey-storage';
+import { renameInstance, type MutationAuthor } from '../api/valkey-storage';
 import { validateInstanceName, type ValkeyInstance } from '../model/valkey';
 import { getRequestErrorMessage } from '../model/valkey-form';
 
 interface RenameInstanceModalProps {
   instance: ValkeyInstance | null;
-  ownerId: string;
+  author: MutationAuthor;
   onClose: () => void;
   onRenamed: (instance: ValkeyInstance) => void;
 }
 
 /** Короткой форме отдельный адрес не нужен: web/DESIGN.md, «Обратная связь и состояния». */
 export function RenameInstanceModal({
+  author,
   instance,
   onClose,
   onRenamed,
-  ownerId,
 }: RenameInstanceModalProps) {
   const [loading, setLoading] = useState(false);
 
@@ -47,7 +47,7 @@ export function RenameInstanceModal({
     setLoading(true);
 
     try {
-      const updated = await renameInstance(ownerId, instance.id, { name: values.name.trim() });
+      const updated = await renameInstance(author, instance.id, { name: values.name.trim() });
 
       onRenamed(updated);
       notifications.show({ message: `База называется ${updated.name}.`, title: 'Имя изменено' });

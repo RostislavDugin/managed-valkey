@@ -1,14 +1,26 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { renderValkeySection, seedSession, TEST_USER_ID } from '../../../../test/render';
+import {
+  renderValkeySection,
+  seedSession,
+  TEST_AUTHOR,
+  TEST_VALKEY_PASSWORD,
+} from '../../../../test/render';
 import { createInstance } from '../api/valkey-storage';
 import type { ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
 
 const WAIT = { timeout: 10_000 };
 
 function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_USER_ID, { name, prefix: 'valkey', mode, vcpu, ramGb });
+  return createInstance(TEST_AUTHOR, {
+    name,
+    prefix: 'valkey',
+    mode,
+    vcpu,
+    ramGb,
+    password: TEST_VALKEY_PASSWORD,
+  });
 }
 
 beforeEach(() => {
@@ -44,13 +56,17 @@ describe('загрузка списка', () => {
 
   it('показывает базы только текущего пользователя', async () => {
     await seedInstance('valkey-1474', 'single', 1, 2);
-    await createInstance('01930000-0000-7000-8000-00000000ffff', {
-      name: 'valkey-9999',
-      prefix: 'valkey',
-      mode: 'single',
-      vcpu: 1,
-      ramGb: 1,
-    });
+    await createInstance(
+      { userId: '01930000-0000-7000-8000-00000000ffff', email: 'other@example.com' },
+      {
+        name: 'valkey-9999',
+        prefix: 'valkey',
+        mode: 'single',
+        vcpu: 1,
+        ramGb: 1,
+        password: TEST_VALKEY_PASSWORD,
+      }
+    );
 
     renderValkeySection('/valkey/management');
 

@@ -1,14 +1,35 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderValkeySection, seedSession, TEST_USER_ID, wholeText } from '../../../../test/render';
-import { createInstance, listInstances } from '../api/valkey-storage';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  renderValkeySection,
+  seedSession,
+  TEST_AUTHOR,
+  TEST_USER_ID,
+  TEST_VALKEY_PASSWORD,
+  wholeText,
+} from '../../../../test/render';
+import { rotateValkeyPassword } from '../api/valkey-credentials';
+import {
+  createInstance,
+  listInstances,
+  readAuditSnapshot,
+  VALKEY_INSTANCES_KEY,
+} from '../api/valkey-storage';
 import type { ValkeyInstance, ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
+import * as credentialsModel from '../model/valkey-credentials';
 
 const WAIT = { timeout: 10_000 };
 
 function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_USER_ID, { name, prefix: 'valkey', mode, vcpu, ramGb });
+  return createInstance(TEST_AUTHOR, {
+    name,
+    prefix: 'valkey',
+    mode,
+    vcpu,
+    ramGb,
+    password: TEST_VALKEY_PASSWORD,
+  });
 }
 
 async function openCard(instance: ValkeyInstance) {
@@ -23,6 +44,10 @@ function dialog() {
 
 beforeEach(() => {
   seedSession();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('карточка базы', () => {
@@ -140,6 +165,186 @@ describe('карточка базы', () => {
       'href',
       '/valkey/management'
     );
+  });
+});
+
+describe('учётные данные', () => {
+  it('показывает пользователя, маску и сменяет пароль с одноразовой выдачей', async () => {
+    const nextPassword = 'wxyzEFGHijklMNOPqrstUVWXyz01_234';
+    const generate = vi
+      .spyOn(credentialsModel, 'generateValkeyPassword')
+      .mockReturnValue(nextPassword);
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+    await openCard(instance);
+
+    expect(await screen.findByText('app', {}, WAIT)).toBeVisible();
+    expect(screen.getByText('abcd*****')).toBeVisible();
+    expect(screen.queryByText('Готов')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
+
+    const confirmation = screen.getByRole('dialog');
+    expect(confirmation).toHaveTextContent(
+      'Все подключения Valkey будут закрыты. Обновите пароль в приложениях.'
+    );
+    expect(generate).not.toHaveBeenCalled();
+
+    await user.click(
+      within(confirmation).getByRole('button', { name: 'Подтвердить смену пароля' })
+    );
+
+    const passwordField = await screen.findByRole('textbox', { name: 'Новый пароль' }, WAIT);
+    expect(passwordField).toHaveValue(nextPassword);
+    expect(screen.getByRole('dialog')).toHaveTextContent('Состояние: Применяется');
+    expect(localStorage.getItem(VALKEY_INSTANCES_KEY)).not.toContain(nextPassword);
+
+    await user.click(screen.getByRole('button', { name: 'Скопировать пароль' }));
+    expect(copy).toHaveBeenCalledWith(nextPassword);
+    await user.click(screen.getByRole('button', { name: 'Закрыть' }));
+
+    const rotateButton = screen.getByRole('button', { name: 'Сменить пароль' });
+    expect(rotateButton).toBeDisabled();
+    expect(screen.getByText('Применяется')).toBeVisible();
+    await waitFor(() => expect(rotateButton).toBeEnabled(), WAIT);
+    expect(screen.queryByText('Применяется')).toBeNull();
+    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
+    expect(readAuditSnapshot(TEST_USER_ID, instance.id).map((item) => item.action)).toContain(
+      'instance.password.rotate'
+    );
+
+    await user.click(rotateButton);
+    expect(screen.getByRole('dialog')).toHaveTextContent('Подключения будут разорваны');
+    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
+  });
+
+  it('оставляет остальную карточку доступной при ошибке учётных данных', async () => {
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    await openCard(instance);
+    const saved = localStorage.getItem(VALKEY_INSTANCES_KEY);
+
+    localStorage.setItem(VALKEY_INSTANCES_KEY, '{"version":5,"instances":[{}]}');
+
+    expect(await screen.findByText('Не удалось загрузить пароль', {}, WAIT)).toBeVisible();
+    expect(screen.getByText('Текущий тариф')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible();
+
+    localStorage.setItem(VALKEY_INSTANCES_KEY, saved ?? '');
+    await userEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    expect(await screen.findByText('app', {}, WAIT)).toBeVisible();
+  });
+
+  it('предупреждает о задержке для базы с ограничениями', async () => {
+    const instance = await seedInstance('valkey-1474', 'ha', 1, 2);
+    const state = JSON.parse(localStorage.getItem(VALKEY_INSTANCES_KEY) ?? '{}') as {
+      instances: Array<{ status: string }>;
+    };
+    state.instances[0].status = 'degraded';
+    localStorage.setItem(VALKEY_INSTANCES_KEY, JSON.stringify(state));
+    const user = userEvent.setup();
+
+    await openCard(instance);
+    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
+
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'Недоступный прежний процесс может задержать применение нового пароля.'
+    );
+  });
+
+  it('обновляет метаданные после конфликта версии и не показывает непринятый пароль', async () => {
+    const externalPassword = '2222EFGHijklMNOPqrstUVWXyz01_234';
+    const rejectedPassword = '3333EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(rejectedPassword);
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    const user = userEvent.setup();
+    await openCard(instance);
+    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+
+    await rotateValkeyPassword(TEST_AUTHOR, instance.id, {
+      password: externalPassword,
+      expectedPasswordVersion: 1,
+    });
+    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Подтвердить смену пароля',
+      })
+    );
+
+    expect(await screen.findByText('Не удалось сменить пароль', {}, WAIT)).toBeVisible();
+    expect(screen.queryByDisplayValue(rejectedPassword)).toBeNull();
+    expect(await screen.findByText('Применяется', {}, WAIT)).toBeVisible();
+  });
+
+  it('не показывает пароль и не пишет аудит при ошибке запроса', async () => {
+    const rejectedPassword = '6666EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(rejectedPassword);
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    const user = userEvent.setup();
+    await openCard(instance);
+    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    const saved = localStorage.getItem(VALKEY_INSTANCES_KEY) ?? '';
+
+    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
+    localStorage.setItem(VALKEY_INSTANCES_KEY, '{"version":5,"instances":[{}]}');
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Подтвердить смену пароля',
+      })
+    );
+
+    expect(await screen.findByText('Не удалось сменить пароль', {}, WAIT)).toBeVisible();
+    expect(screen.queryByDisplayValue(rejectedPassword)).toBeNull();
+
+    localStorage.setItem(VALKEY_INSTANCES_KEY, saved);
+    expect(readAuditSnapshot(TEST_USER_ID, instance.id).map((item) => item.action)).toEqual([
+      'instance.create',
+    ]);
+  });
+
+  it('не открывает пароль после закрытия ожидающего окна', async () => {
+    const nextPassword = '4444EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(nextPassword);
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    const user = userEvent.setup();
+    await openCard(instance);
+
+    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Подтвердить смену пароля',
+      })
+    );
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(readAuditSnapshot(TEST_USER_ID, instance.id)).toHaveLength(2), WAIT);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
+  });
+
+  it('очищает показанный пароль при pagehide и возврате из bfcache', async () => {
+    const nextPassword = '5555EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(nextPassword);
+    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+    const user = userEvent.setup();
+    await openCard(instance);
+
+    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Подтвердить смену пароля',
+      })
+    );
+    expect(await screen.findByDisplayValue(nextPassword, {}, WAIT)).toBeVisible();
+
+    const pagehide = new Event('pagehide');
+    Object.defineProperty(pagehide, 'persisted', { value: true });
+    fireEvent(window, pagehide);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), WAIT);
+    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
   });
 });
 

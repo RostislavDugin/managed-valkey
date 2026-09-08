@@ -1,7 +1,7 @@
 /** Сетка размеров, ставки и форматы взяты из SYSTEM.md, раздел 8. */
 
 export type ValkeyMode = 'single' | 'ha';
-export type ValkeyStatus = 'running';
+export type ValkeyStatus = 'running' | 'degraded';
 export type PricePeriod = 'month' | 'day' | 'hour';
 
 export const VCPU_OPTIONS = [1, 2, 4, 8, 16] as const;
@@ -33,6 +33,9 @@ export interface ValkeyInstance extends ValkeySize {
   mode: ValkeyMode;
   isWhitelistEnabled: boolean;
   whitelistCidrs: string[];
+  passwordHint: string;
+  passwordVersion: number;
+  appliedPasswordVersion: number;
   status: ValkeyStatus;
   createdAt: string;
   updatedAt: string;
@@ -70,6 +73,7 @@ export const MODE_LABELS: Record<ValkeyMode, string> = {
 
 export const STATUS_LABELS: Record<ValkeyStatus, string> = {
   running: 'Работает',
+  degraded: 'Работает с ограничениями',
 };
 
 /** `ha` это primary и две реплики. */

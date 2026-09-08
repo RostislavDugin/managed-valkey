@@ -12,22 +12,53 @@ import {
   type ValkeySize,
   type ValkeyVcpu,
 } from '../model/valkey';
+import {
+  getValkeyPasswordHint,
+  validateValkeyPassword,
+  type ValkeyCredentials,
+} from '../model/valkey-credentials';
+export type AuditAction =
+  | 'instance.create'
+  | 'instance.update'
+  | 'instance.resize'
+  | 'instance.password.rotate'
+  | 'instance.delete';
+
+export interface AuditLogEntry {
+  id: string;
+  instanceId: string;
+  action: AuditAction;
+  userEmail: string;
+  createdAt: string;
+}
 
 export const VALKEY_INSTANCES_KEY = 'mv_valkey_instances';
 
-const STORAGE_VERSION = 3;
-const PREVIOUS_STORAGE_VERSIONS = [1, 2] as const;
+const STORAGE_VERSION = 5;
+const PREVIOUS_STORAGE_VERSIONS = [1, 2, 3, 4] as const;
 const RESPONSE_DELAY_MS = 400;
+const PASSWORD_APPLICATION_DELAY_MS = 1_200;
+
+interface StoredValkeyInstance extends ValkeyInstance {
+  passwordApplyAt?: string;
+}
 
 interface StoredValkeyState {
   version: typeof STORAGE_VERSION;
-  instances: ValkeyInstance[];
+  instances: StoredValkeyInstance[];
+  auditLogs: AuditLogEntry[];
+}
+
+export interface MutationAuthor {
+  userId: string;
+  email: string;
 }
 
 export interface CreateInstanceInput extends ValkeySize {
   name: string;
   prefix: string;
   mode: ValkeyMode;
+  password: string;
   isWhitelistEnabled?: boolean;
   whitelistCidrs?: string[];
 }
@@ -48,7 +79,7 @@ function corrupted(): never {
   );
 }
 
-function isValidInstance(value: unknown): value is ValkeyInstance {
+function isValidInstance(value: unknown): value is StoredValkeyInstance {
   if (!value || typeof value !== 'object') {
     return false;
   }
@@ -67,9 +98,38 @@ function isValidInstance(value: unknown): value is ValkeyInstance {
     typeof instance.isWhitelistEnabled === 'boolean' &&
     Array.isArray(instance.whitelistCidrs) &&
     instance.whitelistCidrs.every((cidr) => typeof cidr === 'string') &&
-    instance.status === 'running' &&
+    typeof instance.passwordHint === 'string' &&
+    Number.isInteger(instance.passwordVersion) &&
+    Number.isInteger(instance.appliedPasswordVersion) &&
+    (instance.passwordVersion as number) >= 1 &&
+    (instance.appliedPasswordVersion as number) >= 1 &&
+    (instance.appliedPasswordVersion as number) <= (instance.passwordVersion as number) &&
+    ((instance.appliedPasswordVersion === instance.passwordVersion &&
+      instance.passwordApplyAt === undefined) ||
+      (instance.appliedPasswordVersion !== instance.passwordVersion &&
+        typeof instance.passwordApplyAt === 'string')) &&
+    (instance.status === 'running' || instance.status === 'degraded') &&
     typeof instance.createdAt === 'string' &&
     typeof instance.updatedAt === 'string'
+  );
+}
+
+function isValidAuditLog(value: unknown): value is AuditLogEntry {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === 'string' &&
+    typeof item.instanceId === 'string' &&
+    (item.action === 'instance.create' ||
+      item.action === 'instance.update' ||
+      item.action === 'instance.resize' ||
+      item.action === 'instance.password.rotate' ||
+      item.action === 'instance.delete') &&
+    typeof item.userEmail === 'string' &&
+    typeof item.createdAt === 'string'
   );
 }
 
@@ -96,6 +156,19 @@ function addWhitelist(value: unknown) {
   return { isWhitelistEnabled: false, whitelistCidrs: [], ...value };
 }
 
+function addCredentials(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  return {
+    passwordHint: 'demo*****',
+    passwordVersion: 1,
+    appliedPasswordVersion: 1,
+    ...value,
+  };
+}
+
 /**
  * Повреждённые данные дают ошибку загрузки, а не пустой список: очистка
  * хранилища выглядела бы для пользователя как удаление всех баз.
@@ -103,7 +176,7 @@ function addWhitelist(value: unknown) {
 function readState(): StoredValkeyState {
   const value = storage().getItem(VALKEY_INSTANCES_KEY);
   if (!value) {
-    return { version: STORAGE_VERSION, instances: [] };
+    return { version: STORAGE_VERSION, instances: [], auditLogs: [] };
   }
 
   let parsed: unknown;
@@ -128,31 +201,42 @@ function readState(): StoredValkeyState {
 
   const instances = (state.instances as unknown[]).map((instance) => {
     const withSlug = state.version === 1 ? addSlug(instance) : instance;
-    return state.version === STORAGE_VERSION ? withSlug : addWhitelist(withSlug);
+    const withWhitelist = state.version === STORAGE_VERSION ? withSlug : addWhitelist(withSlug);
+    return state.version === STORAGE_VERSION ? withWhitelist : addCredentials(withWhitelist);
   });
 
   if (!instances.every(isValidInstance)) {
     corrupted();
   }
 
-  return { version: STORAGE_VERSION, instances: instances as ValkeyInstance[] };
+  const auditLogs = state.version === 4 || state.version === STORAGE_VERSION ? state.auditLogs : [];
+  if (!Array.isArray(auditLogs) || !auditLogs.every(isValidAuditLog)) {
+    corrupted();
+  }
+
+  return {
+    version: STORAGE_VERSION,
+    instances: instances as StoredValkeyInstance[],
+    auditLogs: auditLogs as AuditLogEntry[],
+  };
 }
 
-function writeState(instances: ValkeyInstance[]) {
-  const state: StoredValkeyState = { version: STORAGE_VERSION, instances };
+function writeState(instances: StoredValkeyInstance[], auditLogs: AuditLogEntry[]) {
+  const state: StoredValkeyState = { version: STORAGE_VERSION, instances, auditLogs };
   storage().setItem(VALKEY_INSTANCES_KEY, JSON.stringify(state));
 }
 
 /** Копия DTO: страницы не должны править то, что лежит в хранилище. */
-function toDto(instance: ValkeyInstance): ValkeyInstance {
-  return { ...instance, whitelistCidrs: [...instance.whitelistCidrs] };
+function toDto(instance: StoredValkeyInstance): ValkeyInstance {
+  const { passwordApplyAt: _, ...dto } = instance;
+  return { ...dto, whitelistCidrs: [...dto.whitelistCidrs] };
 }
 
-function ownedBy(instances: ValkeyInstance[], ownerId: string) {
+function ownedBy(instances: StoredValkeyInstance[], ownerId: string) {
   return instances.filter((instance) => instance.ownerId === ownerId);
 }
 
-function findOwned(instances: ValkeyInstance[], ownerId: string, instanceId: string) {
+function findOwned(instances: StoredValkeyInstance[], ownerId: string, instanceId: string) {
   const instance = instances.find(
     (candidate) => candidate.id === instanceId && candidate.ownerId === ownerId
   );
@@ -164,8 +248,106 @@ function findOwned(instances: ValkeyInstance[], ownerId: string, instanceId: str
   return instance;
 }
 
+function makeAuditLog(
+  instanceId: string,
+  action: AuditAction,
+  author: MutationAuthor,
+  createdAt: string
+): AuditLogEntry {
+  return {
+    id: crypto.randomUUID(),
+    instanceId,
+    action,
+    userEmail: author.email,
+    createdAt,
+  };
+}
+
+export function readAuditSnapshot(ownerId: string, instanceId: string) {
+  const state = readState();
+  findOwned(state.instances, ownerId, instanceId);
+  return state.auditLogs
+    .filter((item) => item.instanceId === instanceId)
+    .map((item) => ({ ...item }));
+}
+
+export function readInstanceSnapshot(ownerId: string, instanceId: string) {
+  return toDto(findOwned(readState().instances, ownerId, instanceId));
+}
+
+function toCredentials(instance: StoredValkeyInstance): ValkeyCredentials {
+  return {
+    username: 'app',
+    passwordHint: instance.passwordHint,
+    passwordVersion: instance.passwordVersion,
+    appliedPasswordVersion: instance.appliedPasswordVersion,
+  };
+}
+
+export function readCredentialsSnapshot(ownerId: string, instanceId: string) {
+  const state = readState();
+  const instance = findOwned(state.instances, ownerId, instanceId);
+
+  if (instance.passwordApplyAt && new Date(instance.passwordApplyAt).getTime() <= Date.now()) {
+    const applied: StoredValkeyInstance = {
+      ...instance,
+      appliedPasswordVersion: instance.passwordVersion,
+    };
+    delete applied.passwordApplyAt;
+
+    writeState(
+      state.instances.map((candidate) => (candidate.id === instanceId ? applied : candidate)),
+      state.auditLogs
+    );
+    return toCredentials(applied);
+  }
+
+  return toCredentials(instance);
+}
+
+export function rotatePasswordSnapshot(
+  author: MutationAuthor,
+  instanceId: string,
+  input: { password: string; expectedPasswordVersion: number }
+) {
+  const state = readState();
+  const instance = findOwned(state.instances, author.userId, instanceId);
+  const passwordError = validateValkeyPassword(input.password);
+
+  if (passwordError) {
+    throw new ApiError('VALIDATION_FAILED', passwordError);
+  }
+
+  if (instance.passwordVersion !== input.expectedPasswordVersion) {
+    throw new ApiError('CONFLICT', 'Версия пароля изменилась');
+  }
+
+  if (instance.appliedPasswordVersion !== instance.passwordVersion) {
+    throw new ApiError('OPERATION_IN_PROGRESS', 'Предыдущее изменение ещё применяется');
+  }
+
+  const now = new Date();
+  const updated: StoredValkeyInstance = {
+    ...instance,
+    passwordHint: getValkeyPasswordHint(input.password),
+    passwordVersion: instance.passwordVersion + 1,
+    passwordApplyAt: new Date(now.getTime() + PASSWORD_APPLICATION_DELAY_MS).toISOString(),
+    updatedAt: now.toISOString(),
+  };
+
+  writeState(
+    state.instances.map((candidate) => (candidate.id === instanceId ? updated : candidate)),
+    [
+      ...state.auditLogs,
+      makeAuditLog(instanceId, 'instance.password.rotate', author, now.toISOString()),
+    ]
+  );
+
+  return toCredentials(updated);
+}
+
 function assertNameFree(
-  instances: ValkeyInstance[],
+  instances: StoredValkeyInstance[],
   ownerId: string,
   name: string,
   exceptInstanceId?: string
@@ -192,7 +374,7 @@ function assertPrefix(prefix: string) {
 }
 
 function assertQuota(
-  instances: ValkeyInstance[],
+  instances: StoredValkeyInstance[],
   ownerId: string,
   candidate: { size: ValkeySize; mode: ValkeyMode },
   exceptInstanceId?: string
@@ -233,12 +415,18 @@ export async function getInstance(ownerId: string, instanceId: string): Promise<
 }
 
 export async function createInstance(
-  ownerId: string,
+  author: MutationAuthor,
   input: CreateInstanceInput
 ): Promise<ValkeyInstance> {
   await delay();
-  const { instances } = readState();
+  const { instances, auditLogs } = readState();
+  const ownerId = author.userId;
   const size: ValkeySize = { vcpu: input.vcpu, ramGb: input.ramGb };
+  const passwordError = validateValkeyPassword(input.password);
+
+  if (passwordError) {
+    throw new ApiError('VALIDATION_FAILED', passwordError);
+  }
 
   assertSize(size);
   assertNameFree(instances, ownerId, input.name);
@@ -247,7 +435,7 @@ export async function createInstance(
   assertQuota(instances, ownerId, { size, mode: input.mode });
 
   const now = new Date().toISOString();
-  const instance: ValkeyInstance = {
+  const instance: StoredValkeyInstance = {
     id: crypto.randomUUID(),
     ownerId,
     name: input.name,
@@ -259,6 +447,9 @@ export async function createInstance(
     mode: input.mode,
     isWhitelistEnabled: input.isWhitelistEnabled ?? false,
     whitelistCidrs: input.whitelistCidrs ?? [],
+    passwordHint: getValkeyPasswordHint(input.password),
+    passwordVersion: 1,
+    appliedPasswordVersion: 1,
     vcpu: input.vcpu,
     ramGb: input.ramGb,
     status: 'running',
@@ -266,63 +457,81 @@ export async function createInstance(
     updatedAt: now,
   };
 
-  writeState([...instances, instance]);
+  writeState(
+    [...instances, instance],
+    [...auditLogs, makeAuditLog(instance.id, 'instance.create', author, now)]
+  );
   return toDto(instance);
 }
 
 export async function renameInstance(
-  ownerId: string,
+  author: MutationAuthor,
   instanceId: string,
   input: { name: string }
 ): Promise<ValkeyInstance> {
   await delay();
-  const { instances } = readState();
+  const { instances, auditLogs } = readState();
+  const ownerId = author.userId;
   const instance = findOwned(instances, ownerId, instanceId);
 
   assertNameFree(instances, ownerId, input.name, instanceId);
 
+  const now = new Date().toISOString();
   const updated: ValkeyInstance = {
     ...instance,
     name: input.name,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
 
-  writeState(instances.map((candidate) => (candidate.id === instanceId ? updated : candidate)));
+  writeState(
+    instances.map((candidate) => (candidate.id === instanceId ? updated : candidate)),
+    [...auditLogs, makeAuditLog(instanceId, 'instance.update', author, now)]
+  );
   return toDto(updated);
 }
 
 export async function resizeInstance(
-  ownerId: string,
+  author: MutationAuthor,
   instanceId: string,
   input: { vcpu: ValkeyVcpu; ramGb: ValkeyRamGb }
 ): Promise<ValkeyInstance> {
   await delay();
-  const { instances } = readState();
+  const { instances, auditLogs } = readState();
+  const ownerId = author.userId;
   const instance = findOwned(instances, ownerId, instanceId);
   const size: ValkeySize = { vcpu: input.vcpu, ramGb: input.ramGb };
 
   assertSize(size);
   assertQuota(instances, ownerId, { size, mode: instance.mode }, instanceId);
 
+  const now = new Date().toISOString();
   const updated: ValkeyInstance = {
     ...instance,
     vcpu: input.vcpu,
     ramGb: input.ramGb,
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
 
-  writeState(instances.map((candidate) => (candidate.id === instanceId ? updated : candidate)));
+  writeState(
+    instances.map((candidate) => (candidate.id === instanceId ? updated : candidate)),
+    [...auditLogs, makeAuditLog(instanceId, 'instance.resize', author, now)]
+  );
   return toDto(updated);
 }
 
-export async function deleteInstance(ownerId: string, instanceId: string): Promise<void> {
+export async function deleteInstance(author: MutationAuthor, instanceId: string): Promise<void> {
   await delay();
-  const { instances } = readState();
+  const { instances, auditLogs } = readState();
+  const ownerId = author.userId;
+  const deleted = instances.find(
+    (candidate) => candidate.id === instanceId && candidate.ownerId === ownerId
+  );
   const remaining = instances.filter(
     (candidate) => candidate.id !== instanceId || candidate.ownerId !== ownerId
   );
 
-  if (remaining.length !== instances.length) {
-    writeState(remaining);
+  if (deleted) {
+    const now = new Date().toISOString();
+    writeState(remaining, [...auditLogs, makeAuditLog(instanceId, 'instance.delete', author, now)]);
   }
 }

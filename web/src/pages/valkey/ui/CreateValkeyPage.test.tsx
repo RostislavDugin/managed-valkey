@@ -1,9 +1,17 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { renderValkeySection, seedSession, TEST_USER_ID, wholeText } from '../../../../test/render';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  renderValkeySection,
+  seedSession,
+  TEST_AUTHOR,
+  TEST_USER_ID,
+  TEST_VALKEY_PASSWORD,
+  wholeText,
+} from '../../../../test/render';
 import { createInstance, listInstances } from '../api/valkey-storage';
 import type { ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
+import * as credentialsModel from '../model/valkey-credentials';
 
 const WAIT = { timeout: 10_000 };
 
@@ -20,11 +28,22 @@ async function openForm() {
 }
 
 function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_USER_ID, { name, prefix: 'valkey', mode, vcpu, ramGb });
+  return createInstance(TEST_AUTHOR, {
+    name,
+    prefix: 'valkey',
+    mode,
+    vcpu,
+    ramGb,
+    password: TEST_VALKEY_PASSWORD,
+  });
 }
 
 beforeEach(() => {
   seedSession();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('значения по умолчанию', () => {
@@ -214,6 +233,63 @@ describe('белый список адресов', () => {
 });
 
 describe('отправка формы', () => {
+  it('показывает пароль созданной базы один раз и не сохраняет его', async () => {
+    const password = '1111EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(password);
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
+    const { router } = await openForm();
+
+    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+
+    const modal = await screen.findByRole('dialog', {}, WAIT);
+    expect(within(modal).getByRole('textbox', { name: 'Пароль базы' })).toHaveValue(password);
+    expect(modal).toHaveTextContent('Пароль показывается один раз');
+    expect(modal).not.toHaveTextContent('Готов');
+    expect(modal).not.toHaveTextContent('Состояние:');
+    expect(localStorage.getItem('mv_valkey_instances')).not.toContain(password);
+    expect(sessionStorage.getItem('mv_valkey_instances')).toBeNull();
+    expect(JSON.stringify(router.state.location)).not.toContain(password);
+
+    await user.click(within(modal).getByRole('button', { name: 'Скопировать пароль' }));
+    expect(copy).toHaveBeenCalledWith(password);
+
+    await user.click(within(modal).getByRole('button', { name: 'Закрыть' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), WAIT);
+
+    await router.navigate(`${router.state.location.pathname}/monitoring`);
+    await router.navigate(-1);
+
+    expect(await screen.findByRole('heading', { name: /^valkey-/ }, WAIT)).toBeVisible();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByDisplayValue(password)).toBeNull();
+  });
+
+  it('генерирует новый пароль после отклонённой отправки', async () => {
+    const firstPassword = '1111EFGHijklMNOPqrstUVWXyz01_234';
+    const secondPassword = '2222EFGHijklMNOPqrstUVWXyz01_234';
+    vi.spyOn(credentialsModel, 'generateValkeyPassword')
+      .mockReturnValueOnce(firstPassword)
+      .mockReturnValueOnce(secondPassword);
+    await seedInstance('valkey-1474', 'single', 1, 1);
+    const user = userEvent.setup();
+    await openForm();
+
+    const name = screen.getByRole('textbox', { name: /Имя/ });
+    await user.clear(name);
+    await user.type(name, 'valkey-1474');
+    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+    expect(await screen.findByText('База с таким именем уже существует', {}, WAIT)).toBeVisible();
+
+    await user.clear(name);
+    await user.type(name, 'valkey-2222');
+    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+
+    const modal = await screen.findByRole('dialog', {}, WAIT);
+    expect(within(modal).getByRole('textbox', { name: 'Пароль базы' })).toHaveValue(secondPassword);
+    expect(screen.queryByDisplayValue(firstPassword)).toBeNull();
+  });
+
   it('создаёт базу, открывает её карточку и сохраняет данные', async () => {
     const user = userEvent.setup();
     const { router } = await openForm();

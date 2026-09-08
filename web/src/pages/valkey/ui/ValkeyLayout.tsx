@@ -1,9 +1,10 @@
-import { createContext, use, useMemo, useState } from 'react';
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, Outlet, useOutletContext } from 'react-router';
+import { Link, Outlet, useLocation, useOutletContext } from 'react-router';
 import { Anchor, Breadcrumbs, Text } from '@mantine/core';
 import type { Session } from '@/shared/api';
-import { routes } from '@/shared/config';
+import { routes, valkeyInstancePath } from '@/shared/config';
+import type { EphemeralValkeyPassword } from '../model/valkey-credentials';
 import styles from './ValkeyLayout.module.css';
 
 /** Каркас консоли отдаёт разделу узлы шапки и правой колонки. */
@@ -18,6 +19,9 @@ interface ValkeyContextValue {
   asideSlot: HTMLElement | null;
   headerSlot: HTMLElement | null;
   setTrailingCrumb: (crumb: string | null) => void;
+  ephemeralPassword: EphemeralValkeyPassword | null;
+  setEphemeralPassword: (value: EphemeralValkeyPassword) => void;
+  clearEphemeralPassword: () => void;
 }
 
 const ValkeyContext = createContext<ValkeyContextValue | null>(null);
@@ -32,11 +36,42 @@ export function useValkeySection() {
 
 export function ValkeyLayout() {
   const { asideSlot, headerSlot, session } = useOutletContext<ConsoleOutletContext>();
+  const { pathname } = useLocation();
   const [trailingCrumb, setTrailingCrumb] = useState<string | null>(null);
+  const [ephemeralPassword, setEphemeralPassword] = useState<EphemeralValkeyPassword | null>(null);
+  const previousPathnameRef = useRef(pathname);
+
+  const clearEphemeralPassword = useCallback(() => setEphemeralPassword(null), []);
+
+  useEffect(() => {
+    window.addEventListener('pagehide', clearEphemeralPassword);
+    return () => window.removeEventListener('pagehide', clearEphemeralPassword);
+  }, [clearEphemeralPassword]);
+
+  useEffect(() => {
+    const pathnameChanged = previousPathnameRef.current !== pathname;
+    previousPathnameRef.current = pathname;
+
+    if (
+      pathnameChanged &&
+      ephemeralPassword &&
+      pathname !== valkeyInstancePath(ephemeralPassword.instanceId)
+    ) {
+      clearEphemeralPassword();
+    }
+  }, [clearEphemeralPassword, ephemeralPassword, pathname]);
 
   const context = useMemo<ValkeyContextValue>(
-    () => ({ session, asideSlot, headerSlot, setTrailingCrumb }),
-    [asideSlot, headerSlot, session]
+    () => ({
+      session,
+      asideSlot,
+      headerSlot,
+      setTrailingCrumb,
+      ephemeralPassword,
+      setEphemeralPassword,
+      clearEphemeralPassword,
+    }),
+    [asideSlot, clearEphemeralPassword, ephemeralPassword, headerSlot, session]
   );
 
   const crumbs = [
