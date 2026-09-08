@@ -1,0 +1,92 @@
+# Общая сетевая инфраструктура инстансов. Listener и маршруты на инстанс
+# создаёт оператор.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: valkey
+  namespace: valkey-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: LoadBalancer
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              externalTrafficPolicy: Local
+      envoyDeployment:
+        replicas: 2
+        pod:
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: envoy
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: valkey
+    namespace: valkey-system
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: valkey
+  namespace: valkey-system
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: valkey-bootstrap
+      protocol: TLS
+      port: 41379
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: valkey-wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              managed-valkey.h3llo-demo.com/instance: bootstrap
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: valkey-connections
+  namespace: valkey-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: valkey
+  timeout:
+    tcp:
+      idleTimeout: 3600s
+---
+# Ограничивает добровольный drain прокси Envoy; аварийные отказы он не
+# заменяет.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: envoy-valkey
+  namespace: envoy-gateway-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: envoy
+      gateway.envoyproxy.io/owning-gateway-name: valkey
+      gateway.envoyproxy.io/owning-gateway-namespace: valkey-system

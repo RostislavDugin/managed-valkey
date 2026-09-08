@@ -1,0 +1,24 @@
+# На dev встроенные Traefik и servicelb выключены, поэтому Service типа
+# LoadBalancer внешнего адреса не получит. Прокси публикуется через NodePort,
+# а compose пробрасывает порт 41379 хоста на 31379 контейнера k3s-server.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: valkey-dev
+  namespace: valkey-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+      envoyDeployment:
+        replicas: 2
+        pod:
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: envoy

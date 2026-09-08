@@ -1,0 +1,24 @@
+# Один Gateway на все инстансы. Listener на инстанс добавляет оператор; здесь
+# создаётся только общий объект и его публичный порт.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: valkey
+  namespace: valkey-system
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: valkey-bootstrap
+      protocol: TLS
+      port: 41379
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: valkey-wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              managed-valkey.h3llo-demo.com/instance: bootstrap

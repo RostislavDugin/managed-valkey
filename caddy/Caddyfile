@@ -1,0 +1,51 @@
+{
+	order rate_limit before reverse_proxy
+}
+
+app.h3llo-demo.com {
+	rate_limit {
+		zone auth {
+			match {
+				path /v1/auth/*
+			}
+			key {remote_host}
+			events 10
+			window 1m
+		}
+		zone api {
+			match {
+				path /v1/*
+			}
+			key {remote_host}
+			events 120
+			window 1m
+		}
+	}
+	reverse_proxy api:8080
+}
+
+logs.h3llo-demo.com {
+    @otlp {
+        method POST
+        path /insert/opentelemetry/v1/logs
+    }
+    handle @otlp {
+        basic_auth {
+            valkey-operator {$VL_INGEST_PASSWORD_HASH}
+        }
+        reverse_proxy victorialogs:9428 {
+            header_up -Authorization
+        }
+    }
+    handle /select/* {
+        basic_auth {
+            logs-reader {$VL_VIEW_PASSWORD_HASH}
+        }
+        reverse_proxy victorialogs:9428 {
+            header_up -Authorization
+        }
+    }
+    handle {
+        respond 404
+    }
+}

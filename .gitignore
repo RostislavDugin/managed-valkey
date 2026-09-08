@@ -7,4 +7,5 @@ bin/
 tmp/
 *.log
 .DS_Store
+__pycache__/
 temp/

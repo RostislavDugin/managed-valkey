@@ -1,0 +1,7 @@
+# Файлы CRD создаёт controller-gen; список нужен, чтобы каталог можно было
+# подключить как ресурс kustomize.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - valkey.h3llo-demo.com_valkeyinstances.yaml

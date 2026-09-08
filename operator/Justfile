@@ -1,0 +1,27 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+set dotenv-path := "../.env"
+
+export GOTOOLCHAIN := "auto"
+
+root := justfile_directory() / ".."
+envtest_version := "1.35.0"
+
+run: _generate
+    test -f {{ quote(root / "tmp/k3s/operator.kubeconfig") }} || \
+        { echo "сначала выполните scripts/k3s_bootstrap.sh" >&2; exit 1; }
+    cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/operator.kubeconfig") }} go run ./operator/cmd/operator
+
+test-fast: _generate
+    cd {{ root }} && KUBEBUILDER_ASSETS="$(go tool setup-envtest use {{ envtest_version }} --bin-dir "$(pwd)/bin/envtest" -p path)" \
+        go test -tags envtest ./operator/... ./internal/...
+
+test-full:
+    @echo "TODO: добавить интеграционные тесты оператора на k3s" >&2
+    @exit 1
+
+_generate:
+    cd {{ root }} && go tool controller-gen object paths=./operator/api/v1alpha1/...
+    cd {{ root }} && go tool controller-gen crd paths=./operator/api/v1alpha1/... \
+        output:crd:artifacts:config=operator/config/crd
+    cd {{ root }} && go tool controller-gen rbac:roleName=managed-valkey-operator paths=./operator/internal/... \
+        output:rbac:artifacts:config=operator/config/rbac

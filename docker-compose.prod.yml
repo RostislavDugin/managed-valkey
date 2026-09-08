@@ -1,0 +1,95 @@
+name: managed-valkey
+
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?задайте POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?задайте POSTGRES_DB}
+      PGPORT: "45432"
+    ports:
+      - "127.0.0.1:45432:45432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -p 45432"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.52.0
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=${VALKEY_METRICS_RETENTION:-168h}
+    volumes:
+      - victorialogs-data:/victoria-logs-data
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: migrate
+    image: ${API_IMAGE:-managed-valkey/api}:${IMAGE_TAG:-dev}-migrate
+    command:
+      - postgres
+      - ${DATABASE_URL:?задайте DATABASE_URL}
+      - up
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: runtime
+    image: ${API_IMAGE:-managed-valkey/api}:${IMAGE_TAG:-dev}
+    environment:
+      APP_ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      VL_OTLP_URL: http://victorialogs:9428/insert/opentelemetry/v1/logs
+      DATABASE_URL: ${DATABASE_URL:?задайте DATABASE_URL}
+      HTTP_ADDR: ":8080"
+      KUBECONFIG: /kubeconfig/api.kubeconfig
+      JWT_SECRET: ${JWT_SECRET:?задайте JWT_SECRET}
+      VALKEY_BASE_DOMAIN: ${VALKEY_BASE_DOMAIN:?задайте VALKEY_BASE_DOMAIN}
+      VALKEY_PUBLIC_PORT: ${VALKEY_PUBLIC_PORT:-41379}
+    volumes:
+      - ${API_KUBECONFIG_DIR:?задайте API_KUBECONFIG_DIR}:/kubeconfig:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    read_only: true
+    restart: unless-stopped
+
+  caddy:
+    build:
+      context: .
+      dockerfile: caddy/Dockerfile
+    image: ${CADDY_IMAGE:-managed-valkey/caddy}:${IMAGE_TAG:-dev}
+    environment:
+      VL_INGEST_PASSWORD_HASH: ${VL_INGEST_PASSWORD_HASH:?задайте VL_INGEST_PASSWORD_HASH}
+      VL_VIEW_PASSWORD_HASH: ${VL_VIEW_PASSWORD_HASH:?задайте VL_VIEW_PASSWORD_HASH}
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  victorialogs-data:
+  caddy-data:
+  caddy-config:

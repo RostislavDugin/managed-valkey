@@ -1,38 +1,125 @@
 #!/usr/bin/env sh
-# Проверка фронта перед коммитом: формат, линтеры, сборка.
-# Форматированные файлы возвращаются в индекс, поэтому в коммит попадает уже
-# отформатированный код. Падение линта или сборки отменяет коммит.
+
 set -e
+
+GOTOOLCHAIN=auto
+export GOTOOLCHAIN
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-staged_web=$(git diff --cached --name-only --diff-filter=ACMR -z -- web | tr '\0' '\n' | sed '/^$/d')
-if [ -z "$staged_web" ]; then
-  exit 0
-fi
+staged_paths() {
+    git diff --cached --name-only --diff-filter=ACMRD -z -- "$@" | tr '\0' '\n' | sed '/^$/d'
+}
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "pre-commit: pnpm не найден, проверки фронта пропустить нельзя" >&2
-  exit 1
-fi
+staged_existing() {
+    git diff --cached --name-only --diff-filter=ACMR -z -- "$@" | tr '\0' '\n' | sed '/^$/d'
+}
 
-cd web
+reject_partially_staged() {
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
 
-echo "pre-commit: формат"
-printf '%s\n' "$staged_web" | sed 's|^web/||' | tr '\n' '\0' | xargs -0 --no-run-if-empty pnpm exec oxfmt --
+        if ! git diff --quiet -- "$file"; then
+            echo "pre-commit: $file содержит изменения вне индекса; добавьте их или временно уберите" >&2
+            exit 1
+        fi
+    done
+}
 
-# Файл мог исчезнуть или превратиться в каталог после форматирования — берём только то,
-# что реально лежит на диске, иначе git add оборвёт хук.
-cd "$repo_root"
-printf '%s\n' "$staged_web" | while IFS= read -r file; do
-  [ -f "$file" ] && git add -- "$file"
-done
+add_staged() {
+    while IFS= read -r file; do
+        [ -f "$file" ] && git add -- "$file"
+    done
+}
 
-cd web
+check_web() {
+    changed_web=$(staged_paths web)
+    if [ -z "$changed_web" ]; then
+        return 0
+    fi
 
-echo "pre-commit: линт"
-pnpm lint
+    if ! command -v pnpm >/dev/null 2>&1; then
+        echo "pre-commit: pnpm не найден, проверки фронта пропустить нельзя" >&2
+        exit 1
+    fi
 
-echo "pre-commit: сборка"
-pnpm build
+    staged_web=$(staged_existing web)
+    if [ -n "$staged_web" ]; then
+        printf '%s\n' "$staged_web" | reject_partially_staged
+
+        echo "pre-commit: web формат"
+        (cd web && printf '%s\n' "$staged_web" | sed 's|^web/||' | tr '\n' '\0' |
+            xargs -0 --no-run-if-empty pnpm exec oxfmt --)
+        printf '%s\n' "$staged_web" | add_staged
+    fi
+
+    echo "pre-commit: web проверки"
+    (cd web && pnpm check)
+}
+
+check_go() {
+    app=$1
+    files=$2
+
+    if [ -n "$files" ]; then
+        printf '%s\n' "$files" | reject_partially_staged
+
+        echo "pre-commit: $app формат"
+        printf '%s\n' "$files" | tr '\n' '\0' |
+            xargs -0 --no-run-if-empty go tool golangci-lint fmt --config .golangci.yml
+        printf '%s\n' "$files" | add_staged
+    fi
+
+    echo "pre-commit: $app линт"
+    if [ "$app" = api ]; then
+        set -- ./api/... ./internal/...
+    else
+        set -- ./operator/... ./internal/...
+    fi
+
+    go tool golangci-lint run --config .golangci.yml "$@"
+
+    if [ "$app" = operator ]; then
+        echo "pre-commit: operator генерация"
+        scripts/check_operator_generated.sh
+    fi
+
+    echo "pre-commit: $app сборка"
+    go build "$@"
+}
+
+check_all_go() {
+    changed_go=$(staged_paths '*.go')
+    staged_go=$(staged_existing '*.go')
+    changed_module=$(staged_paths go.mod go.sum)
+    changed_lint_config=$(staged_paths .golangci.yml)
+
+    if [ -z "$changed_go" ] && [ -z "$changed_module" ] && [ -z "$changed_lint_config" ]; then
+        return 0
+    fi
+
+    shared_changed=$(printf '%s\n' "$changed_go" | grep -v '^api/' | grep -v '^operator/' || true)
+    api_changed=$(printf '%s\n' "$changed_go" | grep '^api/' || true)
+    operator_changed=$(printf '%s\n' "$changed_go" | grep '^operator/' || true)
+
+    shared_files=$(printf '%s\n' "$staged_go" | grep -v '^api/' | grep -v '^operator/' || true)
+    api_files=$(printf '%s\n' "$staged_go" | grep '^api/' || true)
+    operator_files=$(printf '%s\n' "$staged_go" | grep '^operator/' || true)
+
+    if [ -n "$shared_changed" ] || [ -n "$changed_module" ] || [ -n "$changed_lint_config" ]; then
+        api_changed=1
+        operator_changed=1
+        api_files=$(printf '%s\n%s\n' "$api_files" "$shared_files" | sed '/^$/d')
+        operator_files=$(printf '%s\n%s\n' "$operator_files" "$shared_files" | sed '/^$/d')
+    fi
+
+    [ -n "$api_changed" ] && check_go api "$api_files"
+    [ -n "$operator_changed" ] && check_go operator "$operator_files"
+
+    echo "pre-commit: go mod tidy -diff"
+    go mod tidy -diff
+}
+
+check_web
+check_all_go

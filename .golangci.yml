@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: false
+  concurrency: 4
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errname
+    - errorlint
+    - funcorder
+    - gocritic
+    - misspell
+    - modernize
+    - noctx
+    - unconvert
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+    gofumpt:
+      module-path: github.com/RostislavDugin/managed-valkey
+      extra:
+        group-params: true
+    golines:
+      max-len: 120

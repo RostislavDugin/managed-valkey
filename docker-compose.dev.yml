@@ -1,0 +1,71 @@
+name: managed-valkey-dev
+
+services:
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-managed_valkey}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-managed_valkey}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-45432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-managed_valkey} -d ${POSTGRES_DB:-managed_valkey}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  k3s-server:
+    image: rancher/k3s:v1.35.7-k3s1
+    command:
+      - server
+      - --disable=traefik
+      - --disable=servicelb
+      - --node-name=k3s-server
+      - --tls-san=k3s-server
+      - --tls-san=127.0.0.1
+    privileged: true
+    tmpfs:
+      - /run
+      - /var/run
+    environment:
+      K3S_TOKEN: ${K3S_TOKEN:?задайте K3S_TOKEN в .env}
+    ports:
+      - "127.0.0.1:6443:6443"
+      - "127.0.0.1:${VALKEY_PUBLIC_PORT:-41379}:31379"
+    volumes:
+      - k3s-server-data:/var/lib/rancher/k3s
+    healthcheck:
+      test: ["CMD-SHELL", "kubectl get --raw=/readyz"]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 60s
+
+  k3s-agent-1: &k3s-agent
+    image: rancher/k3s:v1.35.7-k3s1
+    command:
+      - agent
+      - --node-name=k3s-agent-1
+    privileged: true
+    tmpfs:
+      - /run
+      - /var/run
+    environment:
+      K3S_URL: https://k3s-server:6443
+      K3S_TOKEN: ${K3S_TOKEN:?задайте K3S_TOKEN в .env}
+    depends_on:
+      k3s-server:
+        condition: service_healthy
+
+  k3s-agent-2:
+    <<: *k3s-agent
+    command:
+      - agent
+      - --node-name=k3s-agent-2
+
+volumes:
+  postgres-data:
+  k3s-server-data:
