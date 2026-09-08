@@ -1,7 +1,7 @@
 /* ==========================================================================
    Managed Valkey — дизайн-токены консоли
    Единственное место, где хранятся значения токенов. Тема Mantine
-   (theme.ts) и слой Tailwind (tailwind.css) ссылаются на эти переменные.
+   (theme.ts), подсветка кода и слой Tailwind (tailwind.css) ссылаются на эти переменные.
    Отличия от исходного снимка темы app.h3llo.cloud описаны в ../../../DESIGN.md,
    раздел «Отличия от исходного снимка».
    ========================================================================== */
@@ -56,6 +56,8 @@
     'Liberation Mono', 'Courier New', monospace;
 
   --h3-fw-regular: 450;
+  /* Чуть плотнее основного текста, но легче подписи поля: хлебные крошки. */
+  --h3-fw-medium-1: 500;
   --h3-fw-medium: 600;
   --h3-fw-bold: 700;
 
@@ -144,8 +146,7 @@
   --h3-border: #e9e9e9;
   --h3-border-1: #b6b6b6;
   --h3-border-accent: #6cdb9f;
-  /* Граница интерактивного контрола: не ниже 3:1 к соседнему фону. */
-  --h3-border-control: #6e6e6e;
+  --h3-border-control: #e9e9e9;
   /* Граница поля в фокусе: состояние видно только цветом рамки, поэтому mint-6 (3.52:1). */
   --h3-border-focus: #379a64;
 
@@ -158,6 +159,17 @@
   --h3-disabled: var(--h3-gray-2);
   --h3-disabled-color: var(--h3-gray-3);
   --h3-error: #fa5252;
+
+  /* Подсветка кода: Atom One Light, как в блоках исходной консоли. */
+  --h3-code-text: #383a42;
+  --h3-code-comment: #a0a1a7;
+  --h3-code-keyword: #a626a4;
+  --h3-code-name: #e45649;
+  --h3-code-literal: #0184bb;
+  --h3-code-string: #50a14f;
+  --h3-code-number: #986801;
+  --h3-code-title: #4078f2;
+  --h3-code-built-in: #c18401;
 }
 
 /* --- Семантический слой: тёмная схема ---------------------------------- */
@@ -194,4 +206,15 @@
   --h3-disabled: var(--h3-gray-7);
   --h3-disabled-color: var(--h3-gray-6);
   --h3-error: #e03131;
+
+  /* Подсветка кода: Atom One Dark на поверхности консоли. */
+  --h3-code-text: #abb2bf;
+  --h3-code-comment: #abb2bf;
+  --h3-code-keyword: #c678dd;
+  --h3-code-name: #e06c75;
+  --h3-code-literal: #56b6c2;
+  --h3-code-string: #98c379;
+  --h3-code-number: #d19a66;
+  --h3-code-title: #61aeee;
+  --h3-code-built-in: #e6c07b;
 }

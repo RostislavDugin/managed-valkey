@@ -6,6 +6,7 @@ import {
   Drawer,
   Group,
   Menu,
+  NavLink as MantineNavLink,
   Progress,
   Stack,
   Text,
@@ -37,15 +38,13 @@ function ConsoleNavigation({ email, onNavigate }: { email: string; onNavigate?: 
       <LogoWide className={styles.logo} width={117} />
 
       <div className={styles.navigationBody}>
-        <NavLink
-          className={({ isActive }) => `${styles.navLink} ${isActive ? styles.navLinkActive : ''}`}
-          end
+        <MantineNavLink
+          className={styles.navLink}
+          label="Базы данных"
+          leftSection={<Database aria-hidden="true" size={16} strokeWidth={1.5} />}
           onClick={onNavigate}
-          to={routes.home}
-        >
-          <Database aria-hidden="true" size={16} strokeWidth={1.5} />
-          <span>Базы данных</span>
-        </NavLink>
+          renderRoot={(props) => <NavLink {...props} to={routes.valkey} />}
+        />
       </div>
 
       <Stack className={styles.navigationFooter} gap={0}>
@@ -100,6 +99,8 @@ export function ConsoleShell() {
   const navigate = useNavigate();
   const navigation = useNavigation();
   const [drawerOpened, setDrawerOpened] = useState(false);
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  const [asideSlot, setAsideSlot] = useState<HTMLElement | null>(null);
   const endingSession = useRef(false);
 
   const endExpiredSession = useCallback(async () => {
@@ -187,8 +188,12 @@ export function ConsoleShell() {
         <ConsoleNavigation email={session.email} onNavigate={() => setDrawerOpened(false)} />
       </Drawer>
 
+      <aside className={styles.asideColumn} ref={setAsideSlot} />
+
+      <div className={styles.header} ref={setHeaderSlot} />
+
       <main className={styles.main} id="main-content" tabIndex={-1}>
-        <Outlet />
+        <Outlet context={{ session, headerSlot, asideSlot }} />
       </main>
     </div>
   );

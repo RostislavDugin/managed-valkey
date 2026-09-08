@@ -1,0 +1,12 @@
+.breadcrumbs {
+  align-items: center;
+  color: var(--h3-text);
+}
+
+/* Длинное имя базы не должно выдавливать остальные крошки. */
+.crumb {
+  max-width: 12.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

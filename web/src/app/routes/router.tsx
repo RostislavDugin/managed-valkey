@@ -1,7 +1,19 @@
-import { createBrowserRouter, redirect, type LoaderFunctionArgs } from 'react-router';
+import {
+  createBrowserRouter,
+  redirect,
+  type LoaderFunctionArgs,
+  type RouteObject,
+} from 'react-router';
 import { AuthPage } from '@/pages/auth';
-import { HomePage } from '@/pages/home';
 import { NotFoundPage } from '@/pages/not-found';
+import {
+  CreateValkeyPage,
+  ValkeyInstanceLayout,
+  ValkeyInstancePage,
+  ValkeyLayout,
+  ValkeyManagementPage,
+  ValkeyPlaceholderPage,
+} from '@/pages/valkey';
 import { ApiError, getSession } from '@/shared/api';
 import { routes } from '@/shared/config';
 import { ConsoleShell } from './ConsoleShell';
@@ -57,7 +69,8 @@ async function consoleLoader({ request }: LoaderFunctionArgs) {
   return redirect(`${routes.auth}?${search}`);
 }
 
-export const router = createBrowserRouter([
+/** Отдельно от роутера, чтобы таблицу можно было проверить в тестах. */
+export const routeTable: RouteObject[] = [
   {
     path: routes.auth,
     loader: authLoader,
@@ -70,7 +83,43 @@ export const router = createBrowserRouter([
     children: [
       {
         path: routes.home,
-        Component: HomePage,
+        loader: () => redirect(routes.valkeyManagement),
+      },
+      {
+        path: routes.valkey,
+        Component: ValkeyLayout,
+        children: [
+          {
+            index: true,
+            loader: () => redirect(routes.valkeyManagement),
+          },
+          {
+            path: 'management',
+            Component: ValkeyManagementPage,
+          },
+          {
+            path: 'management/new',
+            Component: CreateValkeyPage,
+          },
+          {
+            path: 'management/:instanceId',
+            Component: ValkeyInstanceLayout,
+            children: [
+              {
+                index: true,
+                Component: ValkeyInstancePage,
+              },
+              {
+                path: 'monitoring',
+                Component: () => <ValkeyPlaceholderPage title="Мониторинг" />,
+              },
+              {
+                path: 'audit-logs',
+                Component: () => <ValkeyPlaceholderPage title="Аудит логи" />,
+              },
+            ],
+          },
+        ],
       },
       {
         path: '*',
@@ -78,4 +127,6 @@ export const router = createBrowserRouter([
       },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(routeTable);

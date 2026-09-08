@@ -24,6 +24,8 @@
 React 19, TypeScript, Vite, React Router, Mantine 9 (`core`, `hooks`, `form`,
 `charts`, `notifications`), Tailwind CSS 4 без Preflight, иконки `lucide-react`.
 Пакеты ставит `pnpm` версии из поля `packageManager` в `package.json`.
+Мы часто работаем в новом worktree, поэтому перед началом работы запускай
+`pnpm install` в каталоге `web`.
 
 ## Команды
 
@@ -36,8 +38,9 @@ React 19, TypeScript, Vite, React Router, Mantine 9 (`core`, `hooks`, `form`,
 | `pnpm lint:code` | Oxlint с конфигурацией `oxc-config-mantine` |
 | `pnpm lint:fsd` | Steiger: границы и структура FSD |
 | `pnpm lint` | обе проверки |
+| `pnpm test` | Vitest: модель, временный клиент и экраны раздела |
 | `pnpm format` / `pnpm format:check` | Oxfmt |
-| `pnpm check` | форматирование, обе проверки, типы и сборка подряд |
+| `pnpm check` | форматирование, обе проверки, типы, тесты и сборка подряд |
 
 Адрес api для прокси задаётся переменной окружения `API_PROXY_TARGET`
 (в оболочке или в `.env.local`), по умолчанию `http://127.0.0.1:8080`.

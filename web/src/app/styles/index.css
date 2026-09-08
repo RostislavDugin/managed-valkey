@@ -28,6 +28,10 @@
     color: var(--h3-text);
   }
 
+  :focus {
+    outline: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

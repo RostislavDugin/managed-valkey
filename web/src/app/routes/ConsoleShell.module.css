@@ -43,25 +43,20 @@
   flex: 1;
 }
 
+/* Строка навигации: 36px, подпись h3_sm, текущий раздел залит h3_bg_2. */
 .navLink {
-  display: flex;
-  min-height: 2.25rem; /* 36px — плотная строка навигации */
-  align-items: center;
-  gap: var(--h3-space-xs);
-  padding: var(--h3-space-xs) var(--h3-space-sm);
+  --nl-bg: var(--h3-bg-2);
+  --nl-hover: var(--h3-bg-2);
+  --nl-color: var(--h3-text);
+
+  min-height: 2.25rem;
   color: var(--h3-text);
   font-size: var(--h3-fs-sm);
   line-height: var(--h3-lh-sm);
-  text-decoration: none;
 }
 
 .navLink:hover {
   background: var(--h3-bg-3);
-}
-
-.navLinkActive,
-.navLinkActive:hover {
-  background: var(--h3-bg-2);
 }
 
 .navigationFooter {
@@ -103,8 +98,29 @@
   padding: 0 var(--h3-space-md);
 }
 
+/* Строка шапки: раздел кладёт в неё хлебные крошки порталом. */
+.header {
+  display: flex;
+  height: var(--h3-header-height);
+  align-items: center;
+  padding: 0 var(--h3-space-lg);
+}
+
+/* Правая колонка тоже наполняется порталом. Пустая колонка не резервирует
+   ширину: экран без постоянного контекста раскладывается во всю ширину. */
+.asideColumn {
+  position: fixed;
+  z-index: 50;
+  inset: 0 0 auto auto;
+  display: none;
+  height: 100dvh;
+  width: var(--h3-navbar-width);
+  border-left: 1px solid var(--h3-border);
+  background: var(--h3-bg);
+}
+
 .main {
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--h3-header-height));
 }
 
 .drawerBody {
@@ -144,8 +160,20 @@
     display: none;
   }
 
+  .header,
   .main {
     margin-left: var(--h3-navbar-width);
+  }
+}
+
+@media (min-width: 80em) {
+  .asideColumn:not(:empty) {
+    display: block;
+  }
+
+  .asideColumn:not(:empty) ~ .header,
+  .asideColumn:not(:empty) ~ .main {
+    margin-right: var(--h3-navbar-width);
   }
 }
 
@@ -154,7 +182,17 @@
     width: var(--h3-navbar-width-wide);
   }
 
+  .header,
   .main {
     margin-left: var(--h3-navbar-width-wide);
+  }
+
+  .asideColumn:not(:empty) {
+    width: var(--h3-navbar-width-wide);
+  }
+
+  .asideColumn:not(:empty) ~ .header,
+  .asideColumn:not(:empty) ~ .main {
+    margin-right: var(--h3-navbar-width-wide);
   }
 }

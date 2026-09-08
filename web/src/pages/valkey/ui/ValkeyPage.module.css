@@ -1,0 +1,598 @@
+.page {
+  width: 100%;
+  min-height: calc(100dvh - var(--h3-header-height) + 0.25rem);
+  /* Запас 120px снизу задан макетом страницы: web/DESIGN.md, «Отступы». */
+  padding-block: var(--h3-space-lg) 7.5rem;
+}
+
+/* Вместе с отступом страницы даёт 64px над заголовком и 48px под ним. */
+.pageTitle {
+  margin-block: 2.5rem 3rem;
+}
+
+.instanceTabs {
+  width: 100%;
+}
+
+.instanceHeading {
+  width: 100%;
+  padding: 2.25rem var(--h3-space-lg) 0;
+}
+
+.instanceContent {
+  padding-inline: var(--h3-space-lg);
+}
+
+.asideCard {
+  overflow: hidden;
+  margin: 0.25rem;
+  border-radius: var(--h3-radius-sm);
+  background: var(--h3-bg-2);
+}
+
+.asideHeader {
+  display: flex;
+  min-height: 2.625rem;
+  align-items: center;
+  padding: 0.625rem var(--h3-space-sm);
+}
+
+.asideHeader[data-custom-header] {
+  margin-bottom: 0.125rem;
+  padding: 0.1875rem;
+}
+
+.asideTitle {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-xs);
+}
+
+.asideBody {
+  margin: 0.0625rem;
+  border-radius: 0.3125rem;
+  background: var(--h3-bg);
+}
+
+.asideTrigger {
+  margin: var(--h3-space-lg) var(--h3-space-lg) 0;
+}
+
+@media (min-width: 80em) {
+  .asideTrigger {
+    display: none;
+  }
+}
+
+/* Строка расчёта: 10px по вертикали и 12px по бокам, замер по оригиналу. */
+.panelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-xs) 0.625rem;
+  padding: 0.625rem var(--h3-space-sm);
+}
+
+.panelBlock {
+  padding: 0.625rem var(--h3-space-sm);
+}
+
+.periodTabs {
+  background: transparent;
+}
+
+.periodControl::before {
+  content: none;
+}
+
+.periodIndicator {
+  background: var(--h3-bg-inverse);
+}
+
+.periodLabel {
+  color: var(--h3-text);
+  line-height: var(--h3-lh-sm);
+  padding-block: 0.28125rem;
+}
+
+.periodLabel[data-active] {
+  color: var(--h3-text-inverse);
+}
+
+.usageRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--h3-space-sm);
+}
+
+.quotaAction {
+  padding: var(--h3-space-xs) var(--h3-space-sm) var(--h3-space-sm);
+}
+
+.pageHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-sm);
+}
+
+.headerAction {
+  margin-left: auto;
+}
+
+.instanceHeaderActions {
+  margin-left: auto;
+}
+
+.managementContent {
+  margin-top: 2.5rem;
+  gap: 3rem;
+}
+
+.empty {
+  display: flex;
+  width: 100%;
+  max-width: 45rem;
+  flex-direction: column;
+  align-items: center;
+  margin-inline: auto;
+  gap: var(--h3-space-lg);
+  text-align: center;
+}
+
+.emptyButton {
+  height: 3.125rem;
+  padding-inline: var(--h3-space-lg);
+  font-size: var(--h3-fs-md);
+  line-height: var(--h3-fs-md);
+}
+
+.emptyPage {
+  display: flex;
+  min-height: calc(100dvh - var(--h3-header-height));
+  align-items: center;
+  padding-block: 3.75rem;
+}
+
+.emptyAside {
+  display: none;
+}
+
+.tableCard {
+  overflow: hidden;
+  border: 1px solid var(--h3-border);
+  border-radius: var(--h3-radius-md);
+}
+
+.tableCard :global(.mantine-Table-thead) {
+  background: var(--h3-bg-2);
+}
+
+.tableCard :global(.mantine-Table-th),
+.tableCard :global(.mantine-Table-td) {
+  padding-inline: var(--h3-space-sm);
+}
+
+.tableCard :global(.mantine-Table-tbody),
+.tableCard :global(.mantine-Table-tbody) :global(.mantine-Table-tr) {
+  background: var(--h3-bg);
+}
+
+.tableCard :global(.mantine-Table-tbody) :global(.mantine-Table-tr) {
+  height: 3.25rem;
+}
+
+.sortHeader {
+  user-select: none;
+}
+
+.sortHeaderButton {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-md);
+  font: inherit;
+  font-weight: inherit;
+}
+
+.databaseRow {
+  cursor: pointer;
+}
+
+.nameLink {
+  color: var(--h3-text);
+  text-decoration: none;
+}
+
+.nameLink:hover {
+  text-decoration: underline;
+}
+
+.statusCell {
+  display: flex;
+  align-items: center;
+  gap: var(--h3-space-xs);
+  white-space: nowrap;
+}
+
+.statusDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: none;
+  border-radius: var(--h3-radius-full);
+  background: #40c057;
+}
+
+/* Иконочная кнопка размера `md` занимает 28px, для пальца нужно 44px. */
+.touchTarget {
+  position: relative;
+}
+
+.touchTarget::after {
+  position: absolute;
+  content: '';
+  inset: 50% 50% 50% 50%;
+  width: 2.75rem;
+  height: 2.75rem;
+  transform: translate(-50%, -50%);
+}
+
+.properties {
+  overflow: hidden;
+  border: 1px solid var(--h3-border);
+  border-radius: var(--h3-radius-sm);
+  display: grid;
+  gap: 1px;
+  background: var(--h3-border);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.properties > :first-child {
+  grid-column: 1 / -1;
+}
+
+.propertyRow {
+  display: flex;
+  min-height: 3.1875rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-sm);
+  padding: 0.5rem var(--h3-space-md);
+  border-radius: var(--h3-radius-sm);
+  background: var(--h3-bg);
+}
+
+.resizeModeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-sm);
+}
+
+.resizePrice {
+  text-align: right;
+}
+
+.instanceMeta {
+  min-width: 0;
+}
+
+.instanceId {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monoValue {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--h3-font-family-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inlineAction {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--h3-text-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.inlineAction:hover {
+  text-decoration: underline;
+}
+
+.inlineAction:focus-visible {
+  border-radius: var(--h3-radius-xs);
+  outline: 2px solid var(--h3-border-focus);
+  outline-offset: 0.125rem;
+}
+
+.codeCard {
+  overflow: hidden;
+  border-radius: var(--h3-radius-sm);
+  background: var(--h3-bg-2);
+}
+
+.codeHeader {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--h3-space-xs);
+  padding-inline: var(--h3-space-xs);
+  background: var(--h3-bg-2);
+}
+
+.codeHeader :global(.mantine-Tabs-list) {
+  min-width: 0;
+  flex: 1;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.codeHeader :global(.mantine-Tabs-list)::-webkit-scrollbar {
+  display: none;
+}
+
+.codeHeader :global(.mantine-Tabs-list)::before {
+  display: none;
+}
+
+.codeHeader :global(.mantine-Tabs-tab) {
+  height: 1.75rem;
+  flex: none;
+  border: 0;
+  border-radius: var(--h3-radius-xs);
+  margin: 0;
+  padding: 0.40625rem 0.625rem;
+  font-family: var(--h3-font-family-mono);
+  font-size: var(--h3-fs-xs);
+  font-weight: var(--h3-fw-bold);
+  line-height: var(--h3-lh-xs);
+  opacity: 0.8;
+}
+
+.codeHeader :global(.mantine-Tabs-tab[data-active]) {
+  background: var(--h3-bg);
+  box-shadow:
+    0 1px 3px rgb(from var(--h3-text) r g b / 5%),
+    0 1px 2px rgb(from var(--h3-text) r g b / 10%);
+  opacity: 1;
+}
+
+.codeActions {
+  flex: none;
+}
+
+.codeActions :global(.mantine-ActionIcon-root) {
+  width: 1.75rem;
+  height: 1.75rem;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+}
+
+.codeViewport {
+  position: relative;
+  overflow-y: auto;
+  max-height: 25rem;
+  background: var(--h3-bg-2);
+}
+
+.codeCard[data-collapsed] .codeViewport {
+  max-height: 6.625rem;
+  overflow: hidden;
+}
+
+.codeCard[data-collapsed] .codeViewport::after {
+  position: absolute;
+  z-index: 1;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 5rem;
+  background: linear-gradient(0deg, var(--h3-bg-2) 0%, var(--h3-bg-2) 25%, transparent 100%);
+  content: '';
+  pointer-events: none;
+}
+
+.codeHighlight {
+  border-radius: 0;
+}
+
+.codePre {
+  padding: var(--h3-space-md);
+  background: var(--h3-bg-2);
+  color: var(--h3-code-text);
+  font-family: var(--h3-font-family-mono);
+  font-size: var(--h3-fs-xs);
+  font-weight: var(--h3-fw-regular);
+  line-height: 1.7;
+}
+
+.codeExpandButton {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  padding-block: var(--h3-space-xs);
+  color: var(--h3-text-accent);
+  font-size: var(--h3-fs-xs);
+  text-align: center;
+}
+
+.codeCard :global(.hljs) {
+  color: var(--h3-code-text);
+}
+
+.codeCard :global(.hljs-comment),
+.codeCard :global(.hljs-quote) {
+  color: var(--h3-code-comment);
+  font-style: italic;
+}
+
+.codeCard :global(.hljs-doctag),
+.codeCard :global(.hljs-keyword),
+.codeCard :global(.hljs-formula) {
+  color: var(--h3-code-keyword);
+}
+
+.codeCard :global(.hljs-section),
+.codeCard :global(.hljs-name),
+.codeCard :global(.hljs-selector-tag),
+.codeCard :global(.hljs-deletion),
+.codeCard :global(.hljs-subst) {
+  color: var(--h3-code-name);
+}
+
+.codeCard :global(.hljs-literal) {
+  color: var(--h3-code-literal);
+}
+
+.codeCard :global(.hljs-string),
+.codeCard :global(.hljs-regexp),
+.codeCard :global(.hljs-addition),
+.codeCard :global(.hljs-attribute),
+.codeCard :global(.hljs-meta) :global(.hljs-string) {
+  color: var(--h3-code-string);
+}
+
+.codeCard :global(.hljs-attr),
+.codeCard :global(.hljs-variable),
+.codeCard :global(.hljs-template-variable),
+.codeCard :global(.hljs-type),
+.codeCard :global(.hljs-selector-class),
+.codeCard :global(.hljs-selector-attr),
+.codeCard :global(.hljs-selector-pseudo),
+.codeCard :global(.hljs-number) {
+  color: var(--h3-code-number);
+}
+
+.codeCard :global(.hljs-symbol),
+.codeCard :global(.hljs-bullet),
+.codeCard :global(.hljs-link),
+.codeCard :global(.hljs-meta),
+.codeCard :global(.hljs-selector-id),
+.codeCard :global(.hljs-title) {
+  color: var(--h3-code-title);
+}
+
+.codeCard :global(.hljs-built_in),
+.codeCard :global(.hljs-title.class_),
+.codeCard :global(.hljs-class) :global(.hljs-title) {
+  color: var(--h3-code-built-in);
+}
+
+@media (max-width: 47.999em) {
+  .instanceContent,
+  .instanceHeading {
+    padding-inline: var(--h3-space-md);
+  }
+
+  .asideTrigger {
+    margin-inline: var(--h3-space-md);
+  }
+
+  .propertyRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .properties {
+    grid-template-columns: 1fr;
+  }
+
+  .properties > :first-child {
+    grid-column: auto;
+  }
+}
+
+.formRow {
+  display: grid;
+  align-items: start;
+  gap: var(--h3-space-xs) var(--h3-space-sm);
+  grid-template-columns: 1fr;
+}
+
+/* Контрол занимает правую половину контейнера, как в исходной консоли. */
+@media (min-width: 48em) {
+  .formRow {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.formRowFull {
+  display: flex;
+  flex-direction: column;
+  gap: var(--h3-space-sm);
+}
+
+.formLabel {
+  padding-top: var(--h3-space-xs);
+}
+
+.formControl {
+  min-width: 0;
+}
+
+.formRow :global(.mantine-InputWrapper-label),
+.formRowFull :global(.mantine-InputWrapper-label) {
+  line-height: var(--h3-lh-sm);
+}
+
+.modeCard {
+  min-height: 4rem;
+  border-color: var(--h3-border);
+}
+
+.modeCard[data-checked] {
+  border-color: var(--h3-border-accent);
+  background: var(--h3-bg);
+  box-shadow: var(--h3-shadow-primary);
+}
+
+.formHint {
+  flex: none;
+  color: var(--h3-text-1);
+}
+
+.sliderStack {
+  min-height: 3.75rem;
+  justify-content: center;
+}
+
+.quotaAlert {
+  border: 1px solid var(--mantine-color-red-light-color);
+}
+
+.planCard {
+  min-height: 4rem;
+  border-color: var(--h3-border);
+  background: var(--h3-bg-2);
+}
+
+.planCard[data-checked] {
+  border-color: var(--h3-border-accent);
+  background: var(--h3-bg);
+  box-shadow: var(--h3-shadow-primary);
+}
+
+.planCard[data-unavailable] {
+  background: var(--h3-bg-1);
+}

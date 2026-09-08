@@ -18,3 +18,12 @@
     --input-bd-focus: var(--h3-border-focus);
   }
 }
+
+/* Ширина контейнера страницы: Mantine ищет `--container-size-<size>` рядом с
+   элементом, а значение живёт в tokens.css. 784px это колонка контента, поэтому
+   боковые поля прибавляются к ней, а не съедают её изнутри. */
+@layer components {
+  .mantine-Container-root {
+    --container-size-h3_page: calc(var(--h3-container-page) + 2 * var(--h3-space-lg));
+  }
+}

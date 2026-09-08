@@ -1,3 +1,4 @@
+import { createUuidV7, isUuid } from '@/shared/lib';
 import { ApiError } from './client';
 
 export const AUTH_TOKEN_KEY = 'mv_token';
@@ -8,6 +9,7 @@ const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface StoredUser {
+  id: string;
   email: string;
   password: string;
 }
@@ -18,6 +20,7 @@ interface TokenPayload {
 }
 
 export interface Session {
+  userId: string;
   email: string;
   expiresAt: number;
   token: string;
@@ -46,18 +49,43 @@ function assertCredentials(email: string, password?: string) {
   }
 }
 
+/**
+ * Запись без `id` получает UUIDv7 и сразу сохраняется: иначе идентификатор
+ * менялся бы при каждом чтении и владение ресурсами терялось бы.
+ */
 function readUsers(): StoredUser[] {
   const value = storage().getItem(AUTH_USERS_KEY);
   if (!value) {
     return [];
   }
 
+  let parsed: unknown;
   try {
-    const users: unknown = JSON.parse(value);
-    return Array.isArray(users) ? (users as StoredUser[]) : [];
+    parsed = JSON.parse(value);
   } catch {
     return [];
   }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  let migrated = false;
+  const users = parsed.map((entry) => {
+    const user = entry as Partial<StoredUser>;
+    if (typeof user.id === 'string' && user.id) {
+      return user as StoredUser;
+    }
+
+    migrated = true;
+    return { ...user, id: createUuidV7() } as StoredUser;
+  });
+
+  if (migrated) {
+    writeUsers(users);
+  }
+
+  return users;
 }
 
 function writeUsers(users: StoredUser[]) {
@@ -81,11 +109,13 @@ function decodeBase64Url(value: string) {
   return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
-function createToken(email: string) {
-  const now = Math.floor(Date.now() / 1000);
+function createToken(
+  userId: string,
+  expiresAt = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS
+) {
   return `${encodeBase64Url({ alg: 'none', typ: 'JWT' })}.${encodeBase64Url({
-    sub: email,
-    exp: now + TOKEN_TTL_SECONDS,
+    sub: userId,
+    exp: expiresAt,
   })}.demo`;
 }
 
@@ -113,8 +143,8 @@ function readTokenPayload(token: string): TokenPayload {
   }
 }
 
-function saveToken(email: string) {
-  const token = createToken(email);
+function saveToken(userId: string) {
+  const token = createToken(userId);
   storage().setItem(AUTH_TOKEN_KEY, token);
   return token;
 }
@@ -136,8 +166,9 @@ export async function register(input: { email: string; password: string }): Prom
     throw new ApiError('CONFLICT', 'Аккаунт с такой почтой уже существует');
   }
 
-  writeUsers([...users, { email, password: input.password }]);
-  return { token: saveToken(email) };
+  const user: StoredUser = { id: createUuidV7(), email, password: input.password };
+  writeUsers([...users, user]);
+  return { token: saveToken(user.id) };
 }
 
 export async function login(input: { email: string; password: string }): Promise<AuthResult> {
@@ -150,11 +181,37 @@ export async function login(input: { email: string; password: string }): Promise
     throw new ApiError('UNAUTHORIZED', 'Неверный пароль');
   }
 
-  return { token: saveToken(email) };
+  return { token: saveToken(user.id) };
 }
 
 export async function logout() {
   storage().removeItem(AUTH_TOKEN_KEY);
+}
+
+/**
+ * В браузере может лежать токен с почтой в `sub`: он заменяется версией с
+ * `user_id` и прежним `exp`.
+ */
+function resolveSession(payload: TokenPayload, token: string): Session {
+  const users = readUsers();
+  const expiresAt = payload.exp * 1000;
+
+  if (isUuid(payload.sub)) {
+    const user = users.find((candidate) => candidate.id === payload.sub);
+    if (!user) {
+      throw new ApiError('UNAUTHORIZED', 'Сессия недействительна');
+    }
+    return { userId: user.id, email: user.email, expiresAt, token };
+  }
+
+  const user = users.find((candidate) => candidate.email === normalizeEmail(payload.sub));
+  if (!user) {
+    throw new ApiError('UNAUTHORIZED', 'Сессия недействительна');
+  }
+
+  const upgraded = createToken(user.id, payload.exp);
+  storage().setItem(AUTH_TOKEN_KEY, upgraded);
+  return { userId: user.id, email: user.email, expiresAt, token: upgraded };
 }
 
 export async function getSession(): Promise<Session | null> {
@@ -169,7 +226,7 @@ export async function getSession(): Promise<Session | null> {
     if (payload.exp * 1000 <= Date.now()) {
       throw new ApiError('UNAUTHORIZED', 'Срок сессии истёк', { details: { reason: 'expired' } });
     }
-    return { email: payload.sub, expiresAt: payload.exp * 1000, token };
+    return resolveSession(payload, token);
   } catch (error) {
     storage().removeItem(AUTH_TOKEN_KEY);
     throw error;

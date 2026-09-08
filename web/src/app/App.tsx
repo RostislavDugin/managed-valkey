@@ -1,8 +1,12 @@
+import '@mantine/code-highlight/styles.layer.css';
+
 import { useSyncExternalStore } from 'react';
 import { RouterProvider } from 'react-router';
+import { CodeHighlightAdapterProvider } from '@mantine/code-highlight';
 import { Center, Loader, MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { router } from './routes';
+import { codeHighlightAdapter } from './styles/code-highlight';
 import { cssVariablesResolver, theme } from './styles/theme';
 import './styles/index.css';
 
@@ -31,8 +35,10 @@ export function App() {
       cssVariablesResolver={cssVariablesResolver}
       defaultColorScheme="auto"
     >
-      <Notifications position="top-right" containerWidth={440} />
-      <AppRouter />
+      <CodeHighlightAdapterProvider adapter={codeHighlightAdapter}>
+        <Notifications position="top-right" containerWidth={440} />
+        <AppRouter />
+      </CodeHighlightAdapterProvider>
     </MantineProvider>
   );
 }

@@ -17,16 +17,20 @@
     "lint": "pnpm lint:code && pnpm lint:fsd",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm build"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "test": "vitest run"
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.3.0",
     "@fontsource-variable/roboto-mono": "^5.3.0",
     "@mantine/charts": "9.6.0",
+    "@mantine/code-highlight": "9.6.0",
     "@mantine/core": "9.6.0",
     "@mantine/form": "9.6.0",
     "@mantine/hooks": "9.6.0",
     "@mantine/notifications": "9.6.0",
+    "dayjs": "^1.11.23",
+    "highlight.js": "^11.12.0",
     "lucide-react": "^1.42.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -36,16 +40,21 @@
   "devDependencies": {
     "@feature-sliced/steiger-plugin": "^0.7.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "happy-dom": "^20.14.0",
     "oxc-config-mantine": "^1.0.3",
     "oxfmt": "^0.67.0",
     "oxlint": "^1.82.0",
     "steiger": "^0.6.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   }
 }

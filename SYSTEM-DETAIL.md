@@ -60,7 +60,7 @@
 
 ### `users`
 
-`id`, `email` (unique), `password_hash` (bcrypt), `is_blocked` (default false), `created_at`. Флаг `is_blocked` меняется вручную в базе и проверяется middleware на каждом запросе: это единственный способ закрыть доступ скомпрометированному аккаунту к API, потому что JWT отозвать нельзя ([раздел 10](SYSTEM.md#10-аутентификация)).
+`id` (UUIDv7), `email` (unique), `password_hash` (bcrypt), `is_blocked` (default false), `created_at`. Все ссылки `user_id` хранят это значение. Флаг `is_blocked` меняется вручную в базе и проверяется middleware на каждом запросе: это единственный способ закрыть доступ скомпрометированному аккаунту к API, потому что JWT отозвать нельзя ([раздел 10](SYSTEM.md#10-аутентификация)).
 
 ### `user_quotas`
 

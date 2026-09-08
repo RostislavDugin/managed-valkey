@@ -3,6 +3,8 @@ import {
   createTheme,
   defaultVariantColorsResolver,
   rem,
+  Slider,
+  TextInput,
   type CSSVariablesResolver,
   type MantineColorsTuple,
   type VariantColorsResolver,
@@ -106,7 +108,13 @@ const schemeVariables = {
 
 /** Переменные Mantine, которых нет в createTheme. */
 export const cssVariablesResolver: CSSVariablesResolver = () => ({
-  variables: {},
+  // Начертания Mantine спрашивает у своих переменных: без них подпись поля
+  // теряет 600 и набирается тем же весом, что и основной текст.
+  variables: {
+    '--mantine-font-weight-regular': 'var(--h3-fw-regular)',
+    '--mantine-font-weight-medium': 'var(--h3-fw-medium)',
+    '--mantine-font-weight-bold': 'var(--h3-fw-bold)',
+  },
   // Mantine задаёт эти переменные отдельно для каждой схемы, поэтому
   // переопределять их нужно в обоих блоках, а не в общем.
   light: schemeVariables,
@@ -190,6 +198,12 @@ export const theme = createTheme({
   components: {
     /** Боковой отступ страницы 24px: столько же между колонкой навигации и текстом в оригинале консоли. */
     Container: Container.extend({ defaultProps: { px: 'h3_lg' } }),
+
+    /** Поле формы: высота 42px, поля 14px и кегль 16px из размера `md`. */
+    TextInput: TextInput.extend({ defaultProps: { size: 'md' } }),
+
+    /** Ползунок размера `xl` с радиусом 8px даёт квадратную ручку 24px. */
+    Slider: Slider.extend({ defaultProps: { radius: 'h3_md', size: 'xl' } }),
   },
 
   colors: {
