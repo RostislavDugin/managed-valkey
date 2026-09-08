@@ -22,11 +22,6 @@ spec:
       terminationGracePeriodSeconds: 60
       securityContext:
         fsGroup: 65532
-      volumes:
-        - name: logs-export
-          secret:
-            secretName: valkey-logs-export
-            defaultMode: 0440
       containers:
         - name: operator
           image: managed-valkey/operator:v1
@@ -38,10 +33,6 @@ spec:
               value: info
             - name: VL_OTLP_URL
               value: https://logs.h3llo-demo.com/insert/opentelemetry/v1/logs
-            - name: VL_OTLP_USERNAME
-              value: valkey-operator
-            - name: VL_OTLP_PASSWORD_FILE
-              value: /var/run/valkey-logs/password
             - name: VALKEY_SYSTEM_NAMESPACE
               value: valkey-system
             - name: VALKEY_IMAGE
@@ -50,10 +41,6 @@ spec:
               value: valkey.h3llo-demo.com
             - name: VALKEY_PUBLIC_PORT
               value: "41379"
-          volumeMounts:
-            - name: logs-export
-              mountPath: /var/run/valkey-logs
-              readOnly: true
           ports:
             - name: probes
               containerPort: 8081

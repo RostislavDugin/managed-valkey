@@ -21,31 +21,33 @@ app.h3llo-demo.com {
 			window 1m
 		}
 	}
-	reverse_proxy api:8080
+	@api path /v1/* /livez /readyz
+	handle @api {
+		reverse_proxy api:8080
+	}
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
 }
 
 logs.h3llo-demo.com {
-    @otlp {
-        method POST
-        path /insert/opentelemetry/v1/logs
-    }
-    handle @otlp {
-        basic_auth {
-            valkey-operator {$VL_INGEST_PASSWORD_HASH}
-        }
-        reverse_proxy victorialogs:9428 {
-            header_up -Authorization
-        }
-    }
-    handle /select/* {
-        basic_auth {
-            logs-reader {$VL_VIEW_PASSWORD_HASH}
-        }
-        reverse_proxy victorialogs:9428 {
-            header_up -Authorization
-        }
-    }
-    handle {
-        respond 404
-    }
+	@otlp {
+		method POST
+		path /insert/opentelemetry/v1/logs
+	}
+	handle @otlp {
+		reverse_proxy victorialogs:9428 {
+			header_up -Authorization
+		}
+	}
+	handle /select/* {
+		reverse_proxy victorialogs:9428 {
+			header_up -Authorization
+		}
+	}
+	handle {
+		respond 404
+	}
 }

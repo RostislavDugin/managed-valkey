@@ -74,37 +74,42 @@ Bootstrap SHALL создать отдельные kubeconfig API и операт
 - **WHEN** PostgreSQL запущена с новым томом и разработчик выполняет `api just test`
 - **THEN** команда создаёт тестовую базу, применяет миграции и запускает тесты без ручной подготовки
 
-### Requirement: Production compose запускает серверные сервисы
+### Requirement: Рабочая конфигурация Docker Compose запускает серверные сервисы
 
-`docker-compose.prod.yml` SHALL запускать Caddy, одноразовое применение миграций, API, PostgreSQL 18 и VictoriaLogs. Оператор SHALL разворачиваться в managed Kubernetes через `deploy/prod`.
+`docker-compose.prod.yml` SHALL запускать Caddy с рабочей сборкой клиентского приложения, одноразовое применение миграций, API, PostgreSQL 18 и VictoriaLogs из готовых образов. Caddy SHALL обслуживать SPA и передавать API только `/v1/*`, `/livez` и `/readyz`. Оператор SHALL разворачиваться в управляемом Kubernetes через `deploy/prod` и MUST NOT входить в рабочую конфигурацию Docker Compose.
 
-#### Scenario: Запуск production compose
+#### Scenario: Запуск рабочего окружения
 
 - **WHEN** PostgreSQL готова и миграции завершаются успешно
-- **THEN** API запускается после миграций, Caddy направляет внешний HTTPS-трафик в API, а VictoriaLogs принимает записи API и оператора
+- **THEN** API запускается после миграций, Caddy обслуживает клиентское приложение и маршруты API, а VictoriaLogs принимает записи API и оператора
 
-#### Scenario: Ошибка production-миграции
+#### Scenario: Ошибка рабочей миграции
 
 - **WHEN** сервис миграций возвращает ненулевой код
-- **THEN** production compose не запускает API
+- **THEN** Docker Compose не запускает API
 
-### Requirement: Конфигурация и секреты приходят из env
+### Requirement: Настройки отделены от секретов
 
-Репозиторий SHALL содержать `.env.example` со всеми обязательными переменными и безопасными значениями-заглушками. Настоящие пароли, токены, kubeconfig и закрытые ключи MUST NOT храниться в отслеживаемых файлах или образах.
+Репозиторий SHALL содержать `.env.example` с безопасными значениями для локальной разработки. Рабочая конфигурация Docker Compose SHALL получать обычные настройки из явно заданных значений по умолчанию. Передаваемый при развёртывании рабочий `.env` SHALL содержать только пароль PostgreSQL и ключ подписи JWT. Настоящие пароли, ключи, токены и kubeconfig MUST NOT храниться в отслеживаемых файлах или образах.
 
-#### Scenario: Подготовка локального env-файла
+#### Scenario: Подготовка локального файла переменных
 
 - **WHEN** разработчик копирует `.env.example` в неотслеживаемый `.env`
-- **THEN** Compose и локальные `Justfile` получают конфигурацию без правки исходных файлов
+- **THEN** Docker Compose и локальные `Justfile` получают настройки без правки исходных файлов
 
-### Requirement: Версии образов закреплены
+#### Scenario: Запуск рабочего окружения с минимальным набором переменных
 
-Образы инфраструктуры SHALL использовать конкретные версии, совместимые с матрицей из `SYSTEM.md`. Production-конфигурация MUST NOT использовать тег `latest`; итоговые образы SHALL быть закрепляемы по digest.
+- **WHEN** задание `deploy` передаёт `.env` с `POSTGRES_PASSWORD` и `JWT_SECRET`
+- **THEN** Docker Compose получает остальные рабочие настройки из значений по умолчанию и не требует дополнительных секретов VictoriaLogs
 
-#### Scenario: Проверка production compose
+### Requirement: Версии образов и исходного кода закреплены
 
-- **WHEN** проверяется разрешённая конфигурация production compose
-- **THEN** каждый внешний образ имеет конкретную версию и ни один сервис не ссылается на `latest`
+Образы инфраструктуры SHALL использовать конкретные версии, совместимые с матрицей из `SYSTEM.md`. Рабочая конфигурация MUST NOT использовать тег `latest`. Образы приложений SHALL иметь тег с полным SHA коммита, для которого прошли проверки CI.
+
+#### Scenario: Проверка рабочей конфигурации Docker Compose
+
+- **WHEN** проверяется разрешённая рабочая конфигурация Docker Compose
+- **THEN** каждый внешний образ имеет конкретную версию, каждый образ приложения ссылается на разворачиваемый SHA и ни один сервис не использует `latest`
 
 ### Requirement: Локальная разработка запускается через корневой Justfile
 
@@ -129,16 +134,31 @@ Dev- и production-окружения SHALL запускаться Docker Compos
 - **WHEN** разработчик из корня запускает `docker compose -f docker-compose.prod.yml up -d`
 - **THEN** Docker Compose использует production-конфигурацию и не затрагивает dev-проект
 
-### Requirement: Production-доступ к базе и логам ограничен
+### Requirement: Доступ рабочего окружения к базе и логам ограничен
 
-PostgreSQL SHALL публиковаться только на `127.0.0.1:45432`, VictoriaLogs MUST NOT публиковать порт на хост. Caddy SHALL принимать OTLP оператора через HTTPS на `logs.h3llo-demo.com` с Basic Auth `valkey-operator` только для `POST /insert/opentelemetry/v1/logs`. Учётная запись `logs-reader` SHALL получать доступ только к `/select/*`. Caddy SHALL удалять заголовок `Authorization` перед передачей запроса VictoriaLogs. Оба bcrypt-хеша SHALL быть обязательными переменными production compose.
+PostgreSQL SHALL публиковаться только на `127.0.0.1:45432`, а VictoriaLogs MUST NOT публиковать порт на хост. Caddy SHALL без проверки имени и пароля передавать `POST /insert/opentelemetry/v1/logs` и `/select/*` с публичного `logs.h3llo-demo.com` во VictoriaLogs. Остальные пути домена логов SHALL возвращать 404. Caddy SHALL удалять входной заголовок `Authorization` перед передачей запроса VictoriaLogs. Рабочая конфигурация Docker Compose MUST NOT требовать секреты VictoriaLogs.
+
+#### Scenario: Публичный экспорт логов
+
+- **WHEN** клиент без заголовка авторизации отправляет OTLP-запрос на разрешённый путь
+- **THEN** Caddy передаёт запрос VictoriaLogs
+
+#### Scenario: Публичный просмотр логов
+
+- **WHEN** клиент без заголовка авторизации открывает `/select/vmui`
+- **THEN** Caddy передаёт запрос интерфейсу VictoriaLogs
 
 #### Scenario: Разделение экспорта и просмотра
 
-- **WHEN** клиент обращается к домену логов без пароля, с неверным паролем или с учётной записью для другого назначения
-- **THEN** Caddy отклоняет запрос; остальные пути возвращают 404
+- **WHEN** клиент обращается к маршруту OTLP или `/select/*` без пароля
+- **THEN** Caddy передаёт только разрешённый путь VictoriaLogs и не требует отдельной учётной записи для записи или чтения
 
-#### Scenario: Секрет экспорта оператора
+#### Scenario: Запрещённый путь VictoriaLogs
 
-- **WHEN** оператор запускается в production
-- **THEN** он читает пароль из смонтированного только для чтения Secret `valkey-logs-export`, а его `VL_OTLP_URL` использует HTTPS
+- **WHEN** клиент обращается к другому пути на домене логов
+- **THEN** Caddy возвращает 404 и не передаёт запрос VictoriaLogs
+
+#### Scenario: Экспорт оператора без секрета
+
+- **WHEN** оператор запускается в рабочем окружении с адресом VictoriaLogs по HTTPS
+- **THEN** он отправляет OTLP без `VL_OTLP_USERNAME`, `VL_OTLP_PASSWORD_FILE` и объекта Kubernetes `Secret` с именем `valkey-logs-export`
