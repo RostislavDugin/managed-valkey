@@ -9,7 +9,7 @@ if [[ -f "$repo_root/.env" ]]; then
     set +a
 fi
 
-for command in kubectl helm mkcert; do
+for command in docker ip kubectl helm mkcert openssl sudo; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "bootstrap: команда $command не установлена" >&2
         exit 1
@@ -109,6 +109,18 @@ wait_for_nodes() {
     return 1
 }
 
+configure_pod_routes() {
+    local pod_cidr node_ip
+
+    while IFS=$'\t' read -r pod_cidr node_ip; do
+        if [[ -z "$pod_cidr" || -z "$node_ip" ]]; then
+            echo "bootstrap: у Node отсутствует Pod CIDR или InternalIP" >&2
+            return 1
+        fi
+        sudo ip route replace "$pod_cidr" via "$node_ip"
+    done < <(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDR}{"\t"}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}{"\n"}{end}')
+}
+
 install_gateway_api() {
     retry kubectl apply --server-side --force-conflicts -f \
         "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/experimental-install.yaml"
@@ -164,15 +176,21 @@ remove_legacy_operator() {
 }
 
 install_dev_certificate() (
-    local certificate_dir
-
-    if kubectl -n valkey-system get secret valkey-wildcard-tls >/dev/null 2>&1; then
-        return 0
-    fi
+    local ca_file certificate_dir
 
     mkcert -install
+    ca_file="$(mkcert -CAROOT)/rootCA.pem"
     certificate_dir=$(mktemp -d)
     trap 'rm -rf "$certificate_dir"' EXIT
+
+    if kubectl -n valkey-system get secret valkey-wildcard-tls \
+        -o go-template='{{index .data "tls.crt" | base64decode}}' \
+        >"$certificate_dir/current.crt" 2>/dev/null &&
+        openssl verify -CAfile "$ca_file" \
+            -verify_hostname "$VALKEY_BASE_DOMAIN" \
+            "$certificate_dir/current.crt" >/dev/null 2>&1; then
+        return 0
+    fi
 
     mkcert \
         -cert-file "$certificate_dir/tls.crt" \
@@ -181,7 +199,9 @@ install_dev_certificate() (
 
     kubectl -n valkey-system create secret tls valkey-wildcard-tls \
         --cert="$certificate_dir/tls.crt" \
-        --key="$certificate_dir/tls.key"
+        --key="$certificate_dir/tls.key" \
+        --dry-run=client -o yaml |
+        kubectl apply -f -
 )
 
 pin_envoy_node_port() {
@@ -258,6 +278,20 @@ YAML
     chmod 0600 "$output"
 }
 
+write_operator_env() {
+    local gateway
+
+    gateway=$(docker network inspect managed-valkey-dev_default \
+        --format '{{(index .IPAM.Config 0).Gateway}}')
+    if [[ -z "$gateway" ]]; then
+        echo "bootstrap: не найден gateway сети managed-valkey-dev_default" >&2
+        return 1
+    fi
+
+    umask 077
+    printf 'VALKEY_OPERATOR_CIDRS=%s/32\n' "$gateway" >"$repo_root/tmp/k3s/operator.env"
+}
+
 mkdir -p "$repo_root/tmp/k3s"
 "$repo_root/scripts/k3s_host_kubeconfig.sh" "$ADMIN_KUBECONFIG" >/dev/null
 
@@ -265,6 +299,7 @@ wait_for_api
 remove_stale_nodes
 reset_not_ready_agents
 wait_for_nodes
+configure_pod_routes
 install_gateway_api
 install_envoy_gateway
 install_managed_valkey
@@ -273,5 +308,6 @@ install_dev_certificate
 pin_envoy_node_port
 write_kubeconfig managed-valkey-api "$API_KUBECONFIG"
 write_kubeconfig managed-valkey-operator "$OPERATOR_KUBECONFIG"
+write_operator_env
 
 log "готово"

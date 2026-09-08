@@ -1,0 +1,214 @@
+package operator
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
+	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
+	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
+)
+
+func TestProvisionTimeoutUsesCreationTimestampAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	instance := completeAcceptedInstance()
+	instance.CreationTimestamp = metav1.NewTime(now.Add(-config.ProvisionTimeout))
+	instance.Status.CredentialsInitialized = true
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseProvisioning
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, Clock: clocktesting.NewFakeClock(now)}
+
+	changed, err := reconciler.reconcileProvisioningDeadline(ctx, instance)
+	if err != nil || !changed {
+		t.Fatalf("таймаут создания: changed=%t error=%v", changed, err)
+	}
+	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseError ||
+		instance.Status.Reason != "PROVISION_TIMEOUT" || instance.Status.Initialized {
+		t.Fatalf("неверный status таймаута: %+v", instance.Status)
+	}
+
+	restarted := &valkeyv1alpha1.ValkeyInstance{}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), restarted); err != nil {
+		t.Fatalf("прочитать CR после рестарта: %v", err)
+	}
+	reconciler = &ValkeyInstanceReconciler{Client: k8s, Clock: clocktesting.NewFakeClock(now.Add(time.Minute))}
+	changed, err = reconciler.reconcileProvisioningDeadline(ctx, restarted)
+	if err != nil || changed || restarted.Status.Phase != valkeyv1alpha1.InstancePhaseError {
+		t.Fatalf("рестарт изменил терминальный таймаут: changed=%t status=%+v error=%v", changed, restarted.Status, err)
+	}
+}
+
+func TestHeartbeatAdvancesWhenEnvoyVerificationIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, node, secret := processObservationObjects()
+	pod.Finalizers = []string{processFinalizer}
+	observedAt := metav1.NewTime(time.Date(2026, 9, 8, 11, 59, 0, 0, time.UTC))
+	verifiedAt := metav1.NewTime(observedAt.Add(-time.Minute))
+	instance.Status.Initialized = true
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseRunning
+	instance.Status.ObservedAt = &observedAt
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{testObservedNode(pod)}
+	instance.Status.Network = &valkeyv1alpha1.NetworkStatus{
+		VerificationStatus:  valkeyv1alpha1.NetworkVerificationUnknown,
+		VerifiedAt:          &verifiedAt,
+		VerifiedFingerprint: "network",
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, pod, node, secret).
+		Build()
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	reconciler := &ValkeyInstanceReconciler{
+		Client: k8s,
+		Clock:  clocktesting.NewFakeClock(now),
+		InspectProcess: func(context.Context, string, string, string) (operatorvalkey.ProcessState, error) {
+			return operatorvalkey.ProcessState{
+				Role: "primary", RunID: "run-1", AppEnabled: true,
+				AppPasswordHashes: []string{strings.Repeat("ab", 32)},
+			}, nil
+		},
+	}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err != nil {
+		t.Fatalf("обновить heartbeat: result=%+v error=%v", result, err)
+	}
+	if instance.Status.ObservedAt == nil || !instance.Status.ObservedAt.Time.Equal(now) {
+		t.Fatalf("heartbeat не обновлён: %v", instance.Status.ObservedAt)
+	}
+	if instance.Status.Network.VerifiedAt == nil ||
+		!instance.Status.Network.VerifiedAt.Equal(&verifiedAt) ||
+		instance.Status.Phase != valkeyv1alpha1.InstancePhaseRunning {
+		t.Fatalf("unknown Envoy повредил рабочий status: %+v", instance.Status)
+	}
+}
+
+func TestUnchangedStatusDoesNotWriteAndConflictPreservesConcurrentFields(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseProvisioning
+	base := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	if err := base.Get(ctx, client.ObjectKeyFromObject(instance), instance); err != nil {
+		t.Fatalf("прочитать исходный CR: %v", err)
+	}
+	reconciler := &ValkeyInstanceReconciler{Client: base}
+	beforeVersion := instance.ResourceVersion
+	changed, err := reconciler.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		status.Phase = valkeyv1alpha1.InstancePhaseProvisioning
+	})
+	if err != nil || changed {
+		t.Fatalf("неизменный status записан: changed=%t error=%v", changed, err)
+	}
+	if instance.ResourceVersion != beforeVersion {
+		t.Fatalf("resourceVersion изменился без изменения status: %s -> %s", beforeVersion, instance.ResourceVersion)
+	}
+
+	conflicting := &conflictingStatusClient{Client: base}
+	reconciler.Client = conflicting
+	changed, err = reconciler.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		status.Phase = valkeyv1alpha1.InstancePhaseRunning
+	})
+	if err != nil || !changed {
+		t.Fatalf("повтор status после конфликта: changed=%t error=%v", changed, err)
+	}
+	observed := &valkeyv1alpha1.ValkeyInstance{}
+	if err := base.Get(ctx, client.ObjectKeyFromObject(instance), observed); err != nil {
+		t.Fatalf("прочитать status после конфликта: %v", err)
+	}
+	if observed.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
+		observed.Status.Reason != "CONCURRENT_OBSERVATION" {
+		t.Fatalf("конкурентное поле потеряно: %+v", observed.Status)
+	}
+}
+
+type conflictingStatusClient struct {
+	client.Client
+	once sync.Once
+}
+
+func (c *conflictingStatusClient) Status() client.SubResourceWriter {
+	return &conflictingStatusWriter{SubResourceWriter: c.Client.Status(), owner: c}
+}
+
+type conflictingStatusWriter struct {
+	client.SubResourceWriter
+	owner *conflictingStatusClient
+}
+
+func (w *conflictingStatusWriter) Patch(
+	ctx context.Context,
+	object client.Object,
+	patch client.Patch,
+	options ...client.SubResourcePatchOption,
+) error {
+	conflict := false
+	w.owner.once.Do(func() {
+		conflict = true
+	})
+	if !conflict {
+		return w.SubResourceWriter.Patch(ctx, object, patch, options...)
+	}
+
+	current := &valkeyv1alpha1.ValkeyInstance{}
+	if err := w.owner.Client.Get(ctx, client.ObjectKeyFromObject(object), current); err != nil {
+		return err
+	}
+	current.Status.Reason = "CONCURRENT_OBSERVATION"
+	if err := w.owner.Client.Status().Update(ctx, current); err != nil {
+		return err
+	}
+
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: valkeyv1alpha1.GroupVersion.Group, Resource: "valkeyinstances"},
+		object.GetName(),
+		errors.New("тестовый конфликт status"),
+	)
+}
+
+var (
+	_ client.Client            = (*conflictingStatusClient)(nil)
+	_ client.SubResourceWriter = (*conflictingStatusWriter)(nil)
+)
+
+func TestProcessMissingMovesInitializedInstanceToUnavailable(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Status.Initialized = true
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseRunning
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err != nil || result.RequeueAfter != config.HealthCheckInterval {
+		t.Fatalf("потеря primary: result=%+v error=%v", result, err)
+	}
+	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseUnavailable ||
+		instance.Status.Reason != "PRIMARY_NOT_READY" {
+		t.Fatalf("потеря primary не отражена: %+v", instance.Status)
+	}
+}

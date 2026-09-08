@@ -1,0 +1,21 @@
+{
+  "certificates": [
+    {
+      "certChain": [
+        {
+          "path": "<inline>",
+          "subjectAltNames": [
+            {
+              "dns": "*.valkey.localhost"
+            },
+            {
+              "dns": "valkey.localhost"
+            }
+          ],
+          "validFrom": "<rfc3339>",
+          "expirationTime": "<rfc3339>"
+        }
+      ]
+    }
+  ]
+}

@@ -33,16 +33,6 @@ subjects:
     namespace: valkey-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: managed-valkey-operator-portforward
-  namespace: envoy-gateway-system
-rules:
-  - apiGroups: [""]
-    resources: [pods/portforward]
-    verbs: [create]
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: managed-valkey-operator-portforward
@@ -50,7 +40,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: managed-valkey-operator-portforward
+  name: managed-valkey-operator
 subjects:
   - kind: ServiceAccount
     name: managed-valkey-operator

@@ -30,4 +30,27 @@ for file in "${generated_files[@]}"; do
     diff -u "$repo_root/$file" "$work_dir/$file"
 done
 
+for manifest in deploy/dev/rbac/operator.yaml deploy/prod/rbac.yaml; do
+    role_ref=$(awk '
+        $0 == "kind: RoleBinding" { binding = 1; section = ""; binding_name = ""; role_name = ""; next }
+        binding && $0 == "metadata:" { section = "metadata"; next }
+        binding && $0 == "roleRef:" { section = "roleRef"; next }
+        binding && $0 == "subjects:" { section = "subjects"; next }
+        binding && section == "metadata" && $1 == "name:" { binding_name = $2 }
+        binding && section == "roleRef" && $1 == "name:" { role_name = $2 }
+        binding && $0 == "---" {
+            if (binding_name == "managed-valkey-operator-portforward") print role_name
+            binding = 0
+        }
+        END {
+            if (binding && binding_name == "managed-valkey-operator-portforward") print role_name
+        }
+    ' "$repo_root/$manifest")
+
+    if [[ "$role_ref" != "managed-valkey-operator" ]]; then
+        echo "проверка генерации оператора: $manifest ссылается на Role $role_ref" >&2
+        exit 1
+    fi
+done
+
 echo "проверка генерации оператора: расхождений нет"

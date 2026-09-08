@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.slug
       name: Slug
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -45,33 +48,144 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              Пока это только идентификаторы, которые API сверяет с записью PostgreSQL
-              перед доставкой. Размер, режим, публичный порт, whitelist и версия пароля
-              появятся вместе с поведением reconcile.
             properties:
+              desiredGeneration:
+                format: int64
+                minimum: 1
+                type: integer
               instanceId:
-                description: instanceId равен valkey_instances.id и не меняется после
-                  создания.
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
                 - message: instanceId изменить нельзя
                   rule: self == oldSelf
+              mode:
+                enum:
+                - single
+                - ha
+                type: string
+              passwordVersion:
+                format: int64
+                minimum: 1
+                type: integer
+              publicPort:
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              ramGb:
+                enum:
+                - 1
+                - 2
+                - 4
+                - 8
+                - 16
+                - 32
+                - 64
+                - 128
+                format: int32
+                type: integer
               slug:
-                description: slug равен имени ресурса и входит в публичный адрес инстанса.
                 minLength: 1
                 type: string
                 x-kubernetes-validations:
                 - message: slug изменить нельзя
                   rule: self == oldSelf
+              vcpu:
+                enum:
+                - 1
+                - 2
+                - 4
+                - 8
+                - 16
+                format: int32
+                type: integer
+              whitelist:
+                properties:
+                  cidrs:
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  isEnabled:
+                    type: boolean
+                required:
+                - isEnabled
+                type: object
             required:
             - instanceId
             - slug
             type: object
+            x-kubernetes-validations:
+            - message: ramGb должен быть от vcpu до 16 * vcpu
+              rule: '!has(self.vcpu) || !has(self.ramGb) || (self.ramGb >= self.vcpu
+                && self.ramGb <= 16 * self.vcpu)'
           status:
-            description: Status пишет только оператор.
             properties:
+              acceptedConfiguration:
+                properties:
+                  desiredGeneration:
+                    format: int64
+                    type: integer
+                  instanceId:
+                    type: string
+                  mode:
+                    type: string
+                  passwordVersion:
+                    format: int64
+                    type: integer
+                  publicPort:
+                    format: int32
+                    type: integer
+                  ramGb:
+                    format: int32
+                    type: integer
+                  slug:
+                    type: string
+                  vcpu:
+                    format: int32
+                    type: integer
+                  whitelist:
+                    properties:
+                      cidrs:
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      isEnabled:
+                        type: boolean
+                    required:
+                    - isEnabled
+                    type: object
+                required:
+                - desiredGeneration
+                - instanceId
+                - mode
+                - passwordVersion
+                - publicPort
+                - ramGb
+                - slug
+                - vcpu
+                - whitelist
+                type: object
+              applied:
+                properties:
+                  mode:
+                    type: string
+                  ramGb:
+                    format: int32
+                    type: integer
+                  vcpu:
+                    format: int32
+                    type: integer
+                required:
+                - mode
+                - ramGb
+                - vcpu
+                type: object
+              appliedPasswordVersion:
+                format: int64
+                type: integer
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -131,11 +245,141 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              credentialsInitialized:
+                type: boolean
+              deletion:
+                properties:
+                  stage:
+                    enum:
+                    - removingNetwork
+                    - disablingApp
+                    - stopping
+                    - verifying
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                required:
+                - stage
+                - startedAt
+                type: object
+              initialized:
+                type: boolean
+              network:
+                properties:
+                  desiredFingerprint:
+                    type: string
+                  envoyProcesses:
+                    items:
+                      properties:
+                        containerID:
+                          type: string
+                        nodeName:
+                          type: string
+                        nodeUID:
+                          type: string
+                        podUID:
+                          type: string
+                      required:
+                      - containerID
+                      - nodeName
+                      - nodeUID
+                      - podUID
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - podUID
+                    x-kubernetes-list-type: map
+                  verificationStatus:
+                    enum:
+                    - pending
+                    - verified
+                    - unknown
+                    type: string
+                  verifiedAt:
+                    format: date-time
+                    type: string
+                  verifiedFingerprint:
+                    type: string
+                required:
+                - verificationStatus
+                type: object
+              nodes:
+                items:
+                  properties:
+                    containerID:
+                      type: string
+                    nodeName:
+                      type: string
+                    nodeUID:
+                      type: string
+                    ordinal:
+                      format: int32
+                      type: integer
+                    podUID:
+                      type: string
+                    readiness:
+                      type: boolean
+                    role:
+                      enum:
+                      - primary
+                      - replica
+                      type: string
+                    runId:
+                      type: string
+                    termination:
+                      properties:
+                        evidence:
+                          type: string
+                        exitCode:
+                          format: int32
+                          type: integer
+                        finishedAt:
+                          format: date-time
+                          type: string
+                        reason:
+                          type: string
+                      required:
+                      - evidence
+                      - exitCode
+                      - finishedAt
+                      - reason
+                      type: object
+                  required:
+                  - containerID
+                  - nodeName
+                  - nodeUID
+                  - ordinal
+                  - podUID
+                  - readiness
+                  - runId
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - ordinal
+                x-kubernetes-list-type: map
+              observedAt:
+                format: date-time
+                type: string
               observedGeneration:
-                description: observedGeneration это поколение spec, полностью применённое
-                  оператором.
                 format: int64
                 type: integer
+              phase:
+                enum:
+                - provisioning
+                - running
+                - unavailable
+                - error
+                type: string
+              primaryContainerID:
+                type: string
+              primaryOrdinal:
+                format: int32
+                type: integer
+              primaryPodUID:
+                type: string
+              reason:
+                type: string
             type: object
         required:
         - spec
