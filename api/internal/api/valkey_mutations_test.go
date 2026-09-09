@@ -79,14 +79,14 @@ func TestValkeyMutationsPreserveObservedStateAndBilling(t *testing.T) {
 	makeValkeyReady(t, app, created.ID)
 	beforeResize := loadValkey(t, app, created.ID)
 	resizeKey := uuid.NewString()
-	resizeBody := map[string]any{"vcpu": 2, "ram_gb": 4}
+	resizeBody := map[string]any{"vcpu": 2, "ram_gb": 8}
 	resizeResponse := app.requestJSON(t, http.MethodPost, base+"/resize", resizeBody, mergeHeaders(
 		bearer(account.Token),
 		map[string]string{"Idempotency-Key": resizeKey},
 	))
 	assertStatus(t, resizeResponse, http.StatusAccepted)
 	resized := decodeResponse[valkeydomain.Instance](t, resizeResponse)
-	if resized.VCPU != 2 || resized.RAMGB != 4 || resized.DesiredGeneration != 3 ||
+	if resized.VCPU != 2 || resized.RAMGB != 8 || resized.DesiredGeneration != 3 ||
 		resized.ObservedGeneration != beforeResize.ObservedGeneration || !resized.IsUpdating {
 		t.Fatalf("неожиданный resize: %+v", resized)
 	}
@@ -102,7 +102,7 @@ func TestValkeyMutationsPreserveObservedStateAndBilling(t *testing.T) {
 	}
 	if len(periods) != 2 || periods[0].EndedAt == nil || !periods[0].EndedAt.Equal(periods[1].StartedAt) ||
 		!periods[1].StartedAt.Equal(resized.UpdatedAt) || !resized.UpdatedAt.Equal(resized.ConfigurationRequestedAt) ||
-		periods[0].PriceCoinsPerHour != 225 || periods[1].PriceCoinsPerHour != 450 {
+		periods[0].PriceCoinsPerHour != 225 || periods[1].PriceCoinsPerHour != 650 {
 		t.Fatalf("неверные границы или цены периодов: %+v", periods)
 	}
 

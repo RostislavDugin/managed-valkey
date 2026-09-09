@@ -80,6 +80,7 @@ func TestValkeyFieldValidationUsesExactBoundaries(t *testing.T) {
 			field:     "password",
 		},
 		{name: "неизвестный размер", overrides: map[string]any{"vcpu": 3, "ram_gb": 3}, field: "size"},
+		{name: "размер вне тарифной сетки", overrides: map[string]any{"vcpu": 2, "ram_gb": 4}, field: "size"},
 	}
 
 	for _, testCase := range tests {

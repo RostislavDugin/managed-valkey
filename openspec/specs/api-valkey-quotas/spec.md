@@ -8,7 +8,7 @@
 
 ### Requirement: Сервер задаёт доступные размеры и цены
 
-Защищённый `GET /v1/managed/valkey/sizes` SHALL возвращать `{items, pricing, connection}`. Items SHALL содержать пары `{vcpu, ram_gb}` из CPU `[1,2,4,8,16]` и RAM `[1,2,4,8,16,32,64,128]` с `vcpu <= ram_gb <= 16*vcpu`, в пределах `VALKEY_INSTANCE_MAX_VCPU` и `VALKEY_INSTANCE_MAX_RAM_GB`. Pricing SHALL содержать `vcpu_coins_per_hour`, `ram_gb_coins_per_hour`, `hours_per_month=720`; connection SHALL содержать `{domain, port}` для предварительного адреса. Цена SHALL считаться в целых копейках как `(cpu_rate*vcpu + ram_rate*ram_gb)*node_count`. Недопустимый размер в мутации SHALL давать `400 VALIDATION_FAILED`, независимо от свободной квоты.
+Защищённый `GET /v1/managed/valkey/sizes` SHALL возвращать `{items, pricing, connection}`. Items SHALL содержать пары `{vcpu, ram_gb}` из списка `[{1,1},{1,2},{1,4},{2,8},{4,16}]` в пределах `VALKEY_INSTANCE_MAX_VCPU` и `VALKEY_INSTANCE_MAX_RAM_GB`. Pricing SHALL содержать `vcpu_coins_per_hour`, `ram_gb_coins_per_hour`, `hours_per_month=720`; connection SHALL содержать `{domain, port}` для предварительного адреса. Цена SHALL считаться в целых копейках как `(cpu_rate*vcpu + ram_rate*ram_gb)*node_count`. Недопустимый размер в мутации SHALL давать `400 VALIDATION_FAILED`, независимо от свободной квоты.
 
 #### Scenario: Границы сетки
 
@@ -42,7 +42,7 @@
 
 #### Scenario: Смешанное изменение ресурсов
 
-- **WHEN** single меняется с applied 2 CPU / 8 GB на desired 4 CPU / 4 GB
+- **WHEN** single с прежним applied-размером 4 CPU / 4 GB меняется на desired 2 CPU / 8 GB
 - **THEN** резерв равен 4 CPU / 8 GB
 
 ### Requirement: Кластерный бюджет проверяется в исходном запросе
@@ -51,7 +51,7 @@
 
 #### Scenario: Немедленный отказ при нехватке CPU
 
-- **WHEN** при общей квоте 4 CPU / 16 GB уже зарезервированы 3 CPU / 3 GB, а пользователь со свободной личной квотой создаёт single 2 CPU / 2 GB
+- **WHEN** при общей квоте 4 CPU / 16 GB уже зарезервированы 3 CPU / 3 GB, а пользователь со свободной личной квотой создаёт single 2 CPU / 8 GB
 - **THEN** исходный POST возвращает `422 NOT_ENOUGH_RESOURCES` с `reason=cluster_quota` и дефицитом 1 CPU
 - **AND** новый инстанс, его аудит, период и ключ отсутствуют, использованная квота не меняется
 - **AND** ответ не требует фонового прохода или истечения таймаута запуска

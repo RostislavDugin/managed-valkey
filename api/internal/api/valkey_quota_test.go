@@ -51,7 +51,7 @@ func TestValkeyClusterQuotaRejectsImmediatelyWithoutPartialRows(t *testing.T) {
 		missingVCPU float64
 		missingRAM  float64
 	}{
-		{name: "CPU", clusterVCPU: 2, clusterRAM: 16, firstRAM: 1, secondVCPU: 2, secondRAM: 2, missingVCPU: 1},
+		{name: "CPU", clusterVCPU: 2, clusterRAM: 16, firstRAM: 1, secondVCPU: 2, secondRAM: 8, missingVCPU: 1},
 		{name: "RAM", clusterVCPU: 16, clusterRAM: 2, firstRAM: 1, secondVCPU: 1, secondRAM: 2, missingRAM: 1},
 		{
 			name:        "оба",

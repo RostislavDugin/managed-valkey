@@ -55,7 +55,7 @@ func TestConcurrentCreatesRespectClusterAndPersonalQuota(t *testing.T) {
 }
 
 func TestConcurrentCreateAndResizeShareClusterBudget(t *testing.T) {
-	config := testAPIConfig{clusterVCPU: 2, clusterRAMGB: 2}
+	config := testAPIConfig{clusterVCPU: 2, clusterRAMGB: 8}
 	first := newHTTPTestAPI(t, config)
 	second := newHTTPTestAPI(t, config)
 	resizeOwner := first.registerAccount(t, "")
@@ -69,7 +69,7 @@ func TestConcurrentCreateAndResizeShareClusterBudget(t *testing.T) {
 		concurrentRequest{
 			app: first, method: http.MethodPost,
 			path: "/v1/managed/valkey/instances/" + existing.ID.String() + "/resize",
-			body: `{"vcpu":2,"ram_gb":2}`,
+			body: `{"vcpu":2,"ram_gb":8}`,
 			headers: mergeHeaders(bearer(resizeOwner.Token), map[string]string{
 				"Content-Type": "application/json", "Idempotency-Key": uuid.NewString(),
 			}),
@@ -97,8 +97,8 @@ func TestConcurrentConfigurationMutationsAdvanceOneGeneration(t *testing.T) {
 		first  func(*testAPI, testAccount, uuid.UUID) concurrentRequest
 		second func(*testAPI, testAccount, uuid.UUID) concurrentRequest
 	}{
-		{name: "два resize", first: resizeRequest(2, 2), second: resizeRequest(4, 4)},
-		{name: "resize и whitelist", first: resizeRequest(2, 2), second: whitelistRequest("192.0.2.0/24")},
+		{name: "два resize", first: resizeRequest(2, 8), second: resizeRequest(4, 16)},
+		{name: "resize и whitelist", first: resizeRequest(2, 8), second: whitelistRequest("192.0.2.0/24")},
 		{
 			name:   "whitelist и rotate",
 			first:  whitelistRequest("192.0.2.0/24"),
@@ -212,7 +212,7 @@ func TestDeleteRejectsEveryLaterConfigurationMutation(t *testing.T) {
 	owner := first.registerAccount(t, "")
 	setUserQuota(t, first, owner.ID, 16, 64)
 	builders := []func(*testAPI, testAccount, uuid.UUID) concurrentRequest{
-		resizeRequest(2, 2),
+		resizeRequest(2, 8),
 		whitelistRequest("192.0.2.0/24"),
 		rotateRequest(rotatedValkeyPassword),
 	}
@@ -243,7 +243,7 @@ func TestQueuedDeletePrecedesEveryConfigurationMutation(t *testing.T) {
 		{name: "PATCH", build: func(app *testAPI, owner testAccount, instanceID uuid.UUID) concurrentRequest {
 			return patchNameRequest(app, owner, instanceID, "queued-patch")
 		}},
-		{name: "resize", build: resizeRequest(2, 2)},
+		{name: "resize", build: resizeRequest(2, 8)},
 		{name: "whitelist", build: whitelistRequest("192.0.2.0/24")},
 		{name: "rotate", build: rotateRequest(rotatedValkeyPassword)},
 	}
@@ -290,7 +290,7 @@ func TestQueuedResizePrecedesDeleteAndDeleteClosesNewPeriod(t *testing.T) {
 	makeValkeyReady(t, first, instance.ID)
 	holder := holdValkeyLock(t, first)
 
-	resizeResponses, resizeErrors := startConcurrentRequest(resizeRequest(2, 2)(first, owner, instance.ID))
+	resizeResponses, resizeErrors := startConcurrentRequest(resizeRequest(2, 8)(first, owner, instance.ID))
 	waitForValkeyLockWaiters(t, first, 1)
 	deleteResponses, deleteErrors := startConcurrentRequest(concurrentRequest{
 		app: second, method: http.MethodDelete, path: instancePath(instance.ID), headers: bearer(owner.Token),
@@ -303,7 +303,7 @@ func TestQueuedResizePrecedesDeleteAndDeleteClosesNewPeriod(t *testing.T) {
 	assertStatus(t, receiveHTTPResult(t, resizeResponses, resizeErrors), http.StatusAccepted)
 	assertStatus(t, receiveHTTPResult(t, deleteResponses, deleteErrors), http.StatusAccepted)
 	deleted := loadValkey(t, first, instance.ID)
-	if deleted.DeletionRequestedAt == nil || deleted.VCPU != 2 || deleted.RAMGB != 2 {
+	if deleted.DeletionRequestedAt == nil || deleted.VCPU != 2 || deleted.RAMGB != 8 {
 		t.Fatalf("DELETE не сохранил принятый resize: %+v", deleted)
 	}
 
@@ -323,7 +323,7 @@ func TestQueuedResizePrecedesDeleteAndDeleteClosesNewPeriod(t *testing.T) {
 	}
 	me := first.requestJSON(t, http.MethodGet, "/v1/me", nil, bearer(owner.Token))
 	usage := decodeResponse[currentUserResponse](t, me).Usage
-	if usage.UsedVCPU != 2 || usage.UsedRAMGB != 2 {
+	if usage.UsedVCPU != 2 || usage.UsedRAMGB != 8 {
 		t.Fatalf("DELETE преждевременно освободил квоту: %+v", usage)
 	}
 }

@@ -44,7 +44,7 @@ const instance = {
 const catalog = {
   items: [
     { vcpu: 1, ramGb: 1 },
-    { vcpu: 2, ramGb: 4 },
+    { vcpu: 2, ramGb: 8 },
   ],
   pricing: {
     vcpuCoinsPerHour: 125,
@@ -66,7 +66,7 @@ function responseDto() {
     slug: instance.slug,
     mode: instance.mode,
     vcpu: 2,
-    ram_gb: 4,
+    ram_gb: 8,
     applied_vcpu: 1,
     applied_ram_gb: 1,
     host: instance.host,
@@ -113,7 +113,7 @@ describe('изменение тарифа', () => {
     const props = { catalog, instance, onClose, onRefresh, onResized, quota };
     const view = render(withProviders(<ResizeInstanceModal {...props} />));
 
-    await user.click(screen.getByRole('radio', { name: /2.*vCPU.*4.*ГБ RAM/ }));
+    await user.click(screen.getByRole('radio', { name: /2.*vCPU.*8.*ГБ RAM/ }));
     expect(
       screen.getByText('База будет недоступна во время ресайза, кеш очистится полностью.')
     ).toBeVisible();
@@ -128,13 +128,13 @@ describe('изменение тарифа', () => {
       withProviders(
         <ResizeInstanceModal
           {...props}
-          instance={{ ...instance, vcpu: 4, ramGb: 8, desiredGeneration: 2 }}
+          instance={{ ...instance, vcpu: 4, ramGb: 16, desiredGeneration: 2 }}
         />
       )
     );
 
     expect(signal?.aborted).toBe(false);
-    expect(screen.getByRole('radio', { name: /2.*vCPU.*4.*ГБ RAM/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /2.*vCPU.*8.*ГБ RAM/ })).toBeChecked();
     resolveRequest(
       new Response(JSON.stringify(responseDto()), {
         status: 202,

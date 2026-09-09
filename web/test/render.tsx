@@ -84,7 +84,7 @@ function installValkeyApi(instances: TestInstanceInput[]) {
         items: [
           { vcpu: 1, ram_gb: 1 },
           { vcpu: 1, ram_gb: 2 },
-          { vcpu: 2, ram_gb: 4 },
+          { vcpu: 2, ram_gb: 8 },
         ],
         pricing: {
           vcpu_coins_per_hour: 125,

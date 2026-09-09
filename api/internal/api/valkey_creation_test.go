@@ -110,7 +110,7 @@ func TestValkeyBillingKeepsOldPriceAfterRateChange(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/v1/managed/valkey/instances/"+created.ID.String()+"/resize",
-		map[string]any{"vcpu": 2, "ram_gb": 4},
+		map[string]any{"vcpu": 2, "ram_gb": 8},
 		mergeHeaders(bearer(account.Token), map[string]string{"Idempotency-Key": uuid.NewString()}),
 	)
 	assertStatus(t, response, http.StatusAccepted)
@@ -123,7 +123,7 @@ func TestValkeyBillingKeepsOldPriceAfterRateChange(t *testing.T) {
 		Error; err != nil {
 		t.Fatalf("прочитать периоды: %v", err)
 	}
-	if len(periods) != 2 || periods[0].PriceCoinsPerHour != 225 || periods[1].PriceCoinsPerHour != 720 {
+	if len(periods) != 2 || periods[0].PriceCoinsPerHour != 225 || periods[1].PriceCoinsPerHour != 1040 {
 		t.Fatalf("ставки периодов переписаны неверно: %+v", periods)
 	}
 }

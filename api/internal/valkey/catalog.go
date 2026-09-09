@@ -12,14 +12,17 @@ const HoursPerMonth = 720
 
 var ErrInvalidSize = errors.New("недопустимый размер Valkey")
 
-var (
-	availableVCPU  = [...]int{1, 2, 4, 8, 16}
-	availableRAMGB = [...]int{1, 2, 4, 8, 16, 32, 64, 128}
-)
-
 type Size struct {
 	VCPU  int `json:"vcpu"`
 	RAMGB int `json:"ram_gb"`
+}
+
+var availableSizes = [...]Size{
+	{VCPU: 1, RAMGB: 1},
+	{VCPU: 1, RAMGB: 2},
+	{VCPU: 1, RAMGB: 4},
+	{VCPU: 2, RAMGB: 8},
+	{VCPU: 4, RAMGB: 16},
 }
 
 type Pricing struct {
@@ -49,18 +52,13 @@ type CatalogConfig struct {
 }
 
 func NewCatalog(cfg CatalogConfig) (Catalog, error) {
-	items := make([]Size, 0, len(availableVCPU)*len(availableRAMGB))
-	for _, vcpu := range availableVCPU {
-		if vcpu > cfg.MaxVCPU {
+	items := make([]Size, 0, len(availableSizes))
+	for _, size := range availableSizes {
+		if size.VCPU > cfg.MaxVCPU || size.RAMGB > cfg.MaxRAMGB {
 			continue
 		}
-		for _, ramGB := range availableRAMGB {
-			if ramGB > cfg.MaxRAMGB || ramGB < vcpu || ramGB > 16*vcpu {
-				continue
-			}
 
-			items = append(items, Size{VCPU: vcpu, RAMGB: ramGB})
-		}
+		items = append(items, size)
 	}
 	if len(items) == 0 {
 		return Catalog{}, fmt.Errorf("%w: сетка пуста", ErrInvalidSize)

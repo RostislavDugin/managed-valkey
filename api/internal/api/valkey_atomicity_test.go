@@ -62,7 +62,7 @@ func TestEveryValkeyMutationRollsBackOnAuditFailure(t *testing.T) {
 			success:       http.StatusAccepted,
 			execute: func(t *testing.T, app *testAPI, owner testAccount, instanceID uuid.UUID, key string) testResponse {
 				return app.requestJSON(t, http.MethodPost, instancePath(instanceID)+"/resize", map[string]any{
-					"vcpu": 2, "ram_gb": 2,
+					"vcpu": 2, "ram_gb": 8,
 				}, idempotentBearer(owner.Token, key))
 			},
 		},
@@ -185,7 +185,7 @@ func TestIdempotencyWriteFailureRollsBackEarlierWrites(t *testing.T) {
 			name: "resize", requiresReady: true, success: http.StatusAccepted,
 			execute: func(t *testing.T, app *testAPI, owner testAccount, instanceID uuid.UUID, key string) testResponse {
 				return app.requestJSON(t, http.MethodPost, instancePath(instanceID)+"/resize", map[string]any{
-					"vcpu": 2, "ram_gb": 2,
+					"vcpu": 2, "ram_gb": 8,
 				}, idempotentBearer(owner.Token, key))
 			},
 		},

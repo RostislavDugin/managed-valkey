@@ -13,14 +13,7 @@ func TestCatalogBuildsAllowedGrid(t *testing.T) {
 		{VCPU: 1, RAMGB: 1},
 		{VCPU: 1, RAMGB: 2},
 		{VCPU: 1, RAMGB: 4},
-		{VCPU: 1, RAMGB: 8},
-		{VCPU: 1, RAMGB: 16},
-		{VCPU: 2, RAMGB: 2},
-		{VCPU: 2, RAMGB: 4},
 		{VCPU: 2, RAMGB: 8},
-		{VCPU: 2, RAMGB: 16},
-		{VCPU: 4, RAMGB: 4},
-		{VCPU: 4, RAMGB: 8},
 		{VCPU: 4, RAMGB: 16},
 	}
 	if len(catalog.Items) != len(want) {
@@ -69,7 +62,6 @@ func TestMonthlyPriceExamples(t *testing.T) {
 		{size: valkey.Size{VCPU: 1, RAMGB: 1}, single: 126000, ha: 378000},
 		{size: valkey.Size{VCPU: 1, RAMGB: 2}, single: 162000, ha: 486000},
 		{size: valkey.Size{VCPU: 1, RAMGB: 4}, single: 234000, ha: 702000},
-		{size: valkey.Size{VCPU: 2, RAMGB: 4}, single: 324000, ha: 972000},
 		{size: valkey.Size{VCPU: 2, RAMGB: 8}, single: 468000, ha: 1404000},
 		{size: valkey.Size{VCPU: 4, RAMGB: 16}, single: 936000, ha: 2808000},
 	}

@@ -83,7 +83,7 @@ describe('клиент Valkey API', () => {
       .spyOn(window, 'fetch')
       .mockResolvedValueOnce(
         jsonResponse({
-          items: [{ vcpu: 2, ram_gb: 4 }],
+          items: [{ vcpu: 2, ram_gb: 8 }],
           pricing: {
             vcpu_coins_per_hour: 321,
             ram_gb_coins_per_hour: 123,
@@ -103,7 +103,7 @@ describe('клиент Valkey API', () => {
       .mockResolvedValueOnce(jsonResponse(credentialsDto()));
 
     await expect(getValkeyCatalog()).resolves.toEqual({
-      items: [{ vcpu: 2, ramGb: 4 }],
+      items: [{ vcpu: 2, ramGb: 8 }],
       pricing: { vcpuCoinsPerHour: 321, ramGbCoinsPerHour: 123, hoursPerMonth: 744 },
       connection: { domain: 'valkey.test', port: 12345 },
     });
@@ -151,7 +151,7 @@ describe('клиент Valkey API', () => {
         prefix: 'shop',
         mode: 'ha',
         vcpu: 2,
-        ramGb: 4,
+        ramGb: 8,
         password: PASSWORD,
         isWhitelistEnabled: true,
         whitelistCidrs: ['192.0.2.0/24'],
@@ -162,7 +162,7 @@ describe('клиент Valkey API', () => {
       name: 'renamed',
       maintenance: { dow: 0, hourUtc: 2, durationMin: 60 },
     });
-    await resizeInstance(INSTANCE_ID, { vcpu: 4, ramGb: 8 }, 'resize-key');
+    await resizeInstance(INSTANCE_ID, { vcpu: 4, ramGb: 16 }, 'resize-key');
     await updateWhitelist(INSTANCE_ID, { isWhitelistEnabled: true, whitelistCidrs: [] });
     await rotateValkeyPassword(
       INSTANCE_ID,
@@ -177,7 +177,7 @@ describe('клиент Valkey API', () => {
       prefix: 'shop',
       mode: 'ha',
       vcpu: 2,
-      ram_gb: 4,
+      ram_gb: 8,
       password: PASSWORD,
       is_whitelist_enabled: true,
       whitelist_cidrs: ['192.0.2.0/24'],

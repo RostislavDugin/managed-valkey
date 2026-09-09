@@ -217,10 +217,10 @@ func TestValkeyStateSyncThroughK3S(t *testing.T) {
 		t.Fatal("повторный импорт создал аудит или биллинговый период")
 	}
 
-	resize := resizeValkey(t, app, account, created.ID, 2, 2)
+	resize := resizeValkey(t, app, account, created.ID, 2, 8)
 	assertStatus(t, resize, http.StatusAccepted)
 	resource = waitForValkeyInstance(t, app, created.Slug, func(resource *valkeyv1alpha1.ValkeyInstance) bool {
-		return resource.Spec.DesiredGeneration == 2 && resource.Spec.VCPU == 2 && resource.Spec.RAMGB == 2
+		return resource.Spec.DesiredGeneration == 2 && resource.Spec.VCPU == 2 && resource.Spec.RAMGB == 8
 	})
 	setValkeyCRPhase(t, app, resource, valkeyv1alpha1.InstancePhaseUpdating)
 	waitForHTTPInstance(t, app, account, created.ID, func(instance valkeydomain.Instance) bool {
@@ -228,12 +228,12 @@ func TestValkeyStateSyncThroughK3S(t *testing.T) {
 	})
 	confirmValkeyStatus(t, app, resource)
 	waitForHTTPInstance(t, app, account, created.ID, func(instance valkeydomain.Instance) bool {
-		return instance.ObservedGeneration == 2 && instance.AppliedVCPU == 2 && instance.AppliedRAMGB == 2
+		return instance.ObservedGeneration == 2 && instance.AppliedVCPU == 2 && instance.AppliedRAMGB == 8
 	})
 
 	resize = resizeValkey(t, app, account, created.ID, 1, 1)
 	assertStatus(t, resize, http.StatusAccepted)
-	waitForQuotaUsage(t, app, account, 2, 2)
+	waitForQuotaUsage(t, app, account, 2, 8)
 	resource = waitForValkeyInstance(t, app, created.Slug, func(resource *valkeyv1alpha1.ValkeyInstance) bool {
 		return resource.Spec.DesiredGeneration == 3 && resource.Spec.VCPU == 1 && resource.Spec.RAMGB == 1
 	})
@@ -310,7 +310,7 @@ func TestValkeySyncStorePreservesIntentAndRollsBackObservation(t *testing.T) {
 		t.Fatalf("подготовить признак восстановления: %v", err)
 	}
 
-	assertStatus(t, resizeValkey(t, app, account, created.ID, 2, 2), http.StatusAccepted)
+	assertStatus(t, resizeValkey(t, app, account, created.ID, 2, 8), http.StatusAccepted)
 	intent := loadValkey(t, app, created.ID)
 	node := store.ValkeyNodeObservation{
 		Ordinal: 0, Role: "primary", PodName: created.Slug + "-0", PodUID: "pod-a",
@@ -339,7 +339,7 @@ func TestValkeySyncStorePreservesIntentAndRollsBackObservation(t *testing.T) {
 		t.Fatalf("импортировать допустимое наблюдение: %v", err)
 	}
 	afterImport := loadValkey(t, app, created.ID)
-	if afterImport.VCPU != 2 || afterImport.RAMGB != 2 || afterImport.DesiredGeneration != 2 ||
+	if afterImport.VCPU != 2 || afterImport.RAMGB != 8 || afterImport.DesiredGeneration != 2 ||
 		!afterImport.UpdatedAt.Equal(intent.UpdatedAt) || !afterImport.IsRecoveryRequired ||
 		afterImport.SyncRecoveryReason == nil || *afterImport.SyncRecoveryReason != legacyReason {
 		t.Fatalf("импорт перезаписал намерение или причину восстановления: %+v", afterImport)
@@ -794,7 +794,7 @@ func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
 			return instance.ObservedGeneration == 1
 		})
 		app.stopSync()
-		assertStatus(t, resizeValkey(t, app, account, created.ID, 2, 2), http.StatusAccepted)
+		assertStatus(t, resizeValkey(t, app, account, created.ID, 2, 8), http.StatusAccepted)
 
 		blockingClient := &blockingUpdateClient{
 			Client: app.kubernetes, entered: make(chan struct{}), release: make(chan struct{}),

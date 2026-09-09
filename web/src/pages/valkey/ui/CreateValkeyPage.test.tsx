@@ -11,7 +11,7 @@ const WAIT = { timeout: 10_000 };
 const catalog = {
   items: [
     { vcpu: 1, ram_gb: 1 },
-    { vcpu: 2, ram_gb: 4 },
+    { vcpu: 2, ram_gb: 8 },
   ],
   pricing: {
     vcpu_coins_per_hour: 125,
