@@ -1,339 +1,223 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { renderValkeySection, seedSession } from '../../../../test/render';
 import {
-  renderValkeySection,
-  seedSession,
-  TEST_AUTHOR,
-  TEST_USER_ID,
-  TEST_VALKEY_PASSWORD,
-  wholeText,
-} from '../../../../test/render';
-import { createInstance, listInstances } from '../api/valkey-storage';
-import type { ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
-import * as credentialsModel from '../model/valkey-credentials';
-
-vi.mock('./ValkeyMonitoringPage', () => ({ ValkeyMonitoringPage: () => null }));
+  installStatefulValkeyApi,
+  jsonResponse as statefulJsonResponse,
+} from '../../../../test/valkey-api-fixture';
 
 const WAIT = { timeout: 10_000 };
+const catalog = {
+  items: [
+    { vcpu: 1, ram_gb: 1 },
+    { vcpu: 2, ram_gb: 4 },
+  ],
+  pricing: {
+    vcpu_coins_per_hour: 125,
+    ram_gb_coins_per_hour: 50,
+    hours_per_month: 720,
+  },
+  connection: { domain: 'valkey.test', port: 41379 },
+};
 
-function plan(vcpu: number, ramGb: number) {
-  return screen.getByRole('radio', {
-    name: new RegExp(`^${vcpu}\\s+vCPU,\\s+${ramGb}\\s+ГБ RAM$`),
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
-async function openForm() {
-  const result = renderValkeySection('/valkey/management/new');
-  await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT);
-  return result;
+function installApi(catalogResponses: Response[]) {
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const path = String(input);
+    if (path === '/v1/managed/valkey/instances') {
+      return jsonResponse({ items: [] });
+    }
+    if (path === '/v1/me') {
+      return jsonResponse({
+        user: { id: '01930000-0000-7000-8000-000000000001', email: 'user@example.com' },
+        quota: { max_vcpu: 4, max_ram_gb: 16 },
+        usage: { used_vcpu: 0, used_ram_gb: 0 },
+      });
+    }
+    if (path === '/v1/managed/valkey/sizes') {
+      return catalogResponses.shift() ?? jsonResponse(catalog);
+    }
+    return jsonResponse({ error: { code: 'NOT_FOUND', message: 'Не найдено', details: {} } }, 404);
+  });
+  window.fetch = fetchMock;
+  globalThis.fetch = fetchMock;
 }
 
-function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_AUTHOR, {
-    name,
-    prefix: 'valkey',
-    mode,
-    vcpu,
-    ramGb,
-    password: TEST_VALKEY_PASSWORD,
-  });
-}
-
-beforeEach(() => {
-  seedSession();
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-describe('значения по умолчанию', () => {
-  it('открывает форму рабочей: имя, режим и доступный размер', async () => {
-    await openForm();
-
-    const name = screen.getByRole('textbox', { name: /Имя/ }) as HTMLInputElement;
-    expect(name.value).toMatch(/^valkey-\d{4}$/);
-
-    expect(screen.getByRole('radio', { name: /Одна нода/ })).toBeChecked();
-    expect(plan(1, 1)).toBeChecked();
-    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
-  });
-
-  it('подставляет префикс и показывает будущий адрес с доменом', async () => {
-    await openForm();
-
-    const prefix = screen.getByRole('textbox', { name: /Префикс/ }) as HTMLInputElement;
-    expect(prefix.value).toBe('valkey');
-    expect(
-      await screen.findByText(/valkey-xxxxxx\.valkey\.h3llo-demo\.com/, {}, WAIT)
-    ).toBeVisible();
-  });
-
-  it('проверяет префикс при потере фокуса', async () => {
+describe('форма создания Valkey', () => {
+  it('сохраняет значения и запрещает создание до повторной загрузки каталога', async () => {
+    const session = seedSession();
+    installApi([
+      jsonResponse(
+        { error: { code: 'REQUEST_FAILED', message: 'Каталог недоступен', details: {} } },
+        400
+      ),
+      jsonResponse(catalog),
+    ]);
     const user = userEvent.setup();
-    await openForm();
 
-    const prefix = screen.getByRole('textbox', { name: /Префикс/ });
-    await user.clear(prefix);
-    await user.type(prefix, 'ab');
-    await user.tab();
+    renderValkeySection('/valkey/management/new', session);
 
-    expect(await screen.findByText('Префикс не короче 3 символов', {}, WAIT)).toBeVisible();
-  });
-
-  it('проверяет имя при потере фокуса', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    const name = screen.getByRole('textbox', { name: /Имя/ });
+    expect(await screen.findByText('Каталог недоступен', {}, WAIT)).toBeVisible();
+    const name = screen.getByRole('textbox', { name: 'Имя' });
+    const prefix = screen.getByRole('textbox', { name: 'Префикс' });
     await user.clear(name);
-    await user.type(name, 'Valkey_1474');
-    await user.tab();
-
-    expect(
-      await screen.findByText(
-        'Строчные латинские буквы, цифры и дефис; дефис не по краям',
-        {},
-        WAIT
-      )
-    ).toBeVisible();
-  });
-});
-
-describe('DNS-имя', () => {
-  it('собирает DNS-имя базы из выбранного префикса', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    const prefix = screen.getByRole('textbox', { name: /Префикс/ });
+    await user.type(name, 'cache-prod');
     await user.clear(prefix);
     await user.type(prefix, 'shop');
 
-    expect(screen.getByText(/shop-xxxxxx/)).toBeVisible();
-
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
-
-    await waitFor(async () => {
-      const [created] = await listInstances(TEST_USER_ID);
-      expect(created?.slug).toMatch(/^shop-[a-z0-9]{6}$/);
-    }, WAIT);
-  });
-});
-
-describe('тарифная сетка', () => {
-  it('показывает готовые конфигурации из тарифной сетки', async () => {
-    await openForm();
-
-    expect(plan(1, 1)).toBeVisible();
-    expect(plan(1, 2)).toBeVisible();
-    expect(plan(1, 4)).toBeVisible();
-    expect(plan(2, 4)).toBeVisible();
-    expect(plan(2, 8)).toBeVisible();
-    expect(plan(4, 16)).toBeVisible();
-  });
-
-  it('выбирает процессор и память одной карточкой', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    await user.click(plan(2, 8));
-
-    expect(plan(2, 8)).toBeChecked();
-    expect(screen.getByText(wholeText('4 680,00 ₽ в месяц'))).toBeVisible();
-  });
-
-  it('учитывает три ноды отказоустойчивого режима в стоимости', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    await user.click(screen.getByRole('radio', { name: /Отказоустойчивый/ }));
-
-    expect(await screen.findByText(wholeText('3 780,00 ₽ в месяц'), {}, WAIT)).toBeVisible();
-  });
-});
-
-describe('панель стоимости', () => {
-  it('пересчитывает цену при смене режима, размера и периода', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    expect(screen.getByText(wholeText('1 260,00 ₽ в месяц'))).toBeVisible();
-
-    await user.click(screen.getByRole('radio', { name: /Отказоустойчивый/ }));
-    expect(await screen.findByText(wholeText('3 780,00 ₽ в месяц'), {}, WAIT)).toBeVisible();
-
-    await user.click(screen.getByRole('radio', { name: /Одна нода/ }));
-    await user.click(plan(1, 2));
-    expect(await screen.findByText(wholeText('1 620,00 ₽ в месяц'), {}, WAIT)).toBeVisible();
-
-    await user.click(screen.getByRole('radio', { name: 'День' }));
-    expect(await screen.findByText(wholeText('54,00 ₽ в день'), {}, WAIT)).toBeVisible();
-
-    await user.click(screen.getByRole('radio', { name: 'Час' }));
-    expect(await screen.findByText(wholeText('2,25 ₽ в час'), {}, WAIT)).toBeVisible();
-  });
-});
-
-describe('квота', () => {
-  it('показывает цену размера сверх остатка, но не даёт отправить форму', async () => {
-    await seedInstance('valkey-0001', 'single', 2, 8);
-    const user = userEvent.setup();
-    await openForm();
-
-    await user.click(plan(4, 16));
-
-    expect(await screen.findByText(wholeText('9 360,00 ₽ в месяц'), {}, WAIT)).toBeVisible();
-    expect(screen.getByText('Недостаточно квоты')).toBeVisible();
-    expect(screen.getByText(wholeText('Ваша квота: 4 vCPU и 16 ГБ RAM.'))).toBeVisible();
-    expect(screen.getByText(wholeText('Свободно сейчас: 2 vCPU и 8 ГБ RAM.'))).toBeVisible();
-    expect(
-      screen.getByText(wholeText('Для выбранной конфигурации не хватает: 2 vCPU и 8 ГБ RAM.'))
-    ).toBeVisible();
-    expect(screen.getByText(wholeText('Одна нода: 2 vCPU и 8 ГБ RAM.'))).toBeVisible();
-    expect(
-      screen.getByText(
-        'Отказоустойчивый режим: свободной квоты не хватает даже на минимальную конфигурацию.'
-      )
-    ).toBeVisible();
-    expect(
-      screen.getByRole('link', { name: 'Напишите в поддержку для увеличения квоты' })
-    ).toHaveAttribute('href', 'https://t.me/rostislav_dugin');
+    expect(screen.getByText(/Адрес базы: shop-xxxxxx,/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    await waitFor(() => expect(screen.queryByText('Каталог недоступен')).not.toBeInTheDocument());
+    expect(name).toHaveValue('cache-prod');
+    expect(prefix).toHaveValue('shop');
+    expect(screen.getByText(/Адрес базы: shop-xxxxxx\.valkey\.test,/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
   });
 
-  it('при исчерпанной квоте отправка недоступна', async () => {
-    await seedInstance('valkey-0001', 'single', 4, 16);
-    await openForm();
-
-    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
-    expect(
-      screen.getByRole('link', { name: 'Напишите в поддержку для увеличения квоты' })
-    ).toBeVisible();
-  });
-});
-
-describe('белый список адресов', () => {
-  it('проверяет адреса и сохраняет их в формате CIDR', async () => {
+  it('требует подтверждения включённого пустого списка адресов', async () => {
+    const session = seedSession();
+    installApi([jsonResponse(catalog)]);
     const user = userEvent.setup();
-    await openForm();
+
+    renderValkeySection('/valkey/management/new', session);
+
+    const create = await screen.findByRole('button', { name: 'Создать базу' }, WAIT);
+    expect(create).toBeEnabled();
 
     await user.click(screen.getByRole('switch', { name: 'Ограничить доступ по IP-адресам' }));
-    const addresses = screen.getByRole('textbox', { name: /Разрешённые адреса/ });
-    await user.type(addresses, '203.0.113.10\n198.51.100.0/24');
 
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+    const confirmation = screen.getByRole('checkbox', {
+      name: 'Запретить все подключения к базе',
+    });
+    expect(create).toBeDisabled();
 
-    await waitFor(async () => {
-      const [created] = await listInstances(TEST_USER_ID);
-      expect(created).toMatchObject({
-        isWhitelistEnabled: true,
-        whitelistCidrs: ['203.0.113.10/32', '198.51.100.0/24'],
-      });
-    }, WAIT);
-  });
-});
+    await user.click(confirmation);
 
-describe('отправка формы', () => {
-  it('показывает пароль созданной базы один раз и не сохраняет его', async () => {
-    const password = '1111EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(password);
-    const user = userEvent.setup();
-    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    const { router } = await openForm();
-
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
-
-    const modal = await screen.findByRole('dialog', {}, WAIT);
-    expect(within(modal).getByRole('textbox', { name: 'Пароль базы' })).toHaveValue(password);
-    expect(modal).toHaveTextContent('Пароль показывается один раз');
-    expect(modal).not.toHaveTextContent('Готов');
-    expect(modal).not.toHaveTextContent('Состояние:');
-    expect(localStorage.getItem('mv_valkey_instances')).not.toContain(password);
-    expect(sessionStorage.getItem('mv_valkey_instances')).toBeNull();
-    expect(JSON.stringify(router.state.location)).not.toContain(password);
-
-    await user.click(within(modal).getByRole('button', { name: 'Скопировать пароль' }));
-    expect(copy).toHaveBeenCalledWith(password);
-
-    await user.click(within(modal).getByRole('button', { name: 'Закрыть' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), WAIT);
-
-    await router.navigate(`${router.state.location.pathname}/monitoring`);
-    await router.navigate(-1);
-
-    expect(await screen.findByRole('heading', { name: /^valkey-/ }, WAIT)).toBeVisible();
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.queryByDisplayValue(password)).toBeNull();
+    expect(create).toBeEnabled();
   });
 
-  it('генерирует новый пароль после отклонённой отправки', async () => {
-    const firstPassword = '1111EFGHijklMNOPqrstUVWXyz01_234';
-    const secondPassword = '2222EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword')
-      .mockReturnValueOnce(firstPassword)
-      .mockReturnValueOnce(secondPassword);
-    await seedInstance('valkey-1474', 'single', 1, 1);
+  it('сохраняет форму после 422 и создаёт новый пароль при следующей отправке', async () => {
+    const session = seedSession();
+    const api = installStatefulValkeyApi([]);
+    const statefulFetch = window.fetch;
+    const createRequests: RequestInit[] = [];
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input) === '/v1/managed/valkey/instances' && init?.method === 'POST') {
+        createRequests.push(init);
+        if (createRequests.length === 1) {
+          return statefulJsonResponse(
+            {
+              error: {
+                code: 'NOT_ENOUGH_RESOURCES',
+                message: 'Недостаточно свободных ресурсов кластера',
+                details: { reason: 'cluster_quota' },
+              },
+            },
+            422
+          );
+        }
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
     const user = userEvent.setup();
-    await openForm();
 
-    const name = screen.getByRole('textbox', { name: /Имя/ });
+    const view = renderValkeySection('/valkey/management/new', session);
+
+    const name = await screen.findByRole('textbox', { name: 'Имя' }, WAIT);
+    const prefix = screen.getByRole('textbox', { name: 'Префикс' });
     await user.clear(name);
-    await user.type(name, 'valkey-1474');
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
-    expect(await screen.findByText('База с таким именем уже существует', {}, WAIT)).toBeVisible();
-
-    await user.clear(name);
-    await user.type(name, 'valkey-2222');
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
-
-    const modal = await screen.findByRole('dialog', {}, WAIT);
-    expect(within(modal).getByRole('textbox', { name: 'Пароль базы' })).toHaveValue(secondPassword);
-    expect(screen.queryByDisplayValue(firstPassword)).toBeNull();
-  });
-
-  it('создаёт базу, открывает её карточку и сохраняет данные', async () => {
-    const user = userEvent.setup();
-    const { router } = await openForm();
-
-    const name = screen.getByRole('textbox', { name: /Имя/ });
-    await user.clear(name);
-    await user.type(name, 'valkey-1474');
+    await user.type(name, 'cache-prod');
+    await user.clear(prefix);
+    await user.type(prefix, 'shop');
     await user.click(screen.getByRole('button', { name: 'Создать базу' }));
 
-    await waitFor(
-      () => expect(router.state.location.pathname).toMatch(/^\/valkey\/management\/[\w-]+$/),
-      WAIT
+    expect(
+      await screen.findByText('В кластере сейчас не хватает свободных ресурсов.', {}, WAIT)
+    ).toBeVisible();
+    expect(name).toHaveValue('cache-prod');
+    expect(prefix).toHaveValue('shop');
+    expect(screen.queryByRole('dialog', { name: 'Сохраните пароль' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.requests.filter((request) => request.path === '/v1/me').length).toBe(2)
     );
-    expect(await screen.findByRole('heading', { name: 'valkey-1474' }, WAIT)).toBeVisible();
 
-    await expect(listInstances(TEST_USER_ID)).resolves.toHaveLength(1);
-  });
-
-  it('не создаёт вторую базу при повторном нажатии', async () => {
-    const user = userEvent.setup();
-    await openForm();
-
-    const submit = screen.getByRole('button', { name: 'Создать базу' });
-    await user.click(submit);
-    await user.click(submit);
-
-    await waitFor(async () => {
-      await expect(listInstances(TEST_USER_ID)).resolves.toHaveLength(1);
-    }, WAIT);
-  });
-
-  it('ставит ошибку занятого имени у поля', async () => {
-    await seedInstance('valkey-1474', 'single', 1, 1);
-    const user = userEvent.setup();
-    await openForm();
-
-    const name = screen.getByRole('textbox', { name: /Имя/ });
-    await user.clear(name);
-    await user.type(name, 'valkey-1474');
     await user.click(screen.getByRole('button', { name: 'Создать базу' }));
 
-    expect(await screen.findByText('База с таким именем уже существует', {}, WAIT)).toBeVisible();
-    await expect(listInstances(TEST_USER_ID)).resolves.toHaveLength(1);
+    expect(await screen.findByRole('dialog', { name: 'Сохраните пароль' }, WAIT)).toBeVisible();
+    expect(screen.queryByText('База создаётся')).not.toBeInTheDocument();
+    expect(screen.queryByText('Создание базы cache-prod принято.')).not.toBeInTheDocument();
+    const firstBody = JSON.parse(String(createRequests[0].body)) as { password: string };
+    const secondBody = JSON.parse(String(createRequests[1].body)) as { password: string };
+    expect(firstBody.password).not.toBe(secondBody.password);
+    expect(new Headers(createRequests[0].headers).get('Idempotency-Key')).not.toBe(
+      new Headers(createRequests[1].headers).get('Idempotency-Key')
+    );
+    act(() => {
+      view.setSession({
+        ...session,
+        userId: '01930000-0000-7000-8000-000000000099',
+        email: 'second@example.com',
+      });
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Сохраните пароль' })).not.toBeInTheDocument()
+    );
+  });
+
+  it('повторяет потерянную отправку с теми же ключом и паролем и показывает пароль один раз', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([]);
+    const statefulFetch = window.fetch;
+    const createRequests: RequestInit[] = [];
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input) === '/v1/managed/valkey/instances' && init?.method === 'POST') {
+        createRequests.push(init);
+        if (createRequests.length <= 3) {
+          throw new TypeError('connection lost');
+        }
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
+    const user = userEvent.setup();
+
+    renderValkeySection('/valkey/management/new', session);
+
+    const create = await screen.findByRole('button', { name: 'Создать базу' }, WAIT);
+    await user.click(create);
+    expect(
+      await screen.findByText('Не удалось выполнить запрос. Попробуйте ещё раз.', {}, WAIT)
+    ).toBeVisible();
+
+    await user.click(create);
+
+    const passwordInput = await screen.findByRole('textbox', { name: 'Пароль базы' }, WAIT);
+    expect((passwordInput as HTMLInputElement).value).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    const keys = createRequests.map((request) =>
+      new Headers(request.headers).get('Idempotency-Key')
+    );
+    const passwords = createRequests.map(
+      (request) => (JSON.parse(String(request.body)) as { password: string }).password
+    );
+    expect(new Set(keys).size).toBe(1);
+    expect(new Set(passwords).size).toBe(1);
+    expect(localStorage.getItem('mv_valkey_instances')).toBeNull();
+    expect(window.location.href).not.toContain(passwords[0]);
+
+    await user.click(screen.getByRole('button', { name: 'Закрыть' }));
+
+    expect(screen.queryByRole('textbox', { name: 'Пароль базы' })).not.toBeInTheDocument();
   });
 });

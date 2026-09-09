@@ -2,16 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Alert, Button, Container, Group, Skeleton, Stack, Text } from '@mantine/core';
 import { buttonVariants } from '@/shared/config';
 import { formatDateTime, formatRelativeTime } from '@/shared/lib';
-import { getValkeyCredentials } from '../api/valkey-credentials';
-import {
-  formatInstanceAddress,
-  formatInstanceHost,
-  formatRam,
-  formatSize,
-  formatVcpu,
-  getTotalResources,
-  MODE_LABELS,
-} from '../model/valkey';
+import { getValkeyCredentials } from '../api/valkey-api';
+import { formatRam, formatSize, formatVcpu, getTotalResources, MODE_LABELS } from '../model/valkey';
 import type { ValkeyCredentials } from '../model/valkey-credentials';
 import { getRequestErrorMessage } from '../model/valkey-form';
 import { ConnectionExamples } from './ConnectionExamples';
@@ -19,6 +11,7 @@ import { CopyAction } from './CopyAction';
 import { ResizeInstanceModal } from './ResizeInstanceModal';
 import { useValkeyInstance } from './ValkeyInstanceLayout';
 import { ValkeyPasswordModal } from './ValkeyPasswordModal';
+import { WhitelistModal } from './WhitelistModal';
 import styles from './ValkeyPage.module.css';
 
 function PropertyRow({ label, value }: { label: string; value: ReactNode }) {
@@ -31,16 +24,19 @@ function PropertyRow({ label, value }: { label: string; value: ReactNode }) {
 }
 
 export function ValkeyInstancePage() {
-  const { applyUpdate, domain, instance, instances, session } = useValkeyInstance();
+  const { applyUpdate, catalog, instance, quota, refresh } = useValkeyInstance();
   const [resizeOpened, setResizeOpened] = useState(false);
   const [passwordOpened, setPasswordOpened] = useState(false);
+  const [whitelistOpened, setWhitelistOpened] = useState(false);
   const [credentials, setCredentials] = useState<ValkeyCredentials | null>(null);
   const [credentialsError, setCredentialsError] = useState<string | null>(null);
   const credentialsRequestRef = useRef(0);
+  const credentialsControllerRef = useRef<AbortController | null>(null);
+  const credentialsStartedAtRef = useRef(0);
   const closePasswordModal = useCallback(() => setPasswordOpened(false), []);
 
   const loadCredentials = useCallback(
-    async (showLoading = true) => {
+    async (showLoading = true, signal?: AbortSignal) => {
       const requestId = credentialsRequestRef.current + 1;
       credentialsRequestRef.current = requestId;
 
@@ -50,41 +46,80 @@ export function ValkeyInstancePage() {
       setCredentialsError(null);
 
       try {
-        const loaded = await getValkeyCredentials(session.userId, instance.id);
-        if (credentialsRequestRef.current === requestId) {
+        const loaded = await getValkeyCredentials(instance.id, signal);
+        if (!signal?.aborted && credentialsRequestRef.current === requestId) {
           setCredentials(loaded);
         }
       } catch (error) {
-        if (credentialsRequestRef.current === requestId) {
+        if (
+          credentialsRequestRef.current === requestId &&
+          !(error instanceof DOMException && error.name === 'AbortError')
+        ) {
           setCredentialsError(getRequestErrorMessage(error));
         }
       }
     },
-    [instance.id, session.userId]
+    [instance.id]
+  );
+
+  const requestCredentials = useCallback(
+    async (showLoading = true) => {
+      credentialsControllerRef.current?.abort();
+      const controller = new AbortController();
+      credentialsControllerRef.current = controller;
+      credentialsStartedAtRef.current = Date.now();
+      await loadCredentials(showLoading, controller.signal).finally(() => {
+        if (credentialsControllerRef.current === controller) {
+          credentialsControllerRef.current = null;
+        }
+      });
+    },
+    [loadCredentials]
   );
 
   useEffect(() => {
-    void loadCredentials();
+    void requestCredentials();
     return () => {
       credentialsRequestRef.current += 1;
+      credentialsControllerRef.current?.abort();
+      credentialsControllerRef.current = null;
     };
-  }, [loadCredentials]);
+  }, [requestCredentials]);
 
   useEffect(() => {
     if (!credentials || credentials.appliedPasswordVersion === credentials.passwordVersion) {
       return;
     }
 
-    const timeout = window.setTimeout(() => void loadCredentials(false), 500);
-    return () => window.clearTimeout(timeout);
-  }, [credentials, loadCredentials]);
+    let stopped = false;
+    let timeout: number | undefined;
+    const poll = async () => {
+      await requestCredentials(false);
+      if (!stopped) {
+        schedule();
+      }
+    };
+    const schedule = () => {
+      const elapsed = Date.now() - credentialsStartedAtRef.current;
+      timeout = window.setTimeout(() => void poll(), Math.max(0, 5_000 - elapsed));
+    };
+
+    schedule();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timeout);
+    };
+  }, [credentials, requestCredentials]);
 
   const total = getTotalResources(instance, instance.mode);
-  const host = domain ? formatInstanceHost(instance.slug, domain.domain) : '<HOST>';
-  const port = domain?.port ?? '<PORT>';
-  const address = domain
-    ? formatInstanceAddress(instance.slug, domain.domain, domain.port)
-    : instance.slug;
+  const host = credentials?.host ?? instance.host;
+  const port = credentials?.port ?? instance.port;
+  const address = `${instance.host}:${instance.port}`;
+  const canConfigure =
+    !instance.isUpdating &&
+    !instance.isStale &&
+    instance.status !== 'deleting' &&
+    (instance.status === 'running' || instance.status === 'degraded');
 
   return (
     <Container className={`${styles.page} ${styles.instanceContent}`} fluid>
@@ -112,7 +147,7 @@ export function ValkeyInstancePage() {
               <Group align="center" justify="space-between">
                 <Text size="h3_sm">{credentialsError}</Text>
                 <Button
-                  onClick={() => void loadCredentials()}
+                  onClick={() => void requestCredentials()}
                   size="compact-sm"
                   variant={buttonVariants.secondary}
                 >
@@ -133,35 +168,24 @@ export function ValkeyInstancePage() {
               <PropertyRow
                 label="Пароль"
                 value={
-                  <Stack align="flex-end" gap={2}>
-                    <Group gap="h3_xs" wrap="wrap">
-                      <Text c="h3_text_2" size="h3_sm">
-                        {credentials.passwordHint}
-                      </Text>
-                      {credentials.appliedPasswordVersion !== credentials.passwordVersion && (
-                        <Text c="h3_text_2" size="h3_xs">
-                          Применяется
-                        </Text>
-                      )}
-                      <Text
-                        aria-label="Сменить пароль"
-                        className={`${styles.inlineAction} ${styles.touchTarget}`}
-                        component="button"
-                        disabled={
-                          credentials.appliedPasswordVersion !== credentials.passwordVersion
-                        }
-                        onClick={() => setPasswordOpened(true)}
-                        size="h3_sm"
-                      >
-                        (сменить)
-                      </Text>
-                    </Group>
-                    {credentials.appliedPasswordVersion !== credentials.passwordVersion && (
-                      <Text c="h3_text_2" size="h3_xs">
-                        Дождитесь завершения текущей операции.
-                      </Text>
-                    )}
-                  </Stack>
+                  <Group gap="h3_xs" wrap="wrap">
+                    <Text c="h3_text_2" size="h3_sm">
+                      {credentials.passwordHint}
+                    </Text>
+                    <Text
+                      aria-label="Сменить пароль"
+                      className={`${styles.inlineAction} ${styles.touchTarget}`}
+                      component="button"
+                      disabled={
+                        credentials.appliedPasswordVersion !== credentials.passwordVersion ||
+                        !canConfigure
+                      }
+                      onClick={() => setPasswordOpened(true)}
+                      size="h3_sm"
+                    >
+                      (сменить)
+                    </Text>
+                  </Group>
                 }
               />
             </>
@@ -187,12 +211,47 @@ export function ValkeyInstancePage() {
                   aria-label="Изменить тариф"
                   className={`${styles.inlineAction} ${styles.touchTarget}`}
                   component="button"
+                  disabled={!canConfigure}
                   onClick={() => setResizeOpened(true)}
                   size="h3_sm"
                 >
                   (изменить)
                 </Text>
               </Group>
+            }
+          />
+          <PropertyRow
+            label="Доступ по IP"
+            value={
+              <Group gap="h3_xs" wrap="wrap">
+                <Text c="h3_text_2" size="h3_sm">
+                  {instance.isWhitelistEnabled
+                    ? instance.whitelistCidrs.length === 0
+                      ? 'Все подключения запрещены'
+                      : instance.whitelistCidrs.join(', ')
+                    : 'Без ограничений'}
+                </Text>
+                <Text
+                  aria-label="Изменить доступ по IP"
+                  className={`${styles.inlineAction} ${styles.touchTarget}`}
+                  component="button"
+                  disabled={!canConfigure}
+                  onClick={() => setWhitelistOpened(true)}
+                  size="h3_sm"
+                >
+                  (изменить)
+                </Text>
+              </Group>
+            }
+          />
+          <PropertyRow
+            label="Окно обслуживания"
+            value={
+              <Text c="h3_text_2" size="h3_sm">
+                {instance.maintenance
+                  ? `День ${instance.maintenance.dow}, ${instance.maintenance.hourUtc}:00 UTC, ${instance.maintenance.durationMin} мин.`
+                  : 'Не задано'}
+              </Text>
             }
           />
           <PropertyRow
@@ -215,11 +274,19 @@ export function ValkeyInstancePage() {
       </Stack>
 
       <ResizeInstanceModal
-        author={session}
+        catalog={catalog}
         instance={resizeOpened ? instance : null}
-        instances={instances}
         onClose={() => setResizeOpened(false)}
+        onRefresh={refresh}
         onResized={applyUpdate}
+        quota={quota}
+      />
+
+      <WhitelistModal
+        instance={whitelistOpened ? instance : null}
+        onClose={() => setWhitelistOpened(false)}
+        onRefresh={refresh}
+        onUpdated={applyUpdate}
       />
 
       {credentials && (
@@ -228,7 +295,8 @@ export function ValkeyInstancePage() {
           instance={instance}
           onClose={closePasswordModal}
           onCredentialsChange={setCredentials}
-          onCredentialsReload={() => void loadCredentials()}
+          onCredentialsReload={() => void requestCredentials()}
+          onInstanceRefresh={refresh}
           rotationOpened={passwordOpened}
         />
       )}

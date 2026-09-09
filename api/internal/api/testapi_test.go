@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -18,23 +19,51 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
+	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
+	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
 
 const testJWTSecret = "http-integration-secret"
 
 type testAPIConfig struct {
-	probe     api.Probe
-	addRoutes func(*gin.Engine)
+	probe                api.Probe
+	addRoutes            func(*gin.Engine)
+	wrapAuditRepository  func(audit.Repository) audit.Repository
+	catalog              *valkeydomain.Catalog
+	clusterVCPU          int
+	clusterRAMGB         int
+	slugGenerator        valkeydomain.SlugGenerator
+	wrapDatabaseClock    func(valkeydomain.DatabaseClock) valkeydomain.DatabaseClock
+	wrapValkeyRepository func(valkeydomain.Repository) valkeydomain.Repository
 }
 
 type testAPI struct {
 	server   *httptest.Server
 	client   *http.Client
 	database *store.Store
-	logs     *bytes.Buffer
+	logs     *synchronizedBuffer
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buffer.Write(value)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buffer.String()
 }
 
 type testAccount struct {
@@ -85,7 +114,7 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 		t.Skip("TEST_DATABASE_URL не задан")
 	}
 
-	logs := &bytes.Buffer{}
+	logs := &synchronizedBuffer{}
 	logger, _ := logging.NewWithWriter(logs, logging.Config{
 		ServiceName: "api",
 		Environment: logging.EnvironmentProd,
@@ -101,15 +130,68 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	})
 
 	clock := auth.SystemClock{}
-	authService, err := auth.NewService(database, auth.NewTokenService(testJWTSecret, clock), clock)
+	auditRepository := audit.Repository(database)
+	if config.wrapAuditRepository != nil {
+		auditRepository = config.wrapAuditRepository(auditRepository)
+	}
+	auditService := audit.NewService(auditRepository)
+	authService, err := auth.NewService(
+		database,
+		database,
+		auditService,
+		auth.NewTokenService(testJWTSecret, clock),
+		clock,
+	)
 	if err != nil {
 		t.Fatalf("создать сервис авторизации: %v", err)
 	}
+	catalog := config.catalog
+	if catalog == nil {
+		value, catalogErr := valkeydomain.NewCatalog(valkeydomain.CatalogConfig{
+			MaxVCPU: 16, MaxRAMGB: 128, VCPUCoinsPerHour: 125, RAMGBCoinsPerHour: 50,
+			Domain: "valkey.localhost", Port: 41379,
+		})
+		if catalogErr != nil {
+			t.Fatalf("создать тестовый каталог Valkey: %v", catalogErr)
+		}
+		catalog = &value
+	}
+	clusterVCPU := config.clusterVCPU
+	if clusterVCPU == 0 {
+		clusterVCPU = 1024
+	}
+	clusterRAMGB := config.clusterRAMGB
+	if clusterRAMGB == 0 {
+		clusterRAMGB = 8192
+	}
+	slugGenerator := config.slugGenerator
+	if slugGenerator == nil {
+		slugGenerator = valkeydomain.CryptoSlugGenerator{}
+	}
+	databaseClock := valkeydomain.DatabaseClock(database)
+	if config.wrapDatabaseClock != nil {
+		databaseClock = config.wrapDatabaseClock(databaseClock)
+	}
+	valkeyRepository := valkeydomain.Repository(database)
+	if config.wrapValkeyRepository != nil {
+		valkeyRepository = config.wrapValkeyRepository(valkeyRepository)
+	}
+	valkeyService := valkeydomain.NewService(
+		valkeyRepository,
+		database,
+		auditService,
+		databaseClock,
+		clock,
+		*catalog,
+		clusterVCPU,
+		clusterRAMGB,
+		slugGenerator,
+	)
 	probe := config.probe
 	if probe == nil {
 		probe = database
 	}
-	router, err := api.NewRouter(logger, probe, authService)
+	router, err := api.NewRouter(logger, probe, authService, valkeyService)
 	if err != nil {
 		t.Fatalf("создать маршрутизатор: %v", err)
 	}
@@ -165,7 +247,10 @@ func (app *testAPI) cleanupUser(t *testing.T, email string) {
 		}
 
 		queries := []*gorm.DB{
+			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.IdempotencyKey{}),
+			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.BillingPeriod{}),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.AuditLog{}),
+			app.database.DB().Unscoped().Where("user_id = ?", user.ID).Delete(&store.ValkeyInstance{}),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.AuthRegistrationKey{}),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.UserQuota{}),
 			app.database.DB().Where("id = ?", user.ID).Delete(&store.User{}),
@@ -222,7 +307,17 @@ func (app *testAPI) requestRaw(
 }
 
 func (app *testAPI) do(method, path string, body []byte, headers map[string]string) (testResponse, error) {
-	request, err := http.NewRequestWithContext(context.Background(), method, app.server.URL+path, bytes.NewReader(body))
+	return app.doWithContext(context.Background(), method, path, body, headers)
+}
+
+func (app *testAPI) doWithContext(
+	ctx context.Context,
+	method string,
+	path string,
+	body []byte,
+	headers map[string]string,
+) (testResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, method, app.server.URL+path, bytes.NewReader(body))
 	if err != nil {
 		return testResponse{}, err
 	}

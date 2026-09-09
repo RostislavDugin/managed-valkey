@@ -13,7 +13,11 @@ const (
 	CodeConflict            Code = "CONFLICT"
 	CodeIdempotencyMismatch Code = "IDEMPOTENCY_MISMATCH"
 	CodeInternal            Code = "INTERNAL"
+	CodeInstanceNotReady    Code = "INSTANCE_NOT_READY"
 	CodeNotFound            Code = "NOT_FOUND"
+	CodeNotEnoughResources  Code = "NOT_ENOUGH_RESOURCES"
+	CodeOperationInProgress Code = "OPERATION_IN_PROGRESS"
+	CodeQuotaExceeded       Code = "QUOTA_EXCEEDED"
 	CodeRateLimited         Code = "RATE_LIMITED"
 	CodeUnavailable         Code = "UNAVAILABLE"
 	CodeUnauthorized        Code = "UNAUTHORIZED"
@@ -51,9 +55,9 @@ func Status(code Code) int {
 		return http.StatusUnauthorized
 	case CodeNotFound:
 		return http.StatusNotFound
-	case CodeConflict:
+	case CodeConflict, CodeOperationInProgress, CodeInstanceNotReady:
 		return http.StatusConflict
-	case CodeIdempotencyMismatch:
+	case CodeIdempotencyMismatch, CodeQuotaExceeded, CodeNotEnoughResources:
 		return http.StatusUnprocessableEntity
 	case CodeRateLimited:
 		return http.StatusTooManyRequests

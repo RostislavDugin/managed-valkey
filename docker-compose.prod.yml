@@ -51,6 +51,14 @@ services:
       HTTP_ADDR: ":8080"
       KUBECONFIG: /kubeconfig/api.kubeconfig
       JWT_SECRET: ${JWT_SECRET:?задайте JWT_SECRET}
+      VALKEY_BASE_DOMAIN: valkey.h3llo-demo.com
+      VALKEY_PUBLIC_PORT: "41379"
+      VALKEY_INSTANCE_MAX_VCPU: "4"
+      VALKEY_INSTANCE_MAX_RAM_GB: "16"
+      VALKEY_INSTANCE_VCPU_PRICE_COINS_PER_HOUR: "125"
+      VALKEY_INSTANCE_RAM_GB_PRICE_COINS_PER_HOUR: "50"
+      MANAGED_K8S_NODE_VCPU: "12"
+      MANAGED_K8S_NODE_RAM_GB: "48"
     volumes:
       - /opt/managed-valkey/secrets/kubeconfig/api.kubeconfig:/kubeconfig/api.kubeconfig:ro
     depends_on:

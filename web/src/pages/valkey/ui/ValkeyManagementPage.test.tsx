@@ -1,219 +1,152 @@
-import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { act, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderValkeySection, seedSession } from '../../../../test/render';
 import {
-  renderValkeySection,
-  seedSession,
-  TEST_AUTHOR,
-  TEST_VALKEY_PASSWORD,
-} from '../../../../test/render';
-import { createInstance } from '../api/valkey-storage';
-import type { ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
+  installStatefulValkeyApi,
+  jsonResponse,
+  valkeyInstanceDto,
+} from '../../../../test/valkey-api-fixture';
 
 const WAIT = { timeout: 10_000 };
 
-function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_AUTHOR, {
-    name,
-    prefix: 'valkey',
-    mode,
-    vcpu,
-    ramGb,
-    password: TEST_VALKEY_PASSWORD,
-  });
-}
-
-beforeEach(() => {
-  seedSession();
+afterEach(() => {
+  vi.useRealTimers();
 });
 
-describe('загрузка списка', () => {
-  it('резервирует место скелетоном и показывает таблицу после ответа', async () => {
-    await seedInstance('valkey-1474', 'single', 1, 2);
+describe('список баз Valkey', () => {
+  it('загружает сохранённые базы при повторном открытии', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([valkeyInstanceDto({ name: 'persistent-cache' })]);
 
-    const { container } = renderValkeySection('/valkey/management');
+    const first = renderValkeySection('/valkey/management', session);
+    expect(await screen.findByText('persistent-cache', {}, WAIT)).toBeVisible();
+    first.unmount();
 
-    expect(container.querySelectorAll('.mantine-Skeleton-root').length).toBeGreaterThan(0);
-    expect(await screen.findByRole('table', {}, WAIT)).toBeVisible();
-    expect(container.querySelectorAll('.mantine-Skeleton-root')).toHaveLength(0);
+    renderValkeySection('/valkey/management', session);
+
+    expect(await screen.findByText('persistent-cache', {}, WAIT)).toBeVisible();
   });
 
-  it('показывает ошибку загрузки с повтором и восстанавливается после починки данных', async () => {
-    localStorage.setItem('mv_valkey_instances', '{"version":3,"instances":[{}]}');
-    const user = userEvent.setup();
-
-    renderValkeySection('/valkey/management');
-
-    expect(await screen.findByText('Не удалось загрузить базы', {}, WAIT)).toBeVisible();
-
-    localStorage.removeItem('mv_valkey_instances');
-    await user.click(screen.getByRole('button', { name: 'Повторить' }));
-
-    expect(
-      await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT)
-    ).toBeVisible();
-  });
-
-  it('показывает базы только текущего пользователя', async () => {
-    await seedInstance('valkey-1474', 'single', 1, 2);
-    await createInstance(
-      { userId: '01930000-0000-7000-8000-00000000ffff', email: 'other@example.com' },
-      {
-        name: 'valkey-9999',
-        prefix: 'valkey',
-        mode: 'single',
-        vcpu: 1,
-        ramGb: 1,
-        password: TEST_VALKEY_PASSWORD,
+  it('не перекрывает запросы опроса и выдерживает период от начала запроса', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const session = seedSession();
+    installStatefulValkeyApi();
+    const statefulFetch = window.fetch;
+    let listCalls = 0;
+    let resolveSecond: (response: Response) => void = () => undefined;
+    const secondResponse = new Promise<Response>((resolve) => {
+      resolveSecond = resolve;
+    });
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input) === '/v1/managed/valkey/instances') {
+        listCalls += 1;
+        if (listCalls === 2) {
+          return secondResponse;
+        }
       }
-    );
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
 
-    renderValkeySection('/valkey/management');
+    renderValkeySection('/valkey/management', session);
+    await vi.waitFor(() => expect(screen.getByRole('table')).toBeVisible());
 
-    expect(await screen.findByRole('link', { name: 'valkey-1474' }, WAIT)).toBeVisible();
-    expect(screen.queryByRole('link', { name: 'valkey-9999' })).toBeNull();
-  });
-});
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(listCalls).toBe(2);
 
-describe('пустое состояние', () => {
-  it('вместо таблицы и квоты показывает точку входа в создание', async () => {
-    renderValkeySection('/valkey/management');
+    resolveSecond(jsonResponse({ items: [valkeyInstanceDto()] }));
+    await act(async () => {
+      await secondResponse;
+    });
+    await vi.advanceTimersByTimeAsync(0);
 
-    expect(
-      await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT)
-    ).toBeVisible();
-    expect(screen.queryByRole('table')).toBeNull();
-    expect(screen.queryByText('Использование')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Создать базу данных' })).toHaveAttribute(
-      'href',
-      '/valkey/management/new'
-    );
-  });
-});
-
-describe('таблица и поиск', () => {
-  it('показывает столбцы и значения базы', async () => {
-    await seedInstance('valkey-1474', 'ha', 1, 2);
-
-    renderValkeySection('/valkey/management');
-
-    const table = await screen.findByRole('table', {}, WAIT);
-    const headers = Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent);
-
-    expect(headers).toEqual(['Имя', 'Статус', 'Режим', 'vCPU', 'RAM', 'Цена за месяц']);
-
-    const row = within(table).getByRole('row', { name: /valkey-1474/ });
-    expect(within(row).getByText('Работает')).toBeVisible();
-    expect(within(row).getByText('Отказоустойчивый')).toBeVisible();
-    expect(within(row).getByText(`1 vCPU`)).toBeVisible();
-    expect(within(row).getByText(`2 ГБ`)).toBeVisible();
-    expect(within(row).getByText(`4 860,00 ₽`)).toBeVisible();
+    expect(listCalls).toBe(3);
   });
 
-  it('сортирует полный список локально', async () => {
-    await seedInstance('valkey-10', 'single', 1, 1);
-    await seedInstance('valkey-2', 'ha', 1, 2);
-    const user = userEvent.setup();
+  it('отменяет прежний запрос и игнорирует поздний ответ после смены маршрута', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([]);
+    const statefulFetch = window.fetch;
+    let resolveList: (response: Response) => void = () => undefined;
+    const lateResponse = new Promise<Response>((resolve) => {
+      resolveList = resolve;
+    });
+    const firstSignals: AbortSignal[] = [];
+    let listCalls = 0;
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input) === '/v1/managed/valkey/instances') {
+        listCalls += 1;
+        if (listCalls === 1) {
+          if (init?.signal instanceof AbortSignal) {
+            firstSignals.push(init.signal);
+          }
+          return lateResponse;
+        }
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
 
-    renderValkeySection('/valkey/management');
+    const { router } = renderValkeySection('/valkey/management', session);
+    await vi.waitFor(() => expect(listCalls).toBe(1));
+    await router.navigate('/valkey/management/new');
+    expect(await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT)).toBeVisible();
+    expect(firstSignals[0]?.aborted).toBe(true);
 
-    const table = await screen.findByRole('table', {}, WAIT);
-    const names = () =>
-      within(table)
-        .getAllByRole('link')
-        .map((link) => link.textContent);
+    resolveList(jsonResponse({ items: [valkeyInstanceDto({ name: 'late-foreign-cache' })] }));
+    await act(async () => {
+      await lateResponse;
+    });
 
-    expect(names()).toEqual(['valkey-2', 'valkey-10']);
-
-    await user.click(screen.getByRole('button', { name: 'Имя, по возрастанию' }));
-    expect(names()).toEqual(['valkey-10', 'valkey-2']);
-
-    await user.click(screen.getByRole('button', { name: 'RAM, без сортировки' }));
-    expect(names()).toEqual(['valkey-10', 'valkey-2']);
-
-    await user.click(screen.getByRole('button', { name: 'RAM, по возрастанию' }));
-    expect(names()).toEqual(['valkey-2', 'valkey-10']);
+    expect(screen.queryByText('late-foreign-cache')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Новая Valkey база' })).toBeVisible();
   });
 
-  it('строка ведёт в настройки базы', async () => {
-    const created = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
+  it('отменяет запрос прежнего аккаунта и не показывает его поздний ответ', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([]);
+    const statefulFetch = window.fetch;
+    let resolveFirstList: (response: Response) => void = () => undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirstList = resolve;
+    });
+    const firstSignals: AbortSignal[] = [];
+    let listCalls = 0;
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input) === '/v1/managed/valkey/instances') {
+        listCalls += 1;
+        if (listCalls === 1) {
+          if (init?.signal instanceof AbortSignal) {
+            firstSignals.push(init.signal);
+          }
+          return firstResponse;
+        }
+        return jsonResponse({ items: [valkeyInstanceDto({ name: 'second-account-cache' })] });
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
 
-    const { router } = renderValkeySection('/valkey/management');
+    const view = renderValkeySection('/valkey/management', session);
+    await vi.waitFor(() => expect(listCalls).toBe(1));
+    act(() => {
+      view.setSession({
+        ...session,
+        userId: '01930000-0000-7000-8000-000000000099',
+        email: 'second@example.com',
+      });
+    });
 
-    const table = await screen.findByRole('table', {}, WAIT);
-    const row = within(table).getByRole('row', { name: /valkey-1474/ });
-    await user.click(within(row).getByText('Работает'));
+    expect(await screen.findByText('second-account-cache', {}, WAIT)).toBeVisible();
+    expect(firstSignals[0]?.aborted).toBe(true);
+    resolveFirstList(jsonResponse({ items: [valkeyInstanceDto({ name: 'first-account-cache' })] }));
+    await act(async () => {
+      await firstResponse;
+    });
 
-    await waitFor(
-      () => expect(router.state.location.pathname).toBe(`/valkey/management/${created.id}`),
-      WAIT
-    );
-  });
-
-  it('фильтрует без учёта регистра и показывает «Ничего не найдено»', async () => {
-    await seedInstance('valkey-1474', 'single', 1, 2);
-    await seedInstance('cache-2222', 'ha', 1, 1);
-    const user = userEvent.setup();
-
-    renderValkeySection('/valkey/management');
-
-    const search = await screen.findByRole('textbox', { name: 'Поиск по базам' }, WAIT);
-
-    await user.type(search, 'VALKEY-14');
-    expect(screen.getByRole('link', { name: 'valkey-1474' })).toBeVisible();
-    expect(screen.queryByRole('link', { name: 'cache-2222' })).toBeNull();
-
-    await user.clear(search);
-    await user.type(search, 'отказоустойчивый');
-    expect(screen.getByRole('link', { name: 'cache-2222' })).toBeVisible();
-
-    await user.clear(search);
-    await user.type(search, 'postgres');
-    expect(screen.getByText('Ничего не найдено')).toBeVisible();
-    expect(screen.queryByRole('table')).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Управляемые базы Valkey' })).toBeNull();
-  });
-});
-
-describe('панель использования', () => {
-  it('уезжает в правую колонку каркаса', async () => {
-    await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-
-    renderValkeySection('/valkey/management');
-
-    const aside = await screen.findByTestId('console-aside', {}, WAIT);
-    expect(await within(aside).findByRole('heading', { name: 'Квота' }, WAIT)).toBeVisible();
-    expect(within(aside).getByRole('link', { name: 'Увеличить через поддержку' })).toHaveAttribute(
-      'href',
-      'https://t.me/rostislav_dugin'
-    );
-    expect(within(aside).getByRole('button', { name: 'Что такое квота' })).toBeVisible();
-    expect(within(aside).getByText('1 / 4')).toBeVisible();
-
-    await user.hover(within(aside).getByRole('button', { name: 'Что такое квота' }));
-    expect(
-      await screen.findByText(/Квота ограничивает количество ресурсов/, {}, WAIT)
-    ).toBeVisible();
-  });
-
-  it('считает занятое по одной ноде', async () => {
-    await seedInstance('valkey-1474', 'single', 2, 8);
-
-    renderValkeySection('/valkey/management');
-
-    expect(await screen.findByRole('heading', { name: 'Квота' }, WAIT)).toBeVisible();
-    expect(screen.getByText('2 / 4')).toBeVisible();
-    expect(screen.getByText(`8 ГБ / 16 ГБ`)).toBeVisible();
-  });
-
-  it('считает занятое по трём нодам и по сочетанию режимов', async () => {
-    await seedInstance('valkey-1474', 'ha', 1, 2);
-
-    renderValkeySection('/valkey/management');
-
-    expect(await screen.findByText('3 / 4', {}, WAIT)).toBeVisible();
-    expect(screen.getByText(`6 ГБ / 16 ГБ`)).toBeVisible();
+    expect(screen.queryByText('first-account-cache')).not.toBeInTheDocument();
+    expect(screen.getByText('second-account-cache')).toBeVisible();
   });
 });

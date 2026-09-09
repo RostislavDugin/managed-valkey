@@ -65,11 +65,16 @@ describe('маршруты раздела Valkey', () => {
     renderAt('/valkey/management/instance-1/monitoring');
 
     expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
+    expect(screen.getByText('Данных мониторинга пока нет')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Демонстрационные данные')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Мониторинг' })).toHaveAttribute(
       'aria-selected',
       'true'
     );
+    expect(
+      vi.mocked(window.fetch).mock.calls.some(([input]) => String(input).includes('/metrics'))
+    ).toBe(false);
   });
 
   it('открывает аудит базы по прямой ссылке', async () => {
@@ -78,10 +83,12 @@ describe('маршруты раздела Valkey', () => {
     renderAt('/valkey/management/instance-1/audit-logs');
 
     expect(await screen.findByRole('heading', { name: 'Аудит' }, WAIT)).toBeVisible();
-    expect(
-      await screen.findByRole('heading', { name: 'Действий с базой пока не было' }, WAIT)
-    ).toBeVisible();
+    expect(screen.getByText('Событий аудита пока нет')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Аудит' })).toHaveAttribute('aria-selected', 'true');
+    expect(
+      vi.mocked(window.fetch).mock.calls.some(([input]) => String(input).includes('/audit'))
+    ).toBe(false);
   });
 });
 

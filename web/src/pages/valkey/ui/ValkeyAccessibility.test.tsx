@@ -1,138 +1,50 @@
-import { screen, within } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  renderValkeySection,
-  seedSession,
-  TEST_AUTHOR,
-  TEST_VALKEY_PASSWORD,
-  wholeText,
-} from '../../../../test/render';
-import { createInstance } from '../api/valkey-storage';
+import { describe, expect, it } from 'vitest';
+import { renderValkeySection, seedSession } from '../../../../test/render';
+import { installStatefulValkeyApi, TEST_INSTANCE_ID } from '../../../../test/valkey-api-fixture';
 
 const WAIT = { timeout: 10_000 };
 
-function useNarrowScreen() {
-  vi.spyOn(window, 'matchMedia').mockImplementation(
-    (query) =>
-      ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addListener: () => {},
-        removeListener: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        dispatchEvent: () => false,
-      }) as unknown as MediaQueryList
-  );
+function expectNamedControls() {
+  for (const control of screen.getAllByRole('button')) {
+    expect(control).toHaveAccessibleName();
+  }
 }
 
-beforeEach(() => {
-  seedSession();
-});
-
-describe('узкий экран', () => {
-  it('открывает панель использования из выдвижного блока', async () => {
-    await createInstance(TEST_AUTHOR, {
-      name: 'valkey-1474',
-      prefix: 'valkey',
-      mode: 'single',
-      vcpu: 1,
-      ramGb: 2,
-      password: TEST_VALKEY_PASSWORD,
-    });
-    useNarrowScreen();
+describe('доступность управления Valkey', () => {
+  it('даёт имена всем кнопкам формы и связывает ошибку с полем', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([]);
     const user = userEvent.setup();
 
-    renderValkeySection('/valkey/management');
+    renderValkeySection('/valkey/management/new', session);
+    const name = await screen.findByRole('textbox', { name: 'Имя' }, WAIT);
+    expectNamedControls();
 
-    const trigger = await screen.findByRole('button', { name: 'Квота' }, WAIT);
-    expect(screen.queryByText('Квота', { selector: 'h2' })).toBeNull();
+    await user.clear(name);
+    await user.tab();
 
-    await user.click(trigger);
-
-    const drawer = await screen.findByRole('dialog', {}, WAIT);
-    expect(within(drawer).getByText('1 / 4')).toBeVisible();
-    expect(within(drawer).getByText('2 ГБ / 16 ГБ')).toBeVisible();
+    expect(await screen.findByText('Введите имя базы', {}, WAIT)).toBeVisible();
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(name).toHaveAccessibleDescription('Введите имя базы');
   });
 
-  it('открывает панель стоимости из выдвижного блока', async () => {
-    useNarrowScreen();
+  it('оставляет вкладки и действия карточки доступными с клавиатуры', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi();
     const user = userEvent.setup();
 
-    renderValkeySection('/valkey/management/new');
+    renderValkeySection(`/valkey/management/${TEST_INSTANCE_ID}`, session);
+    await screen.findByRole('heading', { name: 'cache' }, WAIT);
+    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    expectNamedControls();
 
-    await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT);
-    await user.click(screen.getByRole('button', { name: 'Стоимость' }));
-
-    const drawer = await screen.findByRole('dialog', {}, WAIT);
-    expect(within(drawer).getByText(wholeText('1 260,00 ₽ в месяц'))).toBeVisible();
-  });
-});
-
-describe('доступность', () => {
-  it('у каждой кнопки и поля списка есть подпись', async () => {
-    await createInstance(TEST_AUTHOR, {
-      name: 'valkey-1474',
-      prefix: 'valkey',
-      mode: 'single',
-      vcpu: 1,
-      ramGb: 2,
-      password: TEST_VALKEY_PASSWORD,
-    });
-
-    renderValkeySection('/valkey/management');
-
-    await screen.findByRole('table', {}, WAIT);
-
-    for (const control of [...screen.getAllByRole('button'), ...screen.getAllByRole('textbox')]) {
-      expect(control).toHaveAccessibleName();
-    }
-  });
-
-  it('у каждого контрола формы создания есть подпись', async () => {
-    renderValkeySection('/valkey/management/new');
-
-    await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT);
-
-    for (const control of [
-      ...screen.getAllByRole('button'),
-      ...screen.getAllByRole('textbox'),
-      ...screen.queryAllByRole('slider'),
-      ...screen.getAllByRole('radio'),
-      ...screen.getAllByRole('switch'),
-    ]) {
-      expect(control).toHaveAccessibleName();
-    }
-  });
-
-  it('окно смены пароля открывается с клавиатуры и подписывает все контролы', async () => {
-    const instance = await createInstance(TEST_AUTHOR, {
-      name: 'valkey-1474',
-      prefix: 'valkey',
-      mode: 'single',
-      vcpu: 1,
-      ramGb: 2,
-      password: TEST_VALKEY_PASSWORD,
-    });
-    const user = userEvent.setup();
-
-    renderValkeySection(`/valkey/management/${instance.id}`);
-
-    const action = await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
-    action.focus();
-    expect(action).toHaveFocus();
+    const monitoring = screen.getByRole('tab', { name: 'Мониторинг' });
+    monitoring.focus();
     await user.keyboard('{Enter}');
 
-    const modal = screen.getByRole('dialog');
-    expect(modal).toHaveTextContent('Подключения будут разорваны');
-
-    for (const control of [
-      ...within(modal).getAllByRole('button'),
-      ...within(modal).queryAllByRole('textbox'),
-    ]) {
-      expect(control).toHaveAccessibleName();
-    }
+    expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
+    expect(screen.getByText('Данных мониторинга пока нет')).toBeVisible();
   });
 });

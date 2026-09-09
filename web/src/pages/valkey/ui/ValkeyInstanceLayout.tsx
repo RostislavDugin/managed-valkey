@@ -1,7 +1,7 @@
-import { createContext, use, useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MoreHorizontal, Pencil, RotateCw, Trash2 } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, Outlet, useLocation, useParams } from 'react-router';
 import {
   ActionIcon,
   Alert,
@@ -23,9 +23,14 @@ import {
   valkeyInstancePath,
   type ValkeyInstanceTab,
 } from '@/shared/config';
-import { getValkeyDomain, type ValkeyDomain } from '../api/valkey-config';
-import { getInstance, listInstances } from '../api/valkey-storage';
-import { STATUS_LABELS, type PricePeriod, type ValkeyInstance } from '../model/valkey';
+import { getInstance, getValkeyCatalog, getValkeyQuota } from '../api/valkey-api';
+import type { ValkeyQuota } from '../model/quota';
+import {
+  STATUS_LABELS,
+  type PricePeriod,
+  type ValkeyCatalog,
+  type ValkeyInstance,
+} from '../model/valkey';
 import { getRequestErrorMessage } from '../model/valkey-form';
 import { CopyAction } from './CopyAction';
 import { DeleteInstanceModal } from './DeleteInstanceModal';
@@ -38,9 +43,10 @@ import styles from './ValkeyPage.module.css';
 interface ValkeyInstanceContextValue {
   session: Session;
   instance: ValkeyInstance;
-  instances: ValkeyInstance[];
-  domain: ValkeyDomain | null;
+  catalog: ValkeyCatalog;
+  quota: ValkeyQuota;
   applyUpdate: (updated: ValkeyInstance) => void;
+  refresh: () => void;
 }
 
 const ValkeyInstanceContext = createContext<ValkeyInstanceContextValue | null>(null);
@@ -75,39 +81,71 @@ export function ValkeyInstanceLayout() {
   const { instanceId = '' } = useParams();
   const { headerSlot, session, setTrailingCrumb } = useValkeySection();
   const { pathname } = useLocation();
-  const navigate = useNavigate();
 
   const [instance, setInstance] = useState<ValkeyInstance | null>(null);
-  const [instances, setInstances] = useState<ValkeyInstance[]>([]);
-  const [domain, setDomain] = useState<ValkeyDomain | null>(null);
+  const [catalog, setCatalog] = useState<ValkeyCatalog | null>(null);
+  const [quota, setQuota] = useState<ValkeyQuota | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [period, setPeriod] = useState<PricePeriod>('month');
   const [deleteOpened, setDeleteOpened] = useState(false);
   const [renameOpened, setRenameOpened] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const loadedIdentityRef = useRef('');
+  const loadIdentity = `${session.userId}:${instanceId}`;
 
-  const load = useCallback(async () => {
-    setError(null);
-    setInstance(null);
+  const load = useCallback(
+    async (signal: AbortSignal, showLoading: boolean) => {
+      setError(null);
+      if (showLoading) {
+        setInstance(null);
+      }
 
-    try {
-      // Недоступный домен оставляет карточку рабочей: адрес откатывается к slug.
-      const [loaded, all, loadedDomain] = await Promise.all([
-        getInstance(session.userId, instanceId),
-        listInstances(session.userId),
-        getValkeyDomain().catch(() => null),
-      ]);
+      try {
+        const [loaded, loadedCatalog, loadedQuota] = await Promise.all([
+          getInstance(instanceId, signal),
+          getValkeyCatalog(signal),
+          getValkeyQuota(signal),
+        ]);
+        if (signal.aborted) {
+          return;
+        }
 
-      setInstance(loaded);
-      setInstances(all);
-      setDomain(loadedDomain);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError : new Error(String(loadError)));
-    }
-  }, [instanceId, session.userId]);
+        setInstance(loaded);
+        setCatalog(loadedCatalog);
+        setQuota(loadedQuota);
+      } catch (loadError) {
+        if (loadError instanceof DOMException && loadError.name === 'AbortError') {
+          return;
+        }
+        setError(loadError instanceof Error ? loadError : new Error(String(loadError)));
+      }
+    },
+    [instanceId, session.userId]
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const poll = async (showLoading: boolean) => {
+      const startedAt = Date.now();
+      await load(controller.signal, showLoading);
+      if (!stopped) {
+        const elapsed = Date.now() - startedAt;
+        timeout = setTimeout(() => void poll(false), Math.max(0, 5_000 - elapsed));
+      }
+    };
+
+    const showLoading = loadedIdentityRef.current !== loadIdentity;
+    loadedIdentityRef.current = loadIdentity;
+    void poll(showLoading);
+    return () => {
+      stopped = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [load, loadIdentity, revision]);
 
   useEffect(() => {
     setTrailingCrumb(instance?.name ?? null);
@@ -116,12 +154,16 @@ export function ValkeyInstanceLayout() {
 
   const applyUpdate = useCallback((updated: ValkeyInstance) => {
     setInstance(updated);
-    setInstances((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    setRevision((current) => current + 1);
   }, []);
+  const refresh = useCallback(() => setRevision((current) => current + 1), []);
 
   const context = useMemo<ValkeyInstanceContextValue | null>(
-    () => (instance ? { session, instance, instances, domain, applyUpdate } : null),
-    [applyUpdate, domain, instance, instances, session]
+    () =>
+      instance && catalog && quota
+        ? { session, instance, catalog, quota, applyUpdate, refresh }
+        : null,
+    [applyUpdate, catalog, instance, quota, refresh, session]
   );
 
   if (error instanceof ApiError && error.code === 'NOT_FOUND') {
@@ -147,7 +189,7 @@ export function ValkeyInstanceLayout() {
             <Text size="h3_sm">{getRequestErrorMessage(error)}</Text>
             <Button
               leftSection={<RotateCw aria-hidden="true" size={16} strokeWidth={1.5} />}
-              onClick={() => void load()}
+              onClick={refresh}
               variant={buttonVariants.secondary}
             >
               Повторить
@@ -176,7 +218,11 @@ export function ValkeyInstanceLayout() {
         ? createPortal(
             <Group className={styles.instanceHeaderActions} gap="h3_xs" wrap="nowrap">
               <span className={styles.statusCell}>
-                <span aria-hidden="true" className={styles.statusDot} />
+                <span
+                  aria-hidden="true"
+                  className={styles.statusDot}
+                  data-status={context.instance.status}
+                />
                 <Text size="h3_sm">{STATUS_LABELS[context.instance.status]}</Text>
               </span>
 
@@ -190,6 +236,7 @@ export function ValkeyInstanceLayout() {
                 <Menu.Dropdown>
                   <Menu.Item
                     color="red"
+                    disabled={context.instance.status === 'deleting'}
                     leftSection={<Trash2 aria-hidden="true" size={16} strokeWidth={1.5} />}
                     onClick={() => setDeleteOpened(true)}
                   >
@@ -257,7 +304,12 @@ export function ValkeyInstanceLayout() {
         header={<PricePeriodTabs onChange={setPeriod} period={period} />}
         label="Текущая стоимость"
       >
-        <PricePanel mode={context.instance.mode} period={period} size={context.instance} />
+        <PricePanel
+          mode={context.instance.mode}
+          period={period}
+          pricing={context.catalog.pricing}
+          size={context.instance}
+        />
       </ValkeyAside>
 
       <ValkeyInstanceContext value={context}>
@@ -265,16 +317,15 @@ export function ValkeyInstanceLayout() {
       </ValkeyInstanceContext>
 
       <DeleteInstanceModal
-        author={session}
         instance={deleteOpened ? context.instance : null}
         onClose={() => setDeleteOpened(false)}
-        onDeleted={() => void navigate(routes.valkeyManagement)}
+        onDeleted={refresh}
       />
 
       <RenameInstanceModal
-        author={session}
         instance={renameOpened ? context.instance : null}
         onClose={() => setRenameOpened(false)}
+        onRefresh={refresh}
         onRenamed={applyUpdate}
       />
     </>

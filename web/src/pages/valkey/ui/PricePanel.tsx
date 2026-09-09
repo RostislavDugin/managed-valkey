@@ -10,6 +10,7 @@ import {
   PRICE_PERIOD_SUFFIXES,
   type PricePeriod,
   type ValkeyMode,
+  type ValkeyPricing,
   type ValkeySize,
 } from '../model/valkey';
 import styles from './ValkeyPage.module.css';
@@ -17,6 +18,7 @@ import styles from './ValkeyPage.module.css';
 interface PricePanelProps {
   mode: ValkeyMode;
   period: PricePeriod;
+  pricing: ValkeyPricing;
   size: ValkeySize;
 }
 
@@ -47,26 +49,26 @@ export function PricePeriodTabs({ onChange, period }: PricePeriodTabsProps) {
   );
 }
 
-export function PricePanel({ mode, period, size }: PricePanelProps) {
-  const breakdown = getPriceBreakdown(size, mode, period);
+export function PricePanel({ mode, period, pricing, size }: PricePanelProps) {
+  const breakdown = getPriceBreakdown(size, mode, period, pricing);
   const total = getTotalResources(size, mode);
 
   return (
     <Stack gap={0}>
       <div className={styles.panelRow}>
         <Text size="h3_sm">{formatVcpu(total.vcpu)}</Text>
-        <Text size="h3_sm">{formatPrice(breakdown.vcpuKopecks)}</Text>
+        <Text size="h3_sm">{formatPrice(breakdown.vcpuCoins)}</Text>
       </div>
 
       <div className={styles.panelRow}>
         <Text size="h3_sm">{formatRam(total.ramGb)} RAM</Text>
-        <Text size="h3_sm">{formatPrice(breakdown.ramKopecks)}</Text>
+        <Text size="h3_sm">{formatPrice(breakdown.ramCoins)}</Text>
       </div>
 
       <div className={styles.panelRow}>
         <Text size="h3_sm">
           <Text component="span" fw="var(--h3-fw-medium)" size="lg">
-            {formatPrice(breakdown.totalKopecks)}
+            {formatPrice(breakdown.totalCoins)}
           </Text>{' '}
           {PRICE_PERIOD_SUFFIXES[period]}
         </Text>

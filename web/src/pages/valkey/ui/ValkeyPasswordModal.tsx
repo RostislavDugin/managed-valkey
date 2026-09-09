@@ -4,10 +4,11 @@ import { Alert, Button, CopyButton, Group, Modal, Stack, Text, TextInput } from 
 import { notifications } from '@mantine/notifications';
 import { ApiError } from '@/shared/api';
 import { buttonVariants } from '@/shared/config';
-import { rotateValkeyPassword } from '../api/valkey-credentials';
+import { createUuidV7 } from '@/shared/lib';
+import { rotateValkeyPassword } from '../api/valkey-api';
 import type { ValkeyInstance } from '../model/valkey';
 import { generateValkeyPassword, type ValkeyCredentials } from '../model/valkey-credentials';
-import { getRequestErrorMessage } from '../model/valkey-form';
+import { getRequestErrorMessage, shouldReuseSubmission } from '../model/valkey-form';
 import { useValkeySection } from './ValkeyLayout';
 import styles from './ValkeyPage.module.css';
 
@@ -18,6 +19,7 @@ interface ValkeyPasswordModalProps {
   onClose: () => void;
   onCredentialsChange: (credentials: ValkeyCredentials) => void;
   onCredentialsReload: () => void;
+  onInstanceRefresh: () => void;
 }
 
 export function ValkeyPasswordModal({
@@ -27,18 +29,27 @@ export function ValkeyPasswordModal({
   onClose,
   onCredentialsChange,
   onCredentialsReload,
+  onInstanceRefresh,
 }: ValkeyPasswordModalProps) {
-  const { clearEphemeralPassword, ephemeralPassword, session, setEphemeralPassword } =
-    useValkeySection();
+  const { clearEphemeralPassword, ephemeralPassword, setEphemeralPassword } = useValkeySection();
   const [loading, setLoading] = useState(false);
   const attemptRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const pendingRef = useRef<{
+    expectedPasswordVersion: number;
+    idempotencyKey: string;
+    password: string;
+  } | null>(null);
 
   const revealed = ephemeralPassword?.instanceId === instance.id ? ephemeralPassword : null;
   const opened = rotationOpened || revealed !== null;
 
   const close = () => {
     attemptRef.current += 1;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
     clearEphemeralPassword();
+    pendingRef.current = null;
     setLoading(false);
     onClose();
   };
@@ -46,7 +57,10 @@ export function ValkeyPasswordModal({
   useEffect(() => {
     const hide = () => {
       attemptRef.current += 1;
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
       clearEphemeralPassword();
+      pendingRef.current = null;
       setLoading(false);
       onClose();
     };
@@ -55,6 +69,9 @@ export function ValkeyPasswordModal({
     return () => {
       window.removeEventListener('pagehide', hide);
       attemptRef.current += 1;
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
+      pendingRef.current = null;
     };
   }, [clearEphemeralPassword, onClose]);
 
@@ -63,27 +80,58 @@ export function ValkeyPasswordModal({
     attemptRef.current = attempt;
     setLoading(true);
 
-    const password = generateValkeyPassword();
+    const submission =
+      pendingRef.current?.expectedPasswordVersion === credentials.passwordVersion
+        ? pendingRef.current
+        : {
+            expectedPasswordVersion: credentials.passwordVersion,
+            idempotencyKey: createUuidV7(),
+            password: generateValkeyPassword(),
+          };
+    pendingRef.current = submission;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
     try {
-      const updated = await rotateValkeyPassword(session, instance.id, {
-        password,
-        expectedPasswordVersion: credentials.passwordVersion,
-      });
+      const updated = await rotateValkeyPassword(
+        instance.id,
+        {
+          password: submission.password,
+          expectedPasswordVersion: submission.expectedPasswordVersion,
+        },
+        submission.idempotencyKey,
+        controller.signal
+      );
 
-      if (attemptRef.current !== attempt) {
+      if (attemptRef.current !== attempt || requestControllerRef.current !== controller) {
         return;
       }
 
+      pendingRef.current = null;
       onCredentialsChange(updated);
-      setEphemeralPassword({ instanceId: instance.id, password, source: 'rotation' });
+      onInstanceRefresh();
+      setEphemeralPassword({
+        instanceId: instance.id,
+        password: submission.password,
+        source: 'rotation',
+      });
     } catch (error) {
-      if (attemptRef.current !== attempt) {
+      if (
+        attemptRef.current !== attempt ||
+        requestControllerRef.current !== controller ||
+        (error instanceof DOMException && error.name === 'AbortError')
+      ) {
         return;
       }
 
-      if (error instanceof ApiError && error.code === 'CONFLICT') {
+      if (!shouldReuseSubmission(error)) {
+        pendingRef.current = null;
+      }
+
+      if (error instanceof ApiError && error.status === 409) {
         onCredentialsReload();
+        onInstanceRefresh();
       }
 
       notifications.show({
@@ -92,7 +140,8 @@ export function ValkeyPasswordModal({
         title: 'Не удалось сменить пароль',
       });
     } finally {
-      if (attemptRef.current === attempt) {
+      if (attemptRef.current === attempt && requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
         setLoading(false);
       }
     }
@@ -123,12 +172,6 @@ export function ValkeyPasswordModal({
             value={revealed.password}
             readOnly
           />
-
-          {revealed.source === 'rotation' && (
-            <Text c="h3_text_2" size="h3_sm">
-              Состояние: Применяется
-            </Text>
-          )}
 
           <Group justify="space-between">
             <CopyButton value={revealed.password}>
@@ -170,6 +213,12 @@ export function ValkeyPasswordModal({
             </Button>
             <Button
               aria-label="Подтвердить смену пароля"
+              disabled={
+                instance.isUpdating ||
+                instance.isStale ||
+                instance.status === 'deleting' ||
+                (instance.status !== 'running' && instance.status !== 'degraded')
+              }
               loading={loading}
               onClick={() => void rotate()}
               variant={buttonVariants.accent}

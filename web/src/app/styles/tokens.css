@@ -164,6 +164,13 @@
   --h3-disabled-color: var(--h3-gray-3);
   --h3-error: #fa5252;
 
+  --h3-status-running: #379a64;
+  --h3-status-progress: #1864ab;
+  --h3-status-warning: #d97706;
+  --h3-status-deleting: #d9480f;
+  --h3-status-error: #e03131;
+  --h3-status-deleted: #6e6e6e;
+
   /* Подсветка кода: Atom One Light, как в блоках исходной консоли. */
   --h3-code-text: #383a42;
   --h3-code-comment: #a0a1a7;
@@ -214,6 +221,13 @@
   --h3-disabled: var(--h3-gray-7);
   --h3-disabled-color: var(--h3-gray-6);
   --h3-error: #e03131;
+
+  --h3-status-running: #51ba81;
+  --h3-status-progress: #74c0fc;
+  --h3-status-warning: #fab005;
+  --h3-status-deleting: #ff922b;
+  --h3-status-error: #ff6b6b;
+  --h3-status-deleted: #8f8f8f;
 
   /* Подсветка кода: Atom One Dark на поверхности консоли. */
   --h3-code-text: #abb2bf;

@@ -3,6 +3,10 @@ import { createUuidV7 } from '@/shared/lib';
 export type ApiErrorCode =
   | 'CONFLICT'
   | 'IDEMPOTENCY_MISMATCH'
+  | 'INSTANCE_NOT_READY'
+  | 'NOT_ENOUGH_RESOURCES'
+  | 'OPERATION_IN_PROGRESS'
+  | 'QUOTA_EXCEEDED'
   | 'RATE_LIMITED'
   | 'UNAUTHORIZED'
   | 'VALIDATION_FAILED'

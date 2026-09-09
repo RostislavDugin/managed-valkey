@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, RotateCw } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import {
@@ -6,6 +6,7 @@ import {
   Alert,
   Anchor,
   Button,
+  Checkbox,
   Container,
   Group,
   Radio,
@@ -22,18 +23,23 @@ import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { ApiError } from '@/shared/api';
 import { buttonVariants, valkeyInstancePath } from '@/shared/config';
-import { getValkeyDomain, type ValkeyDomain } from '../api/valkey-config';
-import { createInstance, listInstances } from '../api/valkey-storage';
+import { createUuidV7 } from '@/shared/lib';
+import {
+  createInstance,
+  getValkeyCatalog,
+  getValkeyQuota,
+  listInstances,
+  type CreateInstanceInput,
+} from '../api/valkey-api';
 import {
   findLargestAvailableSize,
-  USER_QUOTA,
   type QuotaAmount,
   type QuotaCheck,
+  type ValkeyQuota,
 } from '../model/quota';
 import {
   formatRam,
   formatVcpu,
-  formatInstanceHost,
   generateInstanceName,
   getTotalResources,
   getSlugPreview,
@@ -43,6 +49,7 @@ import {
   parseWhitelistCidrs,
   validateWhitelistCidrs,
   type PricePeriod,
+  type ValkeyCatalog,
   type ValkeyInstance,
   type ValkeyMode,
   type ValkeySize,
@@ -50,8 +57,10 @@ import {
 import { generateValkeyPassword } from '../model/valkey-credentials';
 import {
   checkCandidateQuota,
+  getFieldErrors,
   getCreateFormDefaults,
   getRequestErrorMessage,
+  shouldReuseSubmission,
   SUPPORT_URL,
   type CreateFormValues,
 } from '../model/valkey-form';
@@ -119,16 +128,17 @@ function MaximumConfiguration({ mode, size }: { mode: ValkeyMode; size: ValkeySi
 
 interface SupportNoteProps {
   haMaximum: ValkeySize | null;
+  limit: QuotaAmount;
   quota: QuotaCheck;
   singleMaximum: ValkeySize | null;
 }
 
-function SupportNote({ haMaximum, quota, singleMaximum }: SupportNoteProps) {
+function SupportNote({ haMaximum, limit, quota, singleMaximum }: SupportNoteProps) {
   return (
     <Alert className={styles.quotaAlert} color="red" title="Недостаточно квоты" variant="light">
       <Stack align="flex-start" gap="h3_sm">
         <Stack gap="h3_xs">
-          <Text size="h3_sm">Ваша квота: {formatResources(USER_QUOTA)}.</Text>
+          <Text size="h3_sm">Ваша квота: {formatResources(limit)}.</Text>
           <Text size="h3_sm">Свободно сейчас: {formatResources(quota.available)}.</Text>
           <Text size="h3_sm">
             Для выбранной конфигурации не хватает: {formatMissingResources(quota)}.
@@ -156,10 +166,20 @@ export function CreateValkeyPage() {
   const navigate = useNavigate();
 
   const [instances, setInstances] = useState<ValkeyInstance[] | null>(null);
-  const [domain, setDomain] = useState<ValkeyDomain | null>(null);
+  const [catalog, setCatalog] = useState<ValkeyCatalog | null>(null);
+  const [quotaSnapshot, setQuotaSnapshot] = useState<ValkeyQuota | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<PricePeriod>('month');
   const [submitting, setSubmitting] = useState(false);
+  const defaultsAppliedRef = useRef(false);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const submissionControllerRef = useRef<AbortController | null>(null);
+  const pendingSubmissionRef = useRef<{
+    fingerprint: string;
+    idempotencyKey: string;
+    input: CreateInstanceInput;
+  } | null>(null);
 
   const form = useForm<CreateFormValues>({
     mode: 'controlled',
@@ -171,6 +191,7 @@ export function CreateValkeyPage() {
       ramGb: 1,
       isWhitelistEnabled: false,
       whitelist: '',
+      confirmDenyAll: false,
     },
     validateInputOnBlur: true,
     validate: {
@@ -178,30 +199,72 @@ export function CreateValkeyPage() {
       prefix: (value) => validateInstancePrefix(value.trim()),
       whitelist: (value, formValues) =>
         formValues.isWhitelistEnabled ? validateWhitelistCidrs(value) : null,
+      confirmDenyAll: (value, formValues) =>
+        formValues.isWhitelistEnabled &&
+        parseWhitelistCidrs(formValues.whitelist).length === 0 &&
+        !value
+          ? 'Подтвердите закрытие доступа всем'
+          : null,
     },
   });
 
   const { setValues } = form;
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    setInstances(null);
+  const load = useCallback(
+    async (signal: AbortSignal) => {
+      setLoading(true);
+      setLoadError(null);
 
-    try {
-      // Недоступный домен не мешает создать базу, поэтому подсказка обходится
-      // без него, а форма открывается как обычно.
-      const [loaded, loadedDomain] = await Promise.all([
-        listInstances(session.userId),
-        getValkeyDomain().catch(() => null),
+      const [instancesResult, catalogResult, quotaResult] = await Promise.allSettled([
+        listInstances(signal),
+        getValkeyCatalog(signal),
+        getValkeyQuota(signal),
       ]);
+      if (signal.aborted) {
+        return;
+      }
 
-      setInstances(loaded);
-      setDomain(loadedDomain);
-      setValues(getCreateFormDefaults(loaded));
-    } catch (error) {
-      setLoadError(getRequestErrorMessage(error));
-    }
-  }, [session.userId, setValues]);
+      if (instancesResult.status === 'fulfilled') {
+        setInstances(instancesResult.value);
+      }
+      if (catalogResult.status === 'fulfilled') {
+        setCatalog(catalogResult.value);
+      }
+      if (quotaResult.status === 'fulfilled') {
+        setQuotaSnapshot(quotaResult.value);
+      }
+      if (
+        !defaultsAppliedRef.current &&
+        instancesResult.status === 'fulfilled' &&
+        quotaResult.status === 'fulfilled'
+      ) {
+        const sizes =
+          catalogResult.status === 'fulfilled'
+            ? catalogResult.value.items
+            : [{ vcpu: 1, ramGb: 1 }];
+        setValues(getCreateFormDefaults(instancesResult.value, sizes, quotaResult.value));
+        defaultsAppliedRef.current = true;
+      }
+
+      const failed = [instancesResult, catalogResult, quotaResult].find(
+        (result): result is PromiseRejectedResult =>
+          result.status === 'rejected' &&
+          !(result.reason instanceof DOMException && result.reason.name === 'AbortError')
+      );
+      if (failed) {
+        setLoadError(getRequestErrorMessage(failed.reason));
+      }
+      setLoading(false);
+    },
+    [session.userId, setValues]
+  );
+
+  const retryLoad = () => {
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+    void load(controller.signal);
+  };
 
   useEffect(() => {
     setTrailingCrumb('Создание БД');
@@ -209,58 +272,146 @@ export function CreateValkeyPage() {
   }, [setTrailingCrumb]);
 
   useEffect(() => {
-    void load();
+    defaultsAppliedRef.current = false;
+    setInstances(null);
+    setCatalog(null);
+    setQuotaSnapshot(null);
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
+    void load(controller.signal);
+
+    return () => {
+      loadControllerRef.current?.abort();
+    };
   }, [load]);
+
+  useEffect(() => {
+    const clearPending = () => {
+      submissionControllerRef.current?.abort();
+      submissionControllerRef.current = null;
+      pendingSubmissionRef.current = null;
+    };
+    window.addEventListener('pagehide', clearPending);
+    return () => {
+      window.removeEventListener('pagehide', clearPending);
+      clearPending();
+    };
+  }, [session.userId]);
 
   const values = form.getValues();
   const size = { vcpu: values.vcpu, ramGb: values.ramGb };
-  const quota = checkCandidateQuota(instances ?? [], { size, mode: values.mode });
-  const singleMaximum = findLargestAvailableSize(instances ?? [], 'single');
-  const haMaximum = findLargestAvailableSize(instances ?? [], 'ha');
+  const quota = quotaSnapshot
+    ? checkCandidateQuota(quotaSnapshot, { size, mode: values.mode })
+    : null;
+  const singleMaximum =
+    catalog && quotaSnapshot
+      ? findLargestAvailableSize(catalog.items, quotaSnapshot, 'single')
+      : null;
+  const haMaximum =
+    catalog && quotaSnapshot ? findLargestAvailableSize(catalog.items, quotaSnapshot, 'ha') : null;
 
   const slugPreview = getSlugPreview(values.prefix.trim() || 'valkey');
-  const addressPreview = domain ? formatInstanceHost(slugPreview, domain.domain) : slugPreview;
+  const addressPreview = catalog ? `${slugPreview}.${catalog.connection.domain}` : slugPreview;
+  const needsDenyAllConfirmation =
+    values.isWhitelistEnabled &&
+    parseWhitelistCidrs(values.whitelist).length === 0 &&
+    !values.confirmDenyAll;
 
   const submit = async (formValues: CreateFormValues) => {
     setSubmitting(true);
-    const password = generateValkeyPassword();
+    const input: CreateInstanceInput = {
+      name: formValues.name.trim(),
+      prefix: formValues.prefix.trim(),
+      mode: formValues.mode,
+      vcpu: formValues.vcpu,
+      ramGb: formValues.ramGb,
+      password: '',
+      isWhitelistEnabled: formValues.isWhitelistEnabled,
+      whitelistCidrs: formValues.isWhitelistEnabled
+        ? parseWhitelistCidrs(formValues.whitelist)
+        : [],
+    };
+    const fingerprint = JSON.stringify({ ...input, password: undefined });
+    const existing = pendingSubmissionRef.current;
+    const submission =
+      existing?.fingerprint === fingerprint
+        ? existing
+        : {
+            fingerprint,
+            idempotencyKey: createUuidV7(),
+            input: { ...input, password: generateValkeyPassword() },
+          };
+    pendingSubmissionRef.current = submission;
+    const controller = new AbortController();
+    submissionControllerRef.current = controller;
 
     try {
-      const created = await createInstance(session, {
-        name: formValues.name.trim(),
-        prefix: formValues.prefix.trim(),
-        mode: formValues.mode,
-        vcpu: formValues.vcpu,
-        ramGb: formValues.ramGb,
-        password,
-        isWhitelistEnabled: formValues.isWhitelistEnabled,
-        whitelistCidrs: formValues.isWhitelistEnabled
-          ? parseWhitelistCidrs(formValues.whitelist)
-          : [],
-      });
+      const created = await createInstance(
+        submission.input,
+        submission.idempotencyKey,
+        controller.signal
+      );
+      if (submissionControllerRef.current !== controller) {
+        return;
+      }
 
-      notifications.show({ message: `База ${created.name} готова.`, title: 'База создана' });
+      pendingSubmissionRef.current = null;
+      setEphemeralPassword({
+        instanceId: created.id,
+        password: submission.input.password,
+        source: 'creation',
+      });
       await navigate(valkeyInstancePath(created.id));
-      setEphemeralPassword({ instanceId: created.id, password, source: 'creation' });
     } catch (error) {
       if (
-        error instanceof ApiError &&
-        (error.code === 'CONFLICT' || error.code === 'VALIDATION_FAILED')
+        submissionControllerRef.current !== controller ||
+        (error instanceof DOMException && error.name === 'AbortError')
       ) {
-        form.setFieldError('name', error.message);
-      } else {
-        notifications.show({
-          color: 'red',
-          message: getRequestErrorMessage(error),
-          title: 'Не удалось создать базу',
-        });
+        return;
       }
+      if (!shouldReuseSubmission(error)) {
+        pendingSubmissionRef.current = null;
+      }
+      if (error instanceof ApiError) {
+        const fields = getFieldErrors(error);
+        for (const field of ['name', 'prefix', 'mode'] as const) {
+          if (fields[field]) {
+            form.setFieldError(field, error.message);
+          }
+        }
+        if (error.code === 'CONFLICT' && error.details?.field === 'name') {
+          form.setFieldError('name', error.message);
+        }
+        if (error.code === 'QUOTA_EXCEEDED' || error.code === 'NOT_ENOUGH_RESOURCES') {
+          try {
+            const updatedQuota = await getValkeyQuota(controller.signal);
+            if (submissionControllerRef.current === controller) {
+              setQuotaSnapshot(updatedQuota);
+            }
+          } catch (quotaError) {
+            if (
+              submissionControllerRef.current === controller &&
+              !(quotaError instanceof DOMException && quotaError.name === 'AbortError')
+            ) {
+              setQuotaSnapshot(null);
+            }
+          }
+        }
+      }
+      notifications.show({
+        color: 'red',
+        message: getRequestErrorMessage(error),
+        title: 'Не удалось создать базу',
+      });
     } finally {
+      if (submissionControllerRef.current === controller) {
+        submissionControllerRef.current = null;
+      }
       setSubmitting(false);
     }
   };
 
-  if (loadError) {
+  if (loadError && (!instances || !quotaSnapshot)) {
     return (
       <Container className={styles.page} size="h3_page">
         <Alert color="red" title="Не удалось открыть форму">
@@ -268,7 +419,7 @@ export function CreateValkeyPage() {
             <Text size="h3_sm">{loadError}</Text>
             <Button
               leftSection={<RotateCw aria-hidden="true" size={16} strokeWidth={1.5} />}
-              onClick={() => void load()}
+              onClick={retryLoad}
               variant={buttonVariants.secondary}
             >
               Повторить
@@ -279,7 +430,7 @@ export function CreateValkeyPage() {
     );
   }
 
-  if (!instances) {
+  if (!instances || !quotaSnapshot || !quota || (loading && !defaultsAppliedRef.current)) {
     return (
       <Container className={styles.page} size="h3_page">
         <Stack gap="h3_md">
@@ -296,15 +447,37 @@ export function CreateValkeyPage() {
   return (
     <Container className={styles.page} size="h3_page">
       <ValkeyAside
-        header={<PricePeriodTabs onChange={setPeriod} period={period} />}
+        header={catalog ? <PricePeriodTabs onChange={setPeriod} period={period} /> : undefined}
         label="Стоимость"
       >
-        <PricePanel mode={values.mode} period={period} size={size} />
+        {catalog ? (
+          <PricePanel mode={values.mode} period={period} pricing={catalog.pricing} size={size} />
+        ) : (
+          <Text c="h3_text_2" size="h3_sm">
+            Стоимость появится после загрузки каталога.
+          </Text>
+        )}
       </ValkeyAside>
 
       <Title className={styles.pageTitle} order={1}>
         Новая Valkey база
       </Title>
+
+      {loadError ? (
+        <Alert color="red" mb="h3_lg" title="Не удалось загрузить каталог">
+          <Stack align="flex-start" gap="h3_sm">
+            <Text size="h3_sm">{loadError}</Text>
+            <Button
+              leftSection={<RotateCw aria-hidden="true" size={16} strokeWidth={1.5} />}
+              loading={loading}
+              onClick={retryLoad}
+              variant={buttonVariants.secondary}
+            >
+              Повторить
+            </Button>
+          </Stack>
+        </Alert>
+      ) : null}
 
       <form onSubmit={form.onSubmit((formValues) => void submit(formValues))}>
         <Stack gap="h3_lg">
@@ -348,17 +521,26 @@ export function CreateValkeyPage() {
             </Radio.Group>
           </FormRow>
 
-          <SizePlans
-            isAvailable={(plan) =>
-              checkCandidateQuota(instances, { size: plan, mode: values.mode }).fits
-            }
-            mode={values.mode}
-            onChange={(next) => setValues({ vcpu: next.vcpu, ramGb: next.ramGb })}
-            size={size}
-          />
+          {catalog ? (
+            <SizePlans
+              isAvailable={(plan) =>
+                checkCandidateQuota(quotaSnapshot, { size: plan, mode: values.mode }).fits
+              }
+              mode={values.mode}
+              onChange={(next) => setValues({ vcpu: next.vcpu, ramGb: next.ramGb })}
+              plans={catalog.items}
+              pricing={catalog.pricing}
+              size={size}
+            />
+          ) : null}
 
-          {!quota.fits && (
-            <SupportNote haMaximum={haMaximum} quota={quota} singleMaximum={singleMaximum} />
+          {catalog && !quota.fits && (
+            <SupportNote
+              haMaximum={haMaximum}
+              limit={quotaSnapshot.limit}
+              quota={quota}
+              singleMaximum={singleMaximum}
+            />
           )}
 
           <FormRow
@@ -421,20 +603,29 @@ export function CreateValkeyPage() {
               />
 
               {values.isWhitelistEnabled && (
-                <Textarea
-                  description="По одному IPv4-адресу или диапазону CIDR в строке"
-                  label="Разрешённые адреса"
-                  placeholder={'203.0.113.10\n198.51.100.0/24'}
-                  rows={3}
-                  {...form.getInputProps('whitelist')}
-                />
+                <Stack gap="h3_sm">
+                  <Textarea
+                    description="По одному IPv4-адресу или диапазону CIDR в строке"
+                    label="Разрешённые адреса"
+                    placeholder={'203.0.113.10\n198.51.100.0/24'}
+                    rows={3}
+                    {...form.getInputProps('whitelist')}
+                  />
+
+                  {parseWhitelistCidrs(values.whitelist).length === 0 ? (
+                    <Checkbox
+                      label="Запретить все подключения к базе"
+                      {...form.getInputProps('confirmDenyAll', { type: 'checkbox' })}
+                    />
+                  ) : null}
+                </Stack>
               )}
             </Stack>
           </FormRow>
 
           <FormRow>
             <Button
-              disabled={!quota.fits}
+              disabled={!catalog || !quota.fits || needsDenyAllConfirmation}
               mt="h3_md"
               loading={submitting}
               type="submit"

@@ -40,6 +40,7 @@ export function ValkeyLayout() {
   const [trailingCrumb, setTrailingCrumb] = useState<string | null>(null);
   const [ephemeralPassword, setEphemeralPassword] = useState<EphemeralValkeyPassword | null>(null);
   const previousPathnameRef = useRef(pathname);
+  const previousUserIdRef = useRef(session.userId);
 
   const clearEphemeralPassword = useCallback(() => setEphemeralPassword(null), []);
 
@@ -47,6 +48,13 @@ export function ValkeyLayout() {
     window.addEventListener('pagehide', clearEphemeralPassword);
     return () => window.removeEventListener('pagehide', clearEphemeralPassword);
   }, [clearEphemeralPassword]);
+
+  useEffect(() => {
+    if (previousUserIdRef.current !== session.userId) {
+      clearEphemeralPassword();
+      previousUserIdRef.current = session.userId;
+    }
+  }, [clearEphemeralPassword, session.userId]);
 
   useEffect(() => {
     const pathnameChanged = previousPathnameRef.current !== pathname;

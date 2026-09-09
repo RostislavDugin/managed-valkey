@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
+	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
@@ -15,13 +17,28 @@ type Repository interface {
 	UserExists(context.Context, string) (bool, error)
 	FindUserByEmail(context.Context, string) (store.User, error)
 	FindUserByID(context.Context, uuid.UUID) (store.User, error)
-	Register(context.Context, store.Registration) (store.User, bool, error)
-	RecordLogin(context.Context, store.User, string, time.Time) error
-	GetQuota(context.Context, uuid.UUID) (store.UserQuota, error)
+	FindUserByIDInTx(context.Context, *gorm.DB, uuid.UUID) (store.User, error)
+	DeleteExpiredRegistrationKeys(context.Context, *gorm.DB, time.Time) error
+	FindRegistrationKey(context.Context, *gorm.DB, uuid.UUID) (store.AuthRegistrationKey, bool, error)
+	CreateUser(context.Context, *gorm.DB, *store.User) error
+	CreateUserQuota(context.Context, *gorm.DB, *store.UserQuota) error
+	CreateRegistrationKey(context.Context, *gorm.DB, *store.AuthRegistrationKey) error
+	FindRegistration(context.Context, uuid.UUID, time.Time) (store.User, bool, error)
+	GetQuotaUsage(context.Context, uuid.UUID) (store.QuotaUsage, error)
+}
+
+type TxRunner interface {
+	WithinTransaction(context.Context, func(*gorm.DB) error) error
+}
+
+type AuditWriter interface {
+	Write(context.Context, *gorm.DB, audit.Event) error
 }
 
 type Service struct {
 	repository Repository
+	txRunner   TxRunner
+	audit      AuditWriter
 	tokens     *TokenService
 	clock      Clock
 	dummyHash  string
@@ -47,13 +64,26 @@ type CurrentUser struct {
 	UsedRAMGB int
 }
 
-func NewService(repository Repository, tokens *TokenService, clock Clock) (*Service, error) {
+func NewService(
+	repository Repository,
+	txRunner TxRunner,
+	auditWriter AuditWriter,
+	tokens *TokenService,
+	clock Clock,
+) (*Service, error) {
 	dummyHash, err := HashPassword("unknown-user-password")
 	if err != nil {
 		return nil, err
 	}
 
-	return &Service{repository: repository, tokens: tokens, clock: clock, dummyHash: dummyHash}, nil
+	return &Service{
+		repository: repository,
+		txRunner:   txRunner,
+		audit:      auditWriter,
+		tokens:     tokens,
+		clock:      clock,
+		dummyHash:  dummyHash,
+	}, nil
 }
 
 func (s *Service) CheckEmail(ctx context.Context, input string) (bool, error) {
@@ -84,10 +114,64 @@ func (s *Service) Register(ctx context.Context, input Registration) (string, err
 		return "", err
 	}
 
-	user, replay, err := s.repository.Register(ctx, store.Registration{
-		Key: input.Key, Email: email, PasswordHash: passwordHash,
-		RequestID: input.RequestID, Now: s.clock.Now().UTC(),
+	now := s.clock.Now().UTC()
+	var user store.User
+	var replay bool
+	err = s.txRunner.WithinTransaction(ctx, func(tx *gorm.DB) error {
+		if deleteErr := s.repository.DeleteExpiredRegistrationKeys(ctx, tx, now.Add(-24*time.Hour)); deleteErr != nil {
+			return deleteErr
+		}
+
+		key, found, findErr := s.repository.FindRegistrationKey(ctx, tx, input.Key)
+		if findErr != nil {
+			return findErr
+		}
+		if found {
+			registered, userErr := s.repository.FindUserByIDInTx(ctx, tx, key.UserID)
+			if userErr != nil {
+				return userErr
+			}
+
+			user = registered
+			replay = true
+
+			return nil
+		}
+
+		user = store.User{Email: email, PasswordHash: passwordHash, CreatedAt: now}
+		if createErr := s.repository.CreateUser(ctx, tx, &user); createErr != nil {
+			return createErr
+		}
+
+		quota := store.UserQuota{UserID: user.ID, MaxVCPU: 4, MaxRAMGB: 16}
+		if quotaErr := s.repository.CreateUserQuota(ctx, tx, &quota); quotaErr != nil {
+			return quotaErr
+		}
+
+		if auditErr := s.audit.Write(ctx, tx, audit.Event{
+			UserID: user.ID, UserEmail: user.Email, Action: audit.ActionUserRegister,
+			RequestID: input.RequestID, CreatedAt: now,
+		}); auditErr != nil {
+			return auditErr
+		}
+
+		key = store.AuthRegistrationKey{Key: input.Key, UserID: user.ID, CreatedAt: now}
+
+		return s.repository.CreateRegistrationKey(ctx, tx, &key)
 	})
+	if err != nil {
+		if errors.Is(err, store.ErrRegistrationKeyConflict) || errors.Is(err, store.ErrEmailConflict) {
+			accepted, found, findErr := s.repository.FindRegistration(ctx, input.Key, now.Add(-24*time.Hour))
+			if findErr != nil {
+				return "", apierr.WrapInternal(findErr)
+			}
+			if found {
+				user = accepted
+				replay = true
+				err = nil
+			}
+		}
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrEmailConflict) {
 			existing, findErr := s.repository.FindUserByEmail(ctx, email)
@@ -135,7 +219,13 @@ func (s *Service) Login(ctx context.Context, input Credentials, requestID string
 		return "", unauthorized()
 	}
 
-	if err := s.repository.RecordLogin(ctx, user, requestID, s.clock.Now().UTC()); err != nil {
+	now := s.clock.Now().UTC()
+	if err := s.txRunner.WithinTransaction(ctx, func(tx *gorm.DB) error {
+		return s.audit.Write(ctx, tx, audit.Event{
+			UserID: user.ID, UserEmail: user.Email, Action: audit.ActionUserLogin,
+			RequestID: requestID, CreatedAt: now,
+		})
+	}); err != nil {
 		return "", apierr.WrapInternal(err)
 	}
 
@@ -162,13 +252,13 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (CurrentUser, error)
 		return CurrentUser{}, unauthorized()
 	}
 
-	quota, err := s.repository.GetQuota(ctx, userID)
+	quota, err := s.repository.GetQuotaUsage(ctx, userID)
 	if err != nil {
 		return CurrentUser{}, apierr.WrapInternal(err)
 	}
 
 	return CurrentUser{
 		ID: user.ID, Email: user.Email, MaxVCPU: quota.MaxVCPU, MaxRAMGB: quota.MaxRAMGB,
-		UsedVCPU: 0, UsedRAMGB: 0,
+		UsedVCPU: quota.UsedVCPU, UsedRAMGB: quota.UsedRAMGB,
 	}, nil
 }

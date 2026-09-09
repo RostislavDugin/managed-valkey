@@ -20,7 +20,11 @@ func TestKnownErrors(t *testing.T) {
 		{code: apierr.CodeUnauthorized, want: http.StatusUnauthorized},
 		{code: apierr.CodeNotFound, want: http.StatusNotFound},
 		{code: apierr.CodeConflict, want: http.StatusConflict},
+		{code: apierr.CodeOperationInProgress, want: http.StatusConflict},
+		{code: apierr.CodeInstanceNotReady, want: http.StatusConflict},
 		{code: apierr.CodeIdempotencyMismatch, want: http.StatusUnprocessableEntity},
+		{code: apierr.CodeQuotaExceeded, want: http.StatusUnprocessableEntity},
+		{code: apierr.CodeNotEnoughResources, want: http.StatusUnprocessableEntity},
 		{code: apierr.CodeRateLimited, want: http.StatusTooManyRequests},
 		{code: apierr.CodeUnavailable, want: http.StatusServiceUnavailable},
 	}

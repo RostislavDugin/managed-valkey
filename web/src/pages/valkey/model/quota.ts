@@ -1,20 +1,13 @@
-import {
-  getTotalResources,
-  isValidSize,
-  RAM_OPTIONS,
-  VALKEY_PLANS,
-  VCPU_OPTIONS,
-  type ValkeyInstance,
-  type ValkeyMode,
-  type ValkeySize,
-} from './valkey';
-
-/** Квота пользователя по умолчанию из SYSTEM.md. Интерфейса для её правки нет. */
-export const USER_QUOTA = { vcpu: 4, ramGb: 16 } as const;
+import { getNodeCount, type ValkeyInstance, type ValkeyMode, type ValkeySize } from './valkey';
 
 export interface QuotaAmount {
   vcpu: number;
   ramGb: number;
+}
+
+export interface ValkeyQuota {
+  limit: QuotaAmount;
+  usage: QuotaAmount;
 }
 
 export interface QuotaCheck {
@@ -22,78 +15,67 @@ export interface QuotaCheck {
   used: QuotaAmount;
   available: QuotaAmount;
   required: QuotaAmount;
+  requested: QuotaAmount;
   missing: QuotaAmount;
 }
 
-/**
- * При изменении тарифа текущий размер базы исключается: иначе он считался бы
- * дважды и не дал бы уменьшить базу.
- */
-export function getQuotaUsage(
-  instances: ValkeyInstance[],
-  excludeInstanceId?: string
-): QuotaAmount {
-  return instances
-    .filter((instance) => instance.id !== excludeInstanceId)
-    .reduce(
-      (usage, instance) => {
-        const total = getTotalResources(instance, instance.mode);
-        return { vcpu: usage.vcpu + total.vcpu, ramGb: usage.ramGb + total.ramGb };
-      },
-      { vcpu: 0, ramGb: 0 }
-    );
+export function getInstanceReserve(instance: ValkeyInstance): QuotaAmount {
+  const nodes = getNodeCount(instance.mode);
+  return {
+    vcpu: nodes * Math.max(instance.vcpu, instance.appliedVcpu),
+    ramGb: nodes * Math.max(instance.ramGb, instance.appliedRamGb),
+  };
 }
 
 export function checkQuota(
-  instances: ValkeyInstance[],
+  quota: ValkeyQuota,
   candidate: { size: ValkeySize; mode: ValkeyMode },
-  excludeInstanceId?: string
+  current?: ValkeyInstance
 ): QuotaCheck {
-  const used = getQuotaUsage(instances, excludeInstanceId);
-  const available = {
-    vcpu: USER_QUOTA.vcpu - used.vcpu,
-    ramGb: USER_QUOTA.ramGb - used.ramGb,
+  const previous = current ? getInstanceReserve(current) : { vcpu: 0, ramGb: 0 };
+  const nodes = getNodeCount(candidate.mode);
+  const required = {
+    vcpu: nodes * Math.max(candidate.size.vcpu, current?.appliedVcpu ?? 0),
+    ramGb: nodes * Math.max(candidate.size.ramGb, current?.appliedRamGb ?? 0),
   };
-  const required = getTotalResources(candidate.size, candidate.mode);
+  const requested = {
+    vcpu: quota.usage.vcpu - previous.vcpu + required.vcpu,
+    ramGb: quota.usage.ramGb - previous.ramGb + required.ramGb,
+  };
   const missing = {
-    vcpu: Math.max(0, required.vcpu - available.vcpu),
-    ramGb: Math.max(0, required.ramGb - available.ramGb),
+    vcpu: Math.max(0, requested.vcpu - quota.limit.vcpu),
+    ramGb: Math.max(0, requested.ramGb - quota.limit.ramGb),
   };
+  const fitsVcpu = requested.vcpu <= quota.limit.vcpu || requested.vcpu <= quota.usage.vcpu;
+  const fitsRam = requested.ramGb <= quota.limit.ramGb || requested.ramGb <= quota.usage.ramGb;
 
-  return { fits: missing.vcpu === 0 && missing.ramGb === 0, used, available, required, missing };
+  return {
+    fits: fitsVcpu && fitsRam,
+    used: quota.usage,
+    available: {
+      vcpu: Math.max(0, quota.limit.vcpu - quota.usage.vcpu),
+      ramGb: Math.max(0, quota.limit.ramGb - quota.usage.ramGb),
+    },
+    required,
+    requested,
+    missing,
+  };
 }
 
 export function findAvailableSize(
-  instances: ValkeyInstance[],
+  sizes: readonly ValkeySize[],
+  quota: ValkeyQuota,
   mode: ValkeyMode,
-  excludeInstanceId?: string
-): ValkeySize | null {
-  for (const vcpu of VCPU_OPTIONS) {
-    for (const ramGb of RAM_OPTIONS) {
-      if (!isValidSize(vcpu, ramGb)) {
-        continue;
-      }
-
-      const size = { vcpu, ramGb };
-      if (checkQuota(instances, { size, mode }, excludeInstanceId).fits) {
-        return size;
-      }
-    }
-  }
-
-  return null;
+  current?: ValkeyInstance
+) {
+  return sizes.find((size) => checkQuota(quota, { size, mode }, current).fits) ?? null;
 }
 
 export function findLargestAvailableSize(
-  instances: ValkeyInstance[],
+  sizes: readonly ValkeySize[],
+  quota: ValkeyQuota,
   mode: ValkeyMode,
-  excludeInstanceId?: string
-): ValkeySize | null {
-  for (const size of [...VALKEY_PLANS].reverse()) {
-    if (checkQuota(instances, { size, mode }, excludeInstanceId).fits) {
-      return size;
-    }
-  }
-
-  return null;
+  current?: ValkeyInstance
+) {
+  return sizes.findLast((size) => checkQuota(quota, { size, mode }, current).fits) ?? null;
 }

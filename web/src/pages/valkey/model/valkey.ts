@@ -1,58 +1,77 @@
-/** Сетка размеров, ставки и форматы взяты из SYSTEM.md, раздел 8. */
-
 export type ValkeyMode = 'single' | 'ha';
-export type ValkeyStatus = 'running' | 'degraded';
+export type ValkeyStatus =
+  | 'provisioning'
+  | 'running'
+  | 'updating'
+  | 'degraded'
+  | 'unavailable'
+  | 'error'
+  | 'deleting'
+  | 'deleted';
+export type ValkeyNetworkVerificationStatus = 'pending' | 'verified' | 'unknown';
 export type PricePeriod = 'month' | 'day' | 'hour';
-
-export const VCPU_OPTIONS = [1, 2, 4, 8, 16] as const;
-export const RAM_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 128] as const;
-
-export type ValkeyVcpu = (typeof VCPU_OPTIONS)[number];
-export type ValkeyRamGb = (typeof RAM_OPTIONS)[number];
+export type ValkeyVcpu = number;
+export type ValkeyRamGb = number;
 
 export interface ValkeySize {
   vcpu: ValkeyVcpu;
   ramGb: ValkeyRamGb;
 }
 
-export const VALKEY_PLANS: readonly ValkeySize[] = [
-  { vcpu: 1, ramGb: 1 },
-  { vcpu: 1, ramGb: 2 },
-  { vcpu: 1, ramGb: 4 },
-  { vcpu: 2, ramGb: 4 },
-  { vcpu: 2, ramGb: 8 },
-  { vcpu: 4, ramGb: 16 },
-];
+export interface ValkeyPricing {
+  vcpuCoinsPerHour: number;
+  ramGbCoinsPerHour: number;
+  hoursPerMonth: number;
+}
+
+export interface ValkeyConnection {
+  domain: string;
+  port: number;
+}
+
+export interface ValkeyCatalog {
+  items: ValkeySize[];
+  pricing: ValkeyPricing;
+  connection: ValkeyConnection;
+}
+
+export interface ValkeyMaintenance {
+  dow: number;
+  hourUtc: number;
+  durationMin: number;
+}
 
 export interface ValkeyInstance extends ValkeySize {
   id: string;
-  ownerId: string;
   name: string;
-  prefix: string;
   slug: string;
   mode: ValkeyMode;
+  appliedVcpu: number;
+  appliedRamGb: number;
+  host: string;
+  hostRo: string | null;
+  port: number;
   isWhitelistEnabled: boolean;
   whitelistCidrs: string[];
+  maintenance: ValkeyMaintenance | null;
   passwordHint: string;
   passwordVersion: number;
   appliedPasswordVersion: number;
   status: ValkeyStatus;
+  phaseReason: string | null;
+  desiredGeneration: number;
+  observedGeneration: number;
+  observedAt: string | null;
+  isStale: boolean;
+  isUpdating: boolean;
+  isRecoveryRequired: boolean;
+  networkVerificationStatus: ValkeyNetworkVerificationStatus;
+  networkVerifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  configurationRequestedAt: string;
+  deletionRequestedAt: string | null;
 }
-
-/** Ставки из SYSTEM.md: 1,25 ₽ за vCPU в час и 0,50 ₽ за 1 ГБ RAM в час. */
-const PRICE_VCPU_KOPECKS_PER_HOUR = 125;
-const PRICE_RAM_GB_KOPECKS_PER_HOUR = 50;
-
-const HOURS_IN_MONTH = 720;
-const HOURS_IN_DAY = 24;
-
-export const PRICE_PERIOD_HOURS: Record<PricePeriod, number> = {
-  month: HOURS_IN_MONTH,
-  day: HOURS_IN_DAY,
-  hour: 1,
-};
 
 export const PRICE_PERIOD_LABELS: Record<PricePeriod, string> = {
   month: 'Месяц',
@@ -72,68 +91,63 @@ export const MODE_LABELS: Record<ValkeyMode, string> = {
 };
 
 export const STATUS_LABELS: Record<ValkeyStatus, string> = {
+  provisioning: 'Создаётся',
   running: 'Работает',
+  updating: 'Обновляется',
   degraded: 'Работает с ограничениями',
+  unavailable: 'Недоступна',
+  error: 'Ошибка',
+  deleting: 'Удаляется',
+  deleted: 'Удалена',
 };
 
-/** `ha` это primary и две реплики. */
 export function getNodeCount(mode: ValkeyMode) {
   return mode === 'ha' ? 3 : 1;
 }
 
-export function isValidSize(vcpu: number, ramGb: number) {
-  return (
-    (VCPU_OPTIONS as readonly number[]).includes(vcpu) &&
-    (RAM_OPTIONS as readonly number[]).includes(ramGb) &&
-    ramGb >= vcpu &&
-    ramGb <= 16 * vcpu
-  );
+export function isCatalogSize(catalog: ValkeyCatalog, size: ValkeySize) {
+  return catalog.items.some((item) => item.vcpu === size.vcpu && item.ramGb === size.ramGb);
 }
 
-export function getRamOptions(vcpu: ValkeyVcpu): ValkeyRamGb[] {
-  return RAM_OPTIONS.filter((ramGb) => isValidSize(vcpu, ramGb));
+function periodHours(period: PricePeriod, pricing: ValkeyPricing) {
+  if (period === 'month') {
+    return pricing.hoursPerMonth;
+  }
+  return period === 'day' ? 24 : 1;
 }
 
-export function clampRamGb(vcpu: ValkeyVcpu, ramGb: number): ValkeyRamGb {
-  const options = getRamOptions(vcpu);
-  return options.reduce((closest, option) =>
-    Math.abs(option - ramGb) < Math.abs(closest - ramGb) ? option : closest
-  );
-}
-
-export function getNodeHourlyKopecks(size: ValkeySize) {
-  return PRICE_VCPU_KOPECKS_PER_HOUR * size.vcpu + PRICE_RAM_GB_KOPECKS_PER_HOUR * size.ramGb;
-}
-
-export function getHourlyKopecks(size: ValkeySize, mode: ValkeyMode) {
-  return getNodeHourlyKopecks(size) * getNodeCount(mode);
-}
-
-export function getPeriodKopecks(size: ValkeySize, mode: ValkeyMode, period: PricePeriod) {
-  return getHourlyKopecks(size, mode) * PRICE_PERIOD_HOURS[period];
+export function getPeriodCoins(
+  size: ValkeySize,
+  mode: ValkeyMode,
+  period: PricePeriod,
+  pricing: ValkeyPricing
+) {
+  const perNode = pricing.vcpuCoinsPerHour * size.vcpu + pricing.ramGbCoinsPerHour * size.ramGb;
+  return perNode * getNodeCount(mode) * periodHours(period, pricing);
 }
 
 export interface PriceBreakdown {
   nodes: number;
-  vcpuKopecks: number;
-  ramKopecks: number;
-  totalKopecks: number;
+  vcpuCoins: number;
+  ramCoins: number;
+  totalCoins: number;
 }
 
 export function getPriceBreakdown(
   size: ValkeySize,
   mode: ValkeyMode,
-  period: PricePeriod
+  period: PricePeriod,
+  pricing: ValkeyPricing
 ): PriceBreakdown {
-  const multiplier = PRICE_PERIOD_HOURS[period] * getNodeCount(mode);
-  const vcpuKopecks = PRICE_VCPU_KOPECKS_PER_HOUR * size.vcpu * multiplier;
-  const ramKopecks = PRICE_RAM_GB_KOPECKS_PER_HOUR * size.ramGb * multiplier;
+  const multiplier = periodHours(period, pricing) * getNodeCount(mode);
+  const vcpuCoins = pricing.vcpuCoinsPerHour * size.vcpu * multiplier;
+  const ramCoins = pricing.ramGbCoinsPerHour * size.ramGb * multiplier;
 
   return {
     nodes: getNodeCount(mode),
-    vcpuKopecks,
-    ramKopecks,
-    totalKopecks: vcpuKopecks + ramKopecks,
+    vcpuCoins,
+    ramCoins,
+    totalCoins: vcpuCoins + ramCoins,
   };
 }
 
@@ -148,15 +162,14 @@ function groupDigits(value: string) {
   return value.replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
 }
 
-/** Форматы чисел и денег заданы в web/DESIGN.md, раздел «Текст». */
-export function formatPrice(kopecks: number) {
-  const rubles = Math.trunc(kopecks / 100);
-  const remainder = Math.abs(kopecks % 100);
+export function formatPrice(coins: number) {
+  const rubles = Math.trunc(coins / 100);
+  const remainder = Math.abs(coins % 100);
   return `${groupDigits(String(rubles))},${String(remainder).padStart(2, '0')}${NBSP}₽`;
 }
 
-export function formatPriceWithPeriod(kopecks: number, period: PricePeriod) {
-  return `${formatPrice(kopecks)} ${PRICE_PERIOD_SUFFIXES[period]}`;
+export function formatPriceWithPeriod(coins: number, period: PricePeriod) {
+  return `${formatPrice(coins)} ${PRICE_PERIOD_SUFFIXES[period]}`;
 }
 
 export function formatRam(ramGb: number) {
@@ -172,28 +185,22 @@ export function formatSize(size: ValkeySize) {
 }
 
 export const INSTANCE_NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-
 const INSTANCE_NAME_MAX_LENGTH = 40;
 
 export function validateInstanceName(name: string) {
   if (!name) {
     return 'Введите имя базы';
   }
-
   if (name.length > INSTANCE_NAME_MAX_LENGTH) {
     return `Имя не длиннее ${INSTANCE_NAME_MAX_LENGTH} символов`;
   }
-
   if (!INSTANCE_NAME_PATTERN.test(name)) {
     return 'Строчные латинские буквы, цифры и дефис; дефис не по краям';
   }
-
   return null;
 }
 
-/** Префикс уходит в DNS-имя, поэтому правила из SYSTEM.md, раздел 5. */
 export const INSTANCE_PREFIX_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-
 export const INSTANCE_PREFIX_MIN_LENGTH = 3;
 export const INSTANCE_PREFIX_MAX_LENGTH = 20;
 export const DEFAULT_INSTANCE_PREFIX = 'valkey';
@@ -202,19 +209,15 @@ export function validateInstancePrefix(prefix: string) {
   if (!prefix) {
     return 'Введите префикс';
   }
-
   if (prefix.length < INSTANCE_PREFIX_MIN_LENGTH) {
     return `Префикс не короче ${INSTANCE_PREFIX_MIN_LENGTH} символов`;
   }
-
   if (prefix.length > INSTANCE_PREFIX_MAX_LENGTH) {
     return `Префикс не длиннее ${INSTANCE_PREFIX_MAX_LENGTH} символов`;
   }
-
   if (!INSTANCE_PREFIX_PATTERN.test(prefix)) {
     return 'Строчные латинские буквы, цифры и дефис; дефис не по краям';
   }
-
   return null;
 }
 
@@ -239,84 +242,37 @@ export function parseWhitelistCidrs(value: string) {
 
 export function validateWhitelistCidrs(value: string) {
   const cidrs = parseWhitelistCidrs(value);
-
   if (cidrs.length === 0) {
-    return 'Добавьте хотя бы один IPv4-адрес или диапазон CIDR';
+    return null;
   }
-
   for (const cidr of cidrs) {
     const [address, prefix, extra] = cidr.split('/');
-    if (extra !== undefined || !isValidIpv4(address) || !/^\d{1,2}$/.test(prefix)) {
-      return `Проверьте адрес ${cidr}`;
-    }
-
-    if (Number(prefix) > 32) {
+    if (
+      extra !== undefined ||
+      !isValidIpv4(address) ||
+      !/^\d{1,2}$/.test(prefix) ||
+      Number(prefix) > 32
+    ) {
       return `Проверьте адрес ${cidr}`;
     }
   }
-
   return null;
 }
 
 export const SLUG_SUFFIX_LENGTH = 6;
 
-const SLUG_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-
-/** Отбрасываем хвост диапазона: остаток от 256 сместил бы часть символов. */
-const SLUG_RANDOM_LIMIT = 256 - (256 % SLUG_ALPHABET.length);
-
-function randomSlugSuffix() {
-  let suffix = '';
-
-  while (suffix.length < SLUG_SUFFIX_LENGTH) {
-    for (const byte of crypto.getRandomValues(new Uint8Array(SLUG_SUFFIX_LENGTH))) {
-      if (byte < SLUG_RANDOM_LIMIT && suffix.length < SLUG_SUFFIX_LENGTH) {
-        suffix += SLUG_ALPHABET[byte % SLUG_ALPHABET.length];
-      }
-    }
-  }
-
-  return suffix;
-}
-
 export function getSlugPreview(prefix: string) {
   return `${prefix}-${'x'.repeat(SLUG_SUFFIX_LENGTH)}`;
 }
 
-export function formatInstanceHost(slug: string, domain: string) {
-  return `${slug}.${domain}`;
-}
-
-export function formatInstanceAddress(slug: string, domain: string, port: number) {
-  return `${formatInstanceHost(slug, domain)}:${port}`;
-}
-
-/** Slug уникален по всей установке, а не по одному владельцу: он адрес в DNS. */
-export function generateSlug(prefix: string, takenSlugs: readonly string[] = []) {
-  const taken = new Set(takenSlugs);
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const slug = `${prefix}-${randomSlugSuffix()}`;
-
-    if (!taken.has(slug)) {
-      return slug;
-    }
-  }
-
-  throw new Error('Не удалось подобрать свободный slug');
-}
-
 export function generateInstanceName(takenNames: readonly string[] = []) {
   const taken = new Set(takenNames);
-
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const digits = crypto.getRandomValues(new Uint32Array(1))[0] % 10_000;
     const name = `valkey-${String(digits).padStart(4, '0')}`;
-
     if (!taken.has(name)) {
       return name;
     }
   }
-
   return `valkey-${Date.now().toString().slice(-4)}`;
 }

@@ -18,15 +18,18 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { buttonVariants, routes, valkeyInstancePath } from '@/shared/config';
-import { listInstances } from '../api/valkey-storage';
+import { getValkeyCatalog, getValkeyQuota, listInstances } from '../api/valkey-api';
+import type { ValkeyQuota } from '../model/quota';
 import {
   formatPrice,
   formatRam,
   formatVcpu,
-  getPeriodKopecks,
+  getPeriodCoins,
   MODE_LABELS,
   STATUS_LABELS,
+  type ValkeyCatalog,
   type ValkeyInstance,
+  type ValkeyPricing,
 } from '../model/valkey';
 import { getRequestErrorMessage } from '../model/valkey-form';
 import { QuotaUsagePanel } from './QuotaUsagePanel';
@@ -86,7 +89,12 @@ function SortHeader({ activeKey, direction, label, sortKey, onSort }: SortHeader
   );
 }
 
-function compareInstances(left: ValkeyInstance, right: ValkeyInstance, key: SortKey) {
+function compareInstances(
+  left: ValkeyInstance,
+  right: ValkeyInstance,
+  key: SortKey,
+  pricing: ValkeyPricing
+) {
   switch (key) {
     case 'name':
       return left.name.localeCompare(right.name, 'ru', { numeric: true });
@@ -100,7 +108,8 @@ function compareInstances(left: ValkeyInstance, right: ValkeyInstance, key: Sort
       return left.ramGb - right.ramGb;
     case 'price':
       return (
-        getPeriodKopecks(left, left.mode, 'month') - getPeriodKopecks(right, right.mode, 'month')
+        getPeriodCoins(left, left.mode, 'month', pricing) -
+        getPeriodCoins(right, right.mode, 'month', pricing)
       );
   }
 }
@@ -162,36 +171,80 @@ export function ValkeyManagementPage() {
   const navigate = useNavigate();
 
   const [instances, setInstances] = useState<ValkeyInstance[] | null>(null);
+  const [catalog, setCatalog] = useState<ValkeyCatalog | null>(null);
+  const [quota, setQuota] = useState<ValkeyQuota | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
-  const load = useCallback(async () => {
-    setError(null);
-    setInstances(null);
+  const load = useCallback(
+    async (signal?: AbortSignal, showLoading = true) => {
+      setError(null);
+      if (showLoading) {
+        setInstances(null);
+      }
 
-    try {
-      setInstances(await listInstances(session.userId));
-    } catch (loadError) {
-      setError(getRequestErrorMessage(loadError));
-    }
-  }, [session.userId]);
+      try {
+        const [loadedInstances, loadedCatalog, loadedQuota] = await Promise.all([
+          listInstances(signal),
+          getValkeyCatalog(signal),
+          getValkeyQuota(signal),
+        ]);
+        if (signal?.aborted) {
+          return;
+        }
+        setInstances(loadedInstances);
+        setCatalog(loadedCatalog);
+        setQuota(loadedQuota);
+      } catch (loadError) {
+        if (loadError instanceof DOMException && loadError.name === 'AbortError') {
+          return;
+        }
+        setError(getRequestErrorMessage(loadError));
+      }
+    },
+    [session.userId]
+  );
 
   useEffect(() => {
     setTrailingCrumb(null);
   }, [setTrailingCrumb]);
 
   useEffect(() => {
-    void load();
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const poll = async (showLoading: boolean) => {
+      const startedAt = Date.now();
+      await load(controller.signal, showLoading);
+      if (!stopped) {
+        const elapsed = Date.now() - startedAt;
+        timeout = setTimeout(() => void poll(false), Math.max(0, 5_000 - elapsed));
+      }
+    };
+
+    void poll(true);
+    return () => {
+      stopped = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, [load]);
 
   const found = useMemo(() => {
+    if (!catalog) {
+      return [];
+    }
+
     const filtered = (instances ?? []).filter((instance) => matchesQuery(instance, query));
     const direction = sortDirection === 'asc' ? 1 : -1;
 
-    return filtered.toSorted((left, right) => compareInstances(left, right, sortKey) * direction);
-  }, [instances, query, sortDirection, sortKey]);
+    return filtered.toSorted(
+      (left, right) => compareInstances(left, right, sortKey, catalog.pricing) * direction
+    );
+  }, [catalog, instances, query, sortDirection, sortKey]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -211,7 +264,7 @@ export function ValkeyManagementPage() {
             <Text size="h3_sm">{error}</Text>
             <Button
               leftSection={<RotateCw aria-hidden="true" size={16} strokeWidth={1.5} />}
-              onClick={() => void load()}
+              onClick={() => void load(undefined, true)}
               variant={buttonVariants.secondary}
             >
               Повторить
@@ -222,7 +275,7 @@ export function ValkeyManagementPage() {
     );
   }
 
-  if (!instances) {
+  if (!instances || !catalog || !quota) {
     return (
       <Container className={styles.page} size="h3_page">
         <ListSkeleton />
@@ -258,7 +311,7 @@ export function ValkeyManagementPage() {
         description="Квота ограничивает количество ресурсов, которые вы можете заказать. Она защищает от случайного создания слишком большого количества серверов, например скриптом автоматизации. Чтобы увеличить квоту, обратитесь в поддержку."
         label="Квота"
       >
-        <QuotaUsagePanel instances={instances} />
+        <QuotaUsagePanel quota={quota} />
       </ValkeyAside>
 
       <Stack className={styles.managementContent}>
@@ -341,7 +394,11 @@ export function ValkeyManagementPage() {
 
                         <Table.Td>
                           <span className={styles.statusCell}>
-                            <span aria-hidden="true" className={styles.statusDot} />
+                            <span
+                              aria-hidden="true"
+                              className={styles.statusDot}
+                              data-status={instance.status}
+                            />
                             {STATUS_LABELS[instance.status]}
                           </span>
                         </Table.Td>
@@ -350,7 +407,9 @@ export function ValkeyManagementPage() {
                         <Table.Td>{formatVcpu(instance.vcpu)}</Table.Td>
                         <Table.Td>{formatRam(instance.ramGb)}</Table.Td>
                         <Table.Td>
-                          {formatPrice(getPeriodKopecks(instance, instance.mode, 'month'))}
+                          {formatPrice(
+                            getPeriodCoins(instance, instance.mode, 'month', catalog.pricing)
+                          )}
                         </Table.Td>
                       </Table.Tr>
                     ))}

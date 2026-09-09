@@ -21,7 +21,12 @@ type Probe interface {
 }
 
 // Логгер Gin не подключается: записи о запросах идут через общий slog.
-func NewRouter(logger *slog.Logger, database Probe, authService AuthService) (*gin.Engine, error) {
+func NewRouter(
+	logger *slog.Logger,
+	database Probe,
+	authService AuthService,
+	valkeyService ValkeyService,
+) (*gin.Engine, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	engine := gin.New()
@@ -40,6 +45,7 @@ func NewRouter(logger *slog.Logger, database Probe, authService AuthService) (*g
 
 	RegisterHealth(engine, database)
 	RegisterAuth(engine, authService, NewRateLimiter(auth.SystemClock{}, AuthRateLimit, AuthRateWindow))
+	RegisterValkey(engine, authService, valkeyService)
 
 	return engine, nil
 }

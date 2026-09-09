@@ -23,6 +23,13 @@
   padding-inline: var(--h3-space-lg);
 }
 
+.emptyData {
+  display: grid;
+  min-height: clamp(15rem, 45dvh, 25rem);
+  place-items: center;
+  text-align: center;
+}
+
 .asideCard {
   overflow: hidden;
   margin: 0.25rem;
@@ -227,7 +234,32 @@
   height: 0.5rem;
   flex: none;
   border-radius: var(--h3-radius-full);
-  background: #40c057;
+}
+
+.statusDot[data-status='running'] {
+  background: var(--h3-status-running);
+}
+
+.statusDot[data-status='provisioning'],
+.statusDot[data-status='updating'] {
+  background: var(--h3-status-progress);
+}
+
+.statusDot[data-status='degraded'] {
+  background: var(--h3-status-warning);
+}
+
+.statusDot[data-status='deleting'] {
+  background: var(--h3-status-deleting);
+}
+
+.statusDot[data-status='unavailable'],
+.statusDot[data-status='error'] {
+  background: var(--h3-status-error);
+}
+
+.statusDot[data-status='deleted'] {
+  background: var(--h3-status-deleted);
 }
 
 /* Иконочная кнопка размера `md` занимает 28px, для пальца нужно 44px. */

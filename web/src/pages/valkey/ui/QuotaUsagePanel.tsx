@@ -1,7 +1,7 @@
 import { Button, Progress, Stack, Text } from '@mantine/core';
 import { buttonVariants } from '@/shared/config';
-import { getQuotaUsage, USER_QUOTA } from '../model/quota';
-import { formatRam, type ValkeyInstance } from '../model/valkey';
+import type { ValkeyQuota } from '../model/quota';
+import { formatRam } from '../model/valkey';
 import { SUPPORT_URL } from '../model/valkey-form';
 import styles from './ValkeyPage.module.css';
 
@@ -35,13 +35,11 @@ function UsageRow({ format, label, total, used }: UsageRowProps) {
   );
 }
 
-export function QuotaUsagePanel({ instances }: { instances: ValkeyInstance[] }) {
-  const usage = getQuotaUsage(instances);
-
+export function QuotaUsagePanel({ quota }: { quota: ValkeyQuota }) {
   return (
     <Stack gap={0}>
-      <UsageRow format={String} label="vCPU" total={USER_QUOTA.vcpu} used={usage.vcpu} />
-      <UsageRow format={formatRam} label="RAM" total={USER_QUOTA.ramGb} used={usage.ramGb} />
+      <UsageRow format={String} label="vCPU" total={quota.limit.vcpu} used={quota.usage.vcpu} />
+      <UsageRow format={formatRam} label="RAM" total={quota.limit.ramGb} used={quota.usage.ramGb} />
 
       <div className={styles.quotaAction}>
         <Button

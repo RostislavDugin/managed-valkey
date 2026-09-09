@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
+	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
+	"github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
 
@@ -53,12 +55,34 @@ func run() error {
 
 	clock := auth.SystemClock{}
 	tokens := auth.NewTokenService(cfg.JWTSecret, clock)
-	authService, err := auth.NewService(database, tokens, clock)
+	auditService := audit.NewService(database)
+	authService, err := auth.NewService(database, database, auditService, tokens, clock)
 	if err != nil {
 		return fmt.Errorf("создать сервис авторизации: %w", err)
 	}
+	catalog, err := valkey.NewCatalog(valkey.CatalogConfig{
+		MaxVCPU:           cfg.ValkeyInstanceMaxVCPU,
+		MaxRAMGB:          cfg.ValkeyInstanceMaxRAMGB,
+		VCPUCoinsPerHour:  cfg.ValkeyVCPUPriceCoinsPerHour,
+		RAMGBCoinsPerHour: cfg.ValkeyRAMGBPriceCoinsPerHour,
+		Domain:            cfg.ValkeyBaseDomain, Port: cfg.ValkeyPublicPort,
+	})
+	if err != nil {
+		return fmt.Errorf("создать каталог Valkey: %w", err)
+	}
+	valkeyService := valkey.NewService(
+		database,
+		database,
+		auditService,
+		database,
+		clock,
+		catalog,
+		cfg.ManagedK8SNodeVCPU,
+		cfg.ManagedK8SNodeRAMGB,
+		valkey.CryptoSlugGenerator{},
+	)
 
-	router, err := api.NewRouter(logger, database, authService)
+	router, err := api.NewRouter(logger, database, authService, valkeyService)
 	if err != nil {
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}

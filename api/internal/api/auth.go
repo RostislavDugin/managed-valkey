@@ -2,9 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -16,7 +13,10 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-const userIDContextKey = "authenticated_user_id"
+const (
+	userIDContextKey = "authenticated_user_id"
+	userContextKey   = "authenticated_user"
+)
 
 type AuthService interface {
 	CheckEmail(context.Context, string) (bool, error)
@@ -144,6 +144,7 @@ func BearerAuth(service AuthService) gin.HandlerFunc {
 		}
 
 		c.Set(userIDContextKey, user.ID)
+		c.Set(userContextKey, user)
 		requestLogger := LoggerFrom(c.Request.Context()).With("user_id", user.ID.String())
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), loggerKey, requestLogger))
 		c.Next()
@@ -178,17 +179,4 @@ func meHandler(service AuthService) gin.HandlerFunc {
 			"usage": gin.H{"used_vcpu": current.UsedVCPU, "used_ram_gb": current.UsedRAMGB},
 		})
 	}
-}
-
-func decodeJSON(c *gin.Context, destination any) error {
-	decoder := json.NewDecoder(c.Request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return apierr.New(apierr.CodeValidationFailed, "Проверьте формат запроса", nil)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return apierr.New(apierr.CodeValidationFailed, "Проверьте формат запроса", nil)
-	}
-
-	return nil
 }

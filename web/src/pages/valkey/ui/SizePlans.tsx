@@ -3,9 +3,9 @@ import {
   formatPrice,
   formatRam,
   formatVcpu,
-  getPeriodKopecks,
-  VALKEY_PLANS,
+  getPeriodCoins,
   type ValkeyMode,
+  type ValkeyPricing,
   type ValkeySize,
 } from '../model/valkey';
 import { FormRow } from './FormRow';
@@ -15,7 +15,8 @@ interface SizePlansProps {
   isAvailable: (size: ValkeySize) => boolean;
   mode: ValkeyMode;
   onChange: (size: ValkeySize) => void;
-  plans?: readonly ValkeySize[];
+  plans: readonly ValkeySize[];
+  pricing: ValkeyPricing;
   size: ValkeySize;
 }
 
@@ -23,13 +24,7 @@ function planValue(size: ValkeySize) {
   return `${size.vcpu}:${size.ramGb}`;
 }
 
-export function SizePlans({
-  isAvailable,
-  mode,
-  onChange,
-  plans = VALKEY_PLANS,
-  size,
-}: SizePlansProps) {
+export function SizePlans({ isAvailable, mode, onChange, plans, pricing, size }: SizePlansProps) {
   return (
     <FormRow
       fullWidth
@@ -67,7 +62,7 @@ export function SizePlans({
                       {formatVcpu(plan.vcpu)} · {formatRam(plan.ramGb)} RAM
                     </Text>
                     <Text c={available ? 'h3_text_2' : 'red'} size="h3_xs">
-                      {formatPrice(getPeriodKopecks(plan, mode, 'month'))} / мес.
+                      {formatPrice(getPeriodCoins(plan, mode, 'month', pricing))} / мес.
                       {!available && ' · Не хватает квоты'}
                     </Text>
                   </Stack>

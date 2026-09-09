@@ -1,522 +1,304 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderValkeySection, seedSession } from '../../../../test/render';
 import {
-  renderValkeySection,
-  seedSession,
-  TEST_AUTHOR,
-  TEST_USER_ID,
-  TEST_VALKEY_PASSWORD,
-  wholeText,
-} from '../../../../test/render';
-import { rotateValkeyPassword } from '../api/valkey-credentials';
-import {
-  createInstance,
-  listInstances,
-  readAuditSnapshot,
-  VALKEY_INSTANCES_KEY,
-} from '../api/valkey-storage';
-import type { ValkeyInstance, ValkeyMode, ValkeyRamGb, ValkeyVcpu } from '../model/valkey';
-import * as credentialsModel from '../model/valkey-credentials';
+  installStatefulValkeyApi,
+  jsonResponse,
+  TEST_INSTANCE_ID,
+  valkeyInstanceDto,
+} from '../../../../test/valkey-api-fixture';
 
 const WAIT = { timeout: 10_000 };
-
-function seedInstance(name: string, mode: ValkeyMode, vcpu: ValkeyVcpu, ramGb: ValkeyRamGb) {
-  return createInstance(TEST_AUTHOR, {
-    name,
-    prefix: 'valkey',
-    mode,
-    vcpu,
-    ramGb,
-    password: TEST_VALKEY_PASSWORD,
-  });
-}
-
-async function openCard(instance: ValkeyInstance) {
-  const result = renderValkeySection(`/valkey/management/${instance.id}`);
-  await screen.findByRole('heading', { name: instance.name }, WAIT);
-  return result;
-}
-
-function dialog() {
-  return screen.getByRole('dialog');
-}
-
-beforeEach(() => {
-  seedSession();
-});
+const instancePath = `/valkey/management/${TEST_INSTANCE_ID}`;
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
-describe('карточка базы', () => {
-  it('показывает свойства базы по прямой ссылке', async () => {
-    const instance = await seedInstance('valkey-1474', 'ha', 1, 2);
-
-    await openCard(instance);
-
-    expect(screen.getByText('Работает')).toBeVisible();
-    expect(screen.getByText('Отказоустойчивый')).toBeVisible();
-    expect(screen.getByText('1 vCPU / 2 ГБ')).toBeVisible();
-    expect(screen.getByText('3 vCPU / 6 ГБ')).toBeVisible();
-    expect(screen.getByText(instance.id)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Изменить имя' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Скопировать ID' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible();
-    expect(screen.getByText('Текущая стоимость')).toBeVisible();
-    expect(screen.getByText(wholeText('4 860,00 ₽ в месяц'))).toBeVisible();
-  });
-
-  it('показывает и переключает четыре примера подключения', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+describe('управление базой Valkey', () => {
+  it('сохраняет имя и maintenance одним PATCH и перечитывает карточку', async () => {
+    const session = seedSession();
+    const api = installStatefulValkeyApi();
     const user = userEvent.setup();
 
-    await openCard(instance);
+    renderValkeySection(instancePath, session);
+    expect(await screen.findByRole('heading', { name: 'cache' }, WAIT)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Изменить имя' }));
 
-    const languageTabs = screen.getByRole('tablist', { name: 'Язык примера подключения' });
-    expect(within(languageTabs).getAllByRole('tab')).toHaveLength(4);
-    expect(screen.getByRole('tabpanel', { name: 'valkey.js' })).toHaveTextContent(
-      "import { createClient } from 'redis'"
-    );
-    expect(screen.queryByText('Подключение по TLS')).toBeNull();
-    expect(document.querySelector('.hljs-keyword')).toHaveTextContent('import');
+    const name = screen.getByRole('textbox', { name: 'Имя базы' });
+    await user.clear(name);
+    await user.type(name, 'cache-renamed');
+    await user.click(screen.getByRole('switch', { name: 'Задать окно обслуживания' }));
 
-    await user.click(within(languageTabs).getByRole('tab', { name: 'valkey.ts' }));
-    expect(screen.getByRole('tabpanel', { name: 'valkey.ts' })).toHaveTextContent(
-      'satisfies RedisClientOptions'
-    );
+    const day = screen.getByRole('textbox', { name: 'День недели, 0–6' });
+    const hour = screen.getByRole('textbox', { name: 'Час UTC, 0–23' });
+    const duration = screen.getByRole('textbox', { name: 'Длительность, минуты' });
+    await user.clear(day);
+    await user.type(day, '2');
+    await user.clear(hour);
+    await user.type(hour, '3');
+    await user.clear(duration);
+    await user.type(duration, '60');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
-    await user.click(within(languageTabs).getByRole('tab', { name: 'valkey.py' }));
-    expect(screen.getByRole('tabpanel', { name: 'valkey.py' })).toHaveTextContent('ssl=True');
-
-    await user.click(within(languageTabs).getByRole('tab', { name: 'valkey.go' }));
-    const goExample = screen.getByRole('tabpanel', { name: 'valkey.go' });
-    expect(goExample).toHaveTextContent('github.com/redis/go-redis/v9');
-    expect(goExample).toHaveTextContent('Addr: "valkey-');
-    expect(goExample).toHaveTextContent(':41379"');
-    expect(goExample).not.toHaveTextContent('host +');
-    expect(goExample).toHaveTextContent('<PASSWORD>');
-    expect(screen.getByRole('button', { name: 'Скопировать код' })).toBeVisible();
-  });
-
-  it('копирует активный пример и сворачивает общий блок', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-
-    await openCard(instance);
-
-    await user.click(screen.getByRole('tab', { name: 'valkey.py' }));
-    await user.click(screen.getByRole('button', { name: 'Скопировать код' }));
-
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('client = redis.Redis('));
-    expect(screen.getByRole('button', { name: 'Код скопирован' })).toBeVisible();
-
-    const toggle = screen.getByRole('button', { name: 'Свернуть' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await user.click(toggle);
-
-    expect(toggle).toHaveAccessibleName('Развернуть');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByRole('button', { name: 'Развернуть код' })).toBeVisible();
-
-    await user.click(screen.getByRole('tab', { name: 'valkey.go' }));
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-    await user.click(screen.getByRole('button', { name: 'Развернуть код' }));
-    expect(toggle).toHaveAccessibleName('Свернуть');
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('сохраняет статус, удаление и стоимость при переходе по вкладкам', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    const { router } = await openCard(instance);
-
-    await user.click(screen.getByRole('tab', { name: 'Мониторинг' }));
-
-    expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Работает')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Действия с базой' })).toBeVisible();
-    expect(screen.getByText('Текущая стоимость')).toBeVisible();
-    expect(screen.getByTestId('console-aside')).not.toBeEmptyDOMElement();
-
-    await router.navigate(-1);
-    expect(await screen.findByRole('heading', { name: instance.name }, WAIT)).toBeVisible();
-    expect(screen.getByText('Текущая стоимость')).toBeVisible();
-  });
-
-  it('показывает адрес базы с доменом и портом', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-
-    await openCard(instance);
-
-    expect(
-      await screen.findByText(`${instance.slug}.valkey.h3llo-demo.com:41379`, {}, WAIT)
-    ).toBeVisible();
-  });
-
-  it('сообщает, что база не найдена, и предлагает вернуться к списку', async () => {
-    renderValkeySection('/valkey/management/00000000-0000-0000-0000-000000000000');
-
-    expect(await screen.findByRole('heading', { name: 'База не найдена' }, WAIT)).toBeVisible();
-    expect(screen.getByRole('link', { name: 'К списку баз' })).toHaveAttribute(
-      'href',
-      '/valkey/management'
-    );
-  });
-});
-
-describe('учётные данные', () => {
-  it('показывает пользователя, маску и сменяет пароль с одноразовой выдачей', async () => {
-    const nextPassword = 'wxyzEFGHijklMNOPqrstUVWXyz01_234';
-    const generate = vi
-      .spyOn(credentialsModel, 'generateValkeyPassword')
-      .mockReturnValue(nextPassword);
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    const copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue();
-    await openCard(instance);
-
-    expect(await screen.findByText('app', {}, WAIT)).toBeVisible();
-    expect(screen.getByText('abcd*****')).toBeVisible();
-    expect(screen.queryByText('Готов')).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
-
-    const confirmation = screen.getByRole('dialog');
-    expect(confirmation).toHaveTextContent(
-      'Все подключения Valkey будут закрыты. Обновите пароль в приложениях.'
-    );
-    expect(generate).not.toHaveBeenCalled();
-
-    await user.click(
-      within(confirmation).getByRole('button', { name: 'Подтвердить смену пароля' })
-    );
-
-    const passwordField = await screen.findByRole('textbox', { name: 'Новый пароль' }, WAIT);
-    expect(passwordField).toHaveValue(nextPassword);
-    expect(screen.getByRole('dialog')).toHaveTextContent('Состояние: Применяется');
-    expect(localStorage.getItem(VALKEY_INSTANCES_KEY)).not.toContain(nextPassword);
-
-    await user.click(screen.getByRole('button', { name: 'Скопировать пароль' }));
-    expect(copy).toHaveBeenCalledWith(nextPassword);
-    await user.click(screen.getByRole('button', { name: 'Закрыть' }));
-
-    const rotateButton = screen.getByRole('button', { name: 'Сменить пароль' });
-    expect(rotateButton).toBeDisabled();
-    expect(screen.getByText('Применяется')).toBeVisible();
-    await waitFor(() => expect(rotateButton).toBeEnabled(), WAIT);
-    expect(screen.queryByText('Применяется')).toBeNull();
-    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
-    expect(readAuditSnapshot(TEST_USER_ID, instance.id).map((item) => item.action)).toContain(
-      'instance.password.rotate'
-    );
-
-    await user.click(rotateButton);
-    expect(screen.getByRole('dialog')).toHaveTextContent('Подключения будут разорваны');
-    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
-  });
-
-  it('оставляет остальную карточку доступной при ошибке учётных данных', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    await openCard(instance);
-    const saved = localStorage.getItem(VALKEY_INSTANCES_KEY);
-
-    localStorage.setItem(VALKEY_INSTANCES_KEY, '{"version":5,"instances":[{}]}');
-
-    expect(await screen.findByText('Не удалось загрузить пароль', {}, WAIT)).toBeVisible();
-    expect(screen.getByText('Текущий тариф')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Скопировать адрес' })).toBeVisible();
-
-    localStorage.setItem(VALKEY_INSTANCES_KEY, saved ?? '');
-    await userEvent.click(screen.getByRole('button', { name: 'Повторить' }));
-
-    expect(await screen.findByText('app', {}, WAIT)).toBeVisible();
-  });
-
-  it('предупреждает о задержке для базы с ограничениями', async () => {
-    const instance = await seedInstance('valkey-1474', 'ha', 1, 2);
-    const state = JSON.parse(localStorage.getItem(VALKEY_INSTANCES_KEY) ?? '{}') as {
-      instances: Array<{ status: string }>;
-    };
-    state.instances[0].status = 'degraded';
-    localStorage.setItem(VALKEY_INSTANCES_KEY, JSON.stringify(state));
-    const user = userEvent.setup();
-
-    await openCard(instance);
-    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
-
-    expect(screen.getByRole('dialog')).toHaveTextContent(
-      'Недоступный прежний процесс может задержать применение нового пароля.'
-    );
-  });
-
-  it('обновляет метаданные после конфликта версии и не показывает непринятый пароль', async () => {
-    const externalPassword = '2222EFGHijklMNOPqrstUVWXyz01_234';
-    const rejectedPassword = '3333EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(rejectedPassword);
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    await openCard(instance);
-    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
-
-    await rotateValkeyPassword(TEST_AUTHOR, instance.id, {
-      password: externalPassword,
-      expectedPasswordVersion: 1,
-    });
-    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
-    await user.click(
-      within(screen.getByRole('dialog')).getByRole('button', {
-        name: 'Подтвердить смену пароля',
+    await waitFor(() =>
+      expect(api.requests.find((request) => request.method === 'PATCH')?.body).toEqual({
+        name: 'cache-renamed',
+        maintenance: { dow: 2, hour_utc: 3, duration_min: 60 },
       })
     );
-
-    expect(await screen.findByText('Не удалось сменить пароль', {}, WAIT)).toBeVisible();
-    expect(screen.queryByDisplayValue(rejectedPassword)).toBeNull();
-    expect(await screen.findByText('Применяется', {}, WAIT)).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'cache-renamed' }, WAIT)).toBeVisible();
+    await waitFor(() =>
+      expect(
+        api.requests.filter(
+          (request) => request.method === 'GET' && request.path.endsWith(TEST_INSTANCE_ID)
+        ).length
+      ).toBeGreaterThan(1)
+    );
+    expect(api.requests.filter((request) => request.path === '/v1/me').length).toBeGreaterThan(1);
   });
 
-  it('не показывает пароль и не пишет аудит при ошибке запроса', async () => {
-    const rejectedPassword = '6666EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(rejectedPassword);
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+  it('отправляет whitelist с каноническим одиночным адресом', async () => {
+    const session = seedSession();
+    const api = installStatefulValkeyApi();
     const user = userEvent.setup();
-    await openCard(instance);
-    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
-    const saved = localStorage.getItem(VALKEY_INSTANCES_KEY) ?? '';
 
-    await user.click(screen.getByRole('button', { name: 'Сменить пароль' }));
-    localStorage.setItem(VALKEY_INSTANCES_KEY, '{"version":5,"instances":[{}]}');
-    await user.click(
-      within(screen.getByRole('dialog')).getByRole('button', {
-        name: 'Подтвердить смену пароля',
+    renderValkeySection(instancePath, session);
+    await screen.findByRole('heading', { name: 'cache' }, WAIT);
+    await user.click(screen.getByRole('button', { name: 'Изменить доступ по IP' }));
+    await user.click(screen.getByRole('switch', { name: 'Ограничить доступ по IP-адресам' }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Разрешённые IPv4-адреса и CIDR' }),
+      '203.0.113.10'
+    );
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() =>
+      expect(api.requests.find((request) => request.method === 'PUT')?.body).toEqual({
+        is_whitelist_enabled: true,
+        whitelist_cidrs: ['203.0.113.10/32'],
       })
     );
+    expect(await screen.findByText('203.0.113.10/32', {}, WAIT)).toBeVisible();
+  });
 
-    expect(await screen.findByText('Не удалось сменить пароль', {}, WAIT)).toBeVisible();
-    expect(screen.queryByDisplayValue(rejectedPassword)).toBeNull();
+  it('генерирует пароль только после подтверждения и очищает его по pagehide', async () => {
+    const session = seedSession();
+    const api = installStatefulValkeyApi();
+    const user = userEvent.setup();
 
-    localStorage.setItem(VALKEY_INSTANCES_KEY, saved);
-    expect(readAuditSnapshot(TEST_USER_ID, instance.id).map((item) => item.action)).toEqual([
-      'instance.create',
+    renderValkeySection(instancePath, session);
+    await screen.findByRole('heading', { name: 'cache' }, WAIT);
+    const rotateAction = await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    await user.click(rotateAction);
+    expect(api.requests.some((request) => request.path.endsWith('/credentials/rotate'))).toBe(
+      false
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Подтвердить смену пароля' }));
+
+    const passwordInput = await screen.findByRole('textbox', { name: 'Новый пароль' }, WAIT);
+    const rotateRequest = api.requests.find((request) =>
+      request.path.endsWith('/credentials/rotate')
+    );
+    const password = String(rotateRequest?.body?.password);
+    expect(rotateRequest?.body).toMatchObject({ expected_password_version: 1 });
+    expect(rotateRequest?.headers.get('Idempotency-Key')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    expect(password).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(passwordInput).toHaveValue(password);
+    expect(screen.queryByText('Состояние: Применяется')).not.toBeInTheDocument();
+    expect([...Array(localStorage.length).keys()].map((index) => localStorage.key(index))).toEqual([
+      'mv_token',
     ]);
-  });
+    expect(window.location.href).not.toContain(password);
 
-  it('не открывает пароль после закрытия ожидающего окна', async () => {
-    const nextPassword = '4444EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(nextPassword);
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    await openCard(instance);
+    window.dispatchEvent(new Event('pagehide'));
 
-    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
-    await user.click(
-      within(screen.getByRole('dialog')).getByRole('button', {
-        name: 'Подтвердить смену пароля',
-      })
+    await waitFor(() =>
+      expect(screen.queryByRole('textbox', { name: 'Новый пароль' })).not.toBeInTheDocument()
     );
-    await user.keyboard('{Escape}');
-
-    await waitFor(() => expect(readAuditSnapshot(TEST_USER_ID, instance.id)).toHaveLength(2), WAIT);
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
   });
 
-  it('очищает показанный пароль при pagehide и возврате из bfcache', async () => {
-    const nextPassword = '5555EFGHijklMNOPqrstUVWXyz01_234';
-    vi.spyOn(credentialsModel, 'generateValkeyPassword').mockReturnValue(nextPassword);
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
-    const user = userEvent.setup();
-    await openCard(instance);
+  it('показывает статус базы и блокирует новую конфигурацию', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([
+      valkeyInstanceDto({
+        status: 'provisioning',
+        applied_vcpu: 0,
+        applied_ram_gb: 0,
+        desired_generation: 1,
+        observed_generation: 0,
+        observed_at: null,
+        is_stale: true,
+        is_updating: true,
+      }),
+    ]);
 
-    await user.click(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT));
-    await user.click(
-      within(screen.getByRole('dialog')).getByRole('button', {
-        name: 'Подтвердить смену пароля',
-      })
-    );
-    expect(await screen.findByDisplayValue(nextPassword, {}, WAIT)).toBeVisible();
+    renderValkeySection(instancePath, session);
 
-    const pagehide = new Event('pagehide');
-    Object.defineProperty(pagehide, 'persisted', { value: true });
-    fireEvent(window, pagehide);
-
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull(), WAIT);
-    expect(screen.queryByDisplayValue(nextPassword)).toBeNull();
+    expect(await screen.findByText('Создаётся', {}, WAIT)).toBeVisible();
+    expect(screen.queryByText('Настройки применяются')).not.toBeInTheDocument();
+    expect(screen.queryByText('Состояние давно не обновлялось')).not.toBeInTheDocument();
+    expect(screen.queryByText('Дождитесь завершения текущей операции.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Изменить тариф' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Изменить доступ по IP' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT)).toBeDisabled();
   });
-});
 
-describe('переименование', () => {
-  it('меняет имя в карточке, крошках и списке', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 2);
+  it('обновляет статус раз в 5 секунд без перекрытия запросов', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const session = seedSession();
+    installStatefulValkeyApi();
+    const statefulFetch = window.fetch;
+    let detailCalls = 0;
+    let resolveSecond: (response: Response) => void = () => undefined;
+    const secondResponse = new Promise<Response>((resolve) => {
+      resolveSecond = resolve;
+    });
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input).endsWith(TEST_INSTANCE_ID) && (init?.method ?? 'GET') === 'GET') {
+        detailCalls += 1;
+        if (detailCalls === 1) {
+          return jsonResponse(valkeyInstanceDto({ status: 'provisioning' }));
+        }
+        if (detailCalls === 2) {
+          return secondResponse;
+        }
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
+
+    renderValkeySection(instancePath, session);
+    expect(await screen.findByText('Создаётся', {}, WAIT)).toBeVisible();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.waitFor(() => expect(detailCalls).toBe(2));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(detailCalls).toBe(2);
+
+    resolveSecond(jsonResponse(valkeyInstanceDto({ status: 'running' })));
+    await act(async () => {
+      await secondResponse;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(screen.getByText('Работает')).toBeVisible();
+    expect(detailCalls).toBe(3);
+  });
+
+  it('удерживает квоту и доступ к карточке, пока сервер подтверждает удаление', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([
+      valkeyInstanceDto({
+        status: 'deleting',
+        deletion_requested_at: '2026-09-09T00:01:00Z',
+      }),
+    ]);
     const user = userEvent.setup();
-    const { router } = await openCard(instance);
 
+    renderValkeySection(instancePath, session);
+
+    expect(await screen.findByText('Удаляется', {}, WAIT)).toBeVisible();
+    expect(screen.queryByText('База удаляется')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Действия с базой' }));
+    expect(
+      await screen.findByRole('menuitem', { name: 'Удалить', hidden: true }, WAIT)
+    ).toHaveAttribute('data-disabled', 'true');
+  });
+
+  it('сохраняет введённое имя после 409 и обновляет карточку', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi();
+    const statefulFetch = window.fetch;
+    let rejected = false;
+    let returnedRemoteState = false;
+    window.fetch = vi.fn(async (input, init) => {
+      if (!rejected && init?.method === 'PATCH') {
+        rejected = true;
+        return jsonResponse(
+          {
+            error: {
+              code: 'OPERATION_IN_PROGRESS',
+              message: 'Предыдущее изменение ещё применяется',
+              details: { desired_generation: 2, observed_generation: 1 },
+            },
+          },
+          409
+        );
+      }
+      if (
+        rejected &&
+        !returnedRemoteState &&
+        String(input).endsWith(TEST_INSTANCE_ID) &&
+        (init?.method ?? 'GET') === 'GET'
+      ) {
+        returnedRemoteState = true;
+        return jsonResponse(valkeyInstanceDto({ name: 'remote-name' }));
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
+    const user = userEvent.setup();
+
+    renderValkeySection(instancePath, session);
+    await screen.findByRole('heading', { name: 'cache' }, WAIT);
     await user.click(screen.getByRole('button', { name: 'Изменить имя' }));
+    const name = screen.getByRole('textbox', { name: 'Имя базы' });
+    await user.clear(name);
+    await user.type(name, 'kept-name');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
-    const field = within(dialog()).getByRole('textbox', { name: 'Имя базы' });
-    await user.clear(field);
-    await user.type(field, 'valkey-2222');
-    await user.click(within(dialog()).getByRole('button', { name: 'Сохранить имя' }));
+    expect(
+      await screen.findByText(
+        'Предыдущее изменение ещё применяется: подтверждено поколение 1 из 2.',
+        {},
+        WAIT
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Имя базы' })).toHaveValue('kept-name');
+    expect(await screen.findByRole('heading', { name: 'remote-name' }, WAIT)).toBeVisible();
+    expect(returnedRemoteState).toBe(true);
+  });
 
-    expect(await screen.findByRole('heading', { name: 'valkey-2222' }, WAIT)).toBeVisible();
-    expect(screen.getByRole('navigation', { name: 'Хлебные крошки' })).toHaveTextContent(
-      'valkey-2222'
-    );
+  it('игнорирует позднюю карточку после перехода к списку', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi();
+    const statefulFetch = window.fetch;
+    let resolveDetail: (response: Response) => void = () => undefined;
+    const lateDetail = new Promise<Response>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const detailSignals: AbortSignal[] = [];
+    let detailCalls = 0;
+    window.fetch = vi.fn(async (input, init) => {
+      if (String(input).endsWith(TEST_INSTANCE_ID) && (init?.method ?? 'GET') === 'GET') {
+        detailCalls += 1;
+        if (detailCalls === 1) {
+          if (init.signal instanceof AbortSignal) {
+            detailSignals.push(init.signal);
+          }
+          return lateDetail;
+        }
+      }
+      return statefulFetch(input, init);
+    });
+    globalThis.fetch = window.fetch;
 
+    const { router } = renderValkeySection(instancePath, session);
+    await vi.waitFor(() => expect(detailCalls).toBe(1));
     await router.navigate('/valkey/management');
-    expect(await screen.findByRole('link', { name: 'valkey-2222' }, WAIT)).toBeVisible();
-  });
+    expect(await screen.findByRole('heading', { name: 'Базы данных' }, WAIT)).toBeVisible();
+    expect(detailSignals[0]?.aborted).toBe(true);
 
-  it('ставит ошибку занятого имени у поля', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 1);
-    await seedInstance('valkey-2222', 'single', 1, 1);
-    const user = userEvent.setup();
-    await openCard(instance);
+    resolveDetail(jsonResponse(valkeyInstanceDto({ name: 'late-card' })));
+    await act(async () => {
+      await lateDetail;
+    });
 
-    await user.click(screen.getByRole('button', { name: 'Изменить имя' }));
-
-    const field = within(dialog()).getByRole('textbox', { name: 'Имя базы' });
-    await user.clear(field);
-    await user.type(field, 'valkey-2222');
-    await user.click(within(dialog()).getByRole('button', { name: 'Сохранить имя' }));
-
-    expect(
-      await within(dialog()).findByText('База с таким именем уже существует', {}, WAIT)
-    ).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'valkey-1474' })).toBeVisible();
-  });
-});
-
-describe('изменение тарифа', () => {
-  it('оставляет режим неизменяемым и предупреждает о простое для single', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 4, 16);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-
-    expect(within(dialog()).getByText('Одна нода, изменить нельзя')).toBeVisible();
-
-    await user.click(within(dialog()).getByRole('radio', { name: /2\s*vCPU, 8\s*ГБ RAM/ }));
-
-    expect(
-      await within(dialog()).findByText(
-        'База будет недоступна во время ресайза, кеш очистится полностью.',
-        {},
-        WAIT
-      )
-    ).toBeVisible();
-    expect(
-      within(dialog()).getByText(
-        'Ресайз нельзя отменить, новый тариф действует с момента принятия запроса.'
-      )
-    ).toBeVisible();
-    expect(within(dialog()).getByText('4 680,00 ₽ в месяц')).toBeVisible();
-
-    await user.click(within(dialog()).getByRole('button', { name: 'Изменить тариф' }));
-
-    // Тариф на ноду и суммарные ресурсы у `single` совпадают, поэтому строк две.
-    expect(await screen.findAllByText('2 vCPU / 8 ГБ', {}, WAIT)).toHaveLength(2);
-  });
-
-  it('предупреждает об очистке кеша при уменьшении RAM в ha', async () => {
-    const instance = await seedInstance('valkey-1474', 'ha', 1, 2);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-
-    await user.click(within(dialog()).getByRole('radio', { name: /1\s*vCPU, 1\s*ГБ RAM/ }));
-
-    expect(
-      await within(dialog()).findByText(
-        'Уменьшение RAM в отказоустойчивом режиме очищает кеш полностью.',
-        {},
-        WAIT
-      )
-    ).toBeVisible();
-  });
-
-  it('предупреждает о потере последних записей при остальных изменениях ha', async () => {
-    const instance = await seedInstance('valkey-1474', 'ha', 1, 1);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-
-    await user.click(within(dialog()).getByRole('radio', { name: /1\s*vCPU, 2\s*ГБ RAM/ }));
-
-    expect(
-      await within(dialog()).findByText(
-        'При смене primary можно потерять последние записи.',
-        {},
-        WAIT
-      )
-    ).toBeVisible();
-  });
-
-  it('не даёт выйти за остаток квоты', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 1);
-    await seedInstance('valkey-2222', 'single', 2, 8);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-
-    await user.click(within(dialog()).getByRole('radio', { name: /4\s*vCPU, 16\s*ГБ RAM/ }));
-
-    expect(
-      await within(dialog()).findByText(/Не хватает 2\s*vCPU и 8\s*ГБ/, {}, WAIT)
-    ).toBeVisible();
-    expect(within(dialog()).getByRole('button', { name: 'Изменить тариф' })).toBeDisabled();
-  });
-
-  it('оставляет текущую нестандартную конфигурацию среди карточек', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 4, 8);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-
-    expect(within(dialog()).getByRole('radio', { name: /4\s*vCPU, 8\s*ГБ RAM/ })).toBeChecked();
-    expect(within(dialog()).queryAllByRole('slider')).toHaveLength(0);
-    expect(dialog()).not.toHaveTextContent('На ноду');
-    expect(within(dialog()).getByRole('button', { name: 'Изменить тариф' })).toBeDisabled();
-  });
-});
-
-describe('удаление', () => {
-  it('называет базу в подтверждении и отменяется без потерь', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 1, 1);
-    const user = userEvent.setup();
-    await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Действия с базой' }));
-    await user.click(await screen.findByText('Удалить'));
-
-    expect(dialog()).toHaveTextContent('Удалить базу valkey-1474?');
-
-    await user.click(within(dialog()).getByRole('button', { name: 'Отмена' }));
-
-    await expect(listInstances(TEST_USER_ID)).resolves.toHaveLength(1);
-  });
-
-  it('удаляет базу, освобождает квоту и приводит к пустому состоянию', async () => {
-    const instance = await seedInstance('valkey-1474', 'single', 4, 16);
-    const user = userEvent.setup();
-    const { router } = await openCard(instance);
-
-    await user.click(screen.getByRole('button', { name: 'Действия с базой' }));
-    await user.click(await screen.findByText('Удалить'));
-    await user.click(within(dialog()).getByRole('button', { name: 'Удалить базу' }));
-
-    await waitFor(() => expect(router.state.location.pathname).toBe('/valkey/management'), WAIT);
-    expect(
-      await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT)
-    ).toBeVisible();
-    await expect(listInstances(TEST_USER_ID)).resolves.toHaveLength(0);
+    expect(screen.queryByRole('heading', { name: 'late-card' })).not.toBeInTheDocument();
   });
 });

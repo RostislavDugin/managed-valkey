@@ -17,45 +17,6 @@ var (
 	ErrRegistrationKeyConflict = errors.New("ключ регистрации уже занят")
 )
 
-type User struct {
-	ID           uuid.UUID `gorm:"type:uuid;default:uuidv7();primaryKey"`
-	Email        string
-	PasswordHash string
-	IsBlocked    bool
-	CreatedAt    time.Time
-}
-
-func (User) TableName() string { return "users" }
-
-type UserQuota struct {
-	UserID   uuid.UUID `gorm:"type:uuid;primaryKey"`
-	MaxVCPU  int       `gorm:"column:max_vcpu"`
-	MaxRAMGB int       `gorm:"column:max_ram_gb"`
-}
-
-func (UserQuota) TableName() string { return "user_quotas" }
-
-type AuditLog struct {
-	ID         uuid.UUID `gorm:"type:uuid;default:uuidv7();primaryKey"`
-	UserID     uuid.UUID `gorm:"type:uuid"`
-	UserEmail  string
-	Action     string
-	Service    *string
-	ResourceID *uuid.UUID `gorm:"type:uuid"`
-	RequestID  string
-	CreatedAt  time.Time
-}
-
-func (AuditLog) TableName() string { return "audit_logs" }
-
-type AuthRegistrationKey struct {
-	Key       uuid.UUID `gorm:"type:uuid;primaryKey"`
-	UserID    uuid.UUID `gorm:"type:uuid"`
-	CreatedAt time.Time
-}
-
-func (AuthRegistrationKey) TableName() string { return "auth_registration_keys" }
-
 type Registration struct {
 	Key          uuid.UUID
 	Email        string
@@ -94,79 +55,66 @@ func findUser(query *gorm.DB) (User, error) {
 	return user, nil
 }
 
-func (s *Store) Register(ctx context.Context, input Registration) (User, bool, error) {
-	var registered User
-	var replay bool
-
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("created_at <= ?", input.Now.Add(-24*time.Hour)).
-			Delete(&AuthRegistrationKey{}).
-			Error; err != nil {
-			return fmt.Errorf("удалить истёкшие ключи регистрации: %w", err)
-		}
-
-		var key AuthRegistrationKey
-		err := tx.Where("key = ?", input.Key).First(&key).Error
-		if err == nil {
-			user, findErr := findUser(tx.Where("id = ?", key.UserID))
-			if findErr != nil {
-				return findErr
-			}
-
-			registered = user
-			replay = true
-
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("прочитать ключ регистрации: %w", err)
-		}
-
-		registered = User{Email: input.Email, PasswordHash: input.PasswordHash, CreatedAt: input.Now}
-		if err := tx.Create(&registered).Error; err != nil {
-			return classifyRegistrationError(err)
-		}
-
-		quota := UserQuota{UserID: registered.ID, MaxVCPU: 4, MaxRAMGB: 16}
-		if err := tx.Create(&quota).Error; err != nil {
-			return fmt.Errorf("создать квоту пользователя: %w", err)
-		}
-
-		audit := AuditLog{
-			UserID: registered.ID, UserEmail: registered.Email, Action: "user.register",
-			RequestID: input.RequestID, CreatedAt: input.Now,
-		}
-		if err := tx.Create(&audit).Error; err != nil {
-			return fmt.Errorf("записать регистрацию в аудит: %w", err)
-		}
-
-		key = AuthRegistrationKey{Key: input.Key, UserID: registered.ID, CreatedAt: input.Now}
-		if err := tx.Create(&key).Error; err != nil {
-			return classifyRegistrationError(err)
-		}
-
-		return nil
-	})
-	if err == nil {
-		return registered, replay, nil
+func (s *Store) DeleteExpiredRegistrationKeys(ctx context.Context, tx *gorm.DB, cutoff time.Time) error {
+	if err := tx.WithContext(ctx).Where("created_at <= ?", cutoff).Delete(&AuthRegistrationKey{}).Error; err != nil {
+		return fmt.Errorf("удалить истёкшие ключи регистрации: %w", err)
 	}
 
-	if errors.Is(err, ErrRegistrationKeyConflict) || errors.Is(err, ErrEmailConflict) {
-		user, found, findErr := s.findRegistration(ctx, input.Key, input.Now)
-		if findErr != nil {
-			return User{}, false, findErr
-		}
-		if found {
-			return user, true, nil
-		}
-	}
-
-	return User{}, false, err
+	return nil
 }
 
-func (s *Store) findRegistration(ctx context.Context, keyID uuid.UUID, now time.Time) (User, bool, error) {
+func (s *Store) FindRegistrationKey(
+	ctx context.Context,
+	tx *gorm.DB,
+	keyID uuid.UUID,
+) (AuthRegistrationKey, bool, error) {
 	var key AuthRegistrationKey
-	err := s.db.WithContext(ctx).Where("key = ? AND created_at > ?", keyID, now.Add(-24*time.Hour)).First(&key).Error
+	err := tx.WithContext(ctx).Where("key = ?", keyID).First(&key).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return AuthRegistrationKey{}, false, nil
+	}
+	if err != nil {
+		return AuthRegistrationKey{}, false, fmt.Errorf("прочитать ключ регистрации: %w", err)
+	}
+
+	return key, true, nil
+}
+
+func (s *Store) FindUserByIDInTx(ctx context.Context, tx *gorm.DB, id uuid.UUID) (User, error) {
+	return findUser(tx.WithContext(ctx).Where("id = ?", id))
+}
+
+func (s *Store) CreateUser(ctx context.Context, tx *gorm.DB, user *User) error {
+	if err := tx.WithContext(ctx).Create(user).Error; err != nil {
+		return classifyRegistrationError(err)
+	}
+
+	return nil
+}
+
+func (s *Store) CreateUserQuota(ctx context.Context, tx *gorm.DB, quota *UserQuota) error {
+	if err := tx.WithContext(ctx).Create(quota).Error; err != nil {
+		return fmt.Errorf("создать квоту пользователя: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) CreateRegistrationKey(ctx context.Context, tx *gorm.DB, key *AuthRegistrationKey) error {
+	if err := tx.WithContext(ctx).Create(key).Error; err != nil {
+		return classifyRegistrationError(err)
+	}
+
+	return nil
+}
+
+func (s *Store) FindRegistration(
+	ctx context.Context,
+	keyID uuid.UUID,
+	cutoff time.Time,
+) (User, bool, error) {
+	var key AuthRegistrationKey
+	err := s.db.WithContext(ctx).Where("key = ? AND created_at > ?", keyID, cutoff).First(&key).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return User{}, false, nil
 	}
@@ -193,20 +141,6 @@ func classifyRegistrationError(err error) error {
 	}
 
 	return fmt.Errorf("создать регистрацию: %w", err)
-}
-
-func (s *Store) RecordLogin(ctx context.Context, user User, requestID string, now time.Time) error {
-	audit := AuditLog{
-		UserID: user.ID, UserEmail: user.Email, Action: "user.login", RequestID: requestID, CreatedAt: now,
-	}
-
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return tx.Create(&audit).Error
-	}); err != nil {
-		return fmt.Errorf("записать вход в аудит: %w", err)
-	}
-
-	return nil
 }
 
 func (s *Store) GetQuota(ctx context.Context, userID uuid.UUID) (UserQuota, error) {
