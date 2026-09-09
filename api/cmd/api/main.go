@@ -84,38 +84,43 @@ func run() error {
 		cfg.ManagedK8SNodeRAMGB,
 		valkey.CryptoSlugGenerator{},
 	)
-	kubernetes, err := valkeysync.NewKubernetesClient()
-	if err != nil {
-		return err
+	stopKubernetesSync := func() {}
+	if cfg.KubernetesSyncEnabled {
+		kubernetes, err := valkeysync.NewKubernetesClient()
+		if err != nil {
+			return err
+		}
+		syncService := valkeysync.NewService(database, kubernetes, logger, cfg.ValkeyMetricsRetention)
+		syncRunner := valkeysync.NewRunner(
+			config.SyncInterval,
+			config.MetricsCleanupInterval,
+			clockutils.RealClock{},
+			logger,
+			syncService.RunDelivery,
+			syncService.RunImport,
+			func(ctx context.Context) error {
+				return database.DeleteExpiredValkeyNodeMetrics(ctx, cfg.ValkeyMetricsRetention)
+			},
+		)
+		syncContext, cancelSync := context.WithCancel(ctx)
+		syncRunner.Start(syncContext)
+		stopKubernetesSync = func() {
+			cancelSync()
+			syncRunner.Wait()
+		}
+	} else {
+		logger.Warn("синхронизация с Kubernetes выключена")
 	}
-	syncService := valkeysync.NewService(database, kubernetes, logger, cfg.ValkeyMetricsRetention)
-	syncRunner := valkeysync.NewRunner(
-		config.SyncInterval,
-		config.MetricsCleanupInterval,
-		clockutils.RealClock{},
-		logger,
-		syncService.RunDelivery,
-		syncService.RunImport,
-		func(ctx context.Context) error {
-			return database.DeleteExpiredValkeyNodeMetrics(ctx, cfg.ValkeyMetricsRetention)
-		},
-	)
-	syncContext, stopSync := context.WithCancel(ctx)
-	syncRunner.Start(syncContext)
+	defer stopKubernetesSync()
 
 	router, err := api.NewRouter(logger, database, authService, valkeyService, auditService)
 	if err != nil {
-		stopSync()
-		syncRunner.Wait()
-
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}
 
 	server := api.NewServer(cfg.HTTPAddr, router, logger, config.ShutdownTimeout)
 
 	serverErr := server.Run(ctx)
-	stopSync()
-	syncRunner.Wait()
 	if serverErr != nil {
 		return serverErr
 	}

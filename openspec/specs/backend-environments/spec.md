@@ -171,7 +171,7 @@ Dev- и production-окружения SHALL запускаться Docker Compos
 
 ### Requirement: Доступ рабочего окружения к базе и логам ограничен
 
-PostgreSQL SHALL публиковаться только на `127.0.0.1:45432`, а VictoriaLogs MUST NOT публиковать порт на хост. Caddy SHALL без проверки имени и пароля передавать `POST /insert/opentelemetry/v1/logs` и `/select/*` с публичного `logs.h3llo-demo.com` во VictoriaLogs. Остальные пути домена логов SHALL возвращать 404. Caddy SHALL удалять входной заголовок `Authorization` перед передачей запроса VictoriaLogs. Рабочая конфигурация Docker Compose MUST NOT требовать секреты VictoriaLogs.
+PostgreSQL SHALL публиковаться на `0.0.0.0:45432` и требовать пароль, а VictoriaLogs MUST NOT публиковать порт на хост. Caddy SHALL без проверки имени и пароля передавать `POST /insert/opentelemetry/v1/logs` и `/select/*` с публичного `logs.h3llo-demo.com` во VictoriaLogs. Остальные пути домена логов SHALL возвращать 404. Caddy SHALL удалять входной заголовок `Authorization` перед передачей запроса VictoriaLogs. Рабочая конфигурация Docker Compose MUST NOT требовать секреты VictoriaLogs.
 
 #### Scenario: Публичный экспорт логов
 

@@ -36,6 +36,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv(config.EnvValkeyVCPUPriceCoinsPerHour, "")
 	t.Setenv(config.EnvValkeyRAMGBPriceCoinsPerHour, "")
 	t.Setenv(config.EnvValkeyMetricsRetention, "")
+	t.Setenv(config.EnvKubernetesSync, "")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -52,6 +53,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 
 	if cfg.Logging.ServiceName != config.ServiceName {
 		t.Errorf("service.name %q, ожидался %q", cfg.Logging.ServiceName, config.ServiceName)
+	}
+	if !cfg.KubernetesSyncEnabled {
+		t.Error("синхронизация Kubernetes по умолчанию выключена")
 	}
 	if cfg.ValkeyPublicPort != config.DefaultValkeyPublicPort ||
 		cfg.ValkeyVCPUPriceCoinsPerHour != config.DefaultValkeyVCPUPriceCoinsPerHour ||
@@ -71,6 +75,29 @@ func TestLoadValkeyMetricsRetention(t *testing.T) {
 	}
 	if cfg.ValkeyMetricsRetention != 36*time.Hour+30*time.Minute {
 		t.Fatalf("срок хранения %s, ожидался 36h30m", cfg.ValkeyMetricsRetention)
+	}
+}
+
+func TestLoadDisablesKubernetesSync(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvKubernetesSync, "false")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузить конфигурацию: %v", err)
+	}
+	if cfg.KubernetesSyncEnabled {
+		t.Fatal("синхронизация Kubernetes включена")
+	}
+}
+
+func TestLoadRejectsInvalidKubernetesSync(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvKubernetesSync, "sometimes")
+
+	_, err := config.Load()
+	if err == nil || !strings.Contains(err.Error(), config.EnvKubernetesSync) {
+		t.Fatalf("ошибка %v, ожидалось имя %s", err, config.EnvKubernetesSync)
 	}
 }
 
@@ -136,6 +163,7 @@ func setValidEnv(t *testing.T) {
 
 	t.Setenv(config.EnvDatabaseURL, "postgres://user:pass@postgres:45432/managed_valkey")
 	t.Setenv(config.EnvJWTSecret, "test-secret")
+	t.Setenv(config.EnvKubernetesSync, "true")
 	t.Setenv(config.EnvValkeyBaseDomain, "valkey.localhost")
 	t.Setenv(config.EnvValkeyPublicPort, "41379")
 	t.Setenv(config.EnvValkeyInstanceMaxVCPU, "4")

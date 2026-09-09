@@ -9,8 +9,7 @@ trap 'rm -rf "$work_dir"' EXIT
 fake_bin=$work_dir/bin
 deploy_root=$work_dir/managed-valkey
 docker_log=$work_dir/docker.log
-mkdir -p "$fake_bin" "$deploy_root/secrets/kubeconfig"
-printf 'test-kubeconfig\n' >"$deploy_root/secrets/kubeconfig/api.kubeconfig"
+mkdir -p "$fake_bin"
 
 cat >"$fake_bin/docker" <<'EOF'
 #!/usr/bin/env bash

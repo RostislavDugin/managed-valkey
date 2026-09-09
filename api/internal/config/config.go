@@ -23,7 +23,9 @@ const (
 	EnvDatabaseURL         = "DATABASE_URL"
 	EnvJWTSecret           = "JWT_SECRET"
 	EnvHTTPAddr            = "HTTP_ADDR"
+	EnvKubernetesSync      = "KUBERNETES_SYNC_ENABLED"
 	DefaultHTTPAddr        = ":8080"
+	DefaultKubernetesSync  = true
 
 	EnvValkeyBaseDomain                 = "VALKEY_BASE_DOMAIN"
 	EnvValkeyPublicPort                 = "VALKEY_PUBLIC_PORT"
@@ -50,6 +52,7 @@ type Config struct {
 	DatabaseURL                  string
 	JWTSecret                    string
 	HTTPAddr                     string
+	KubernetesSyncEnabled        bool
 	ValkeyBaseDomain             string
 	ValkeyPublicPort             int
 	ValkeyInstanceMaxVCPU        int
@@ -76,6 +79,11 @@ func Load() (Config, error) {
 	httpAddr := strings.TrimSpace(os.Getenv(EnvHTTPAddr))
 	if httpAddr == "" {
 		httpAddr = DefaultHTTPAddr
+	}
+
+	kubernetesSyncEnabled, err := boolWithDefault(EnvKubernetesSync, DefaultKubernetesSync)
+	if err != nil {
+		return Config{}, err
 	}
 
 	valkeyBaseDomain := strings.TrimSpace(os.Getenv(EnvValkeyBaseDomain))
@@ -143,6 +151,7 @@ func Load() (Config, error) {
 		DatabaseURL:                  databaseURL,
 		JWTSecret:                    jwtSecret,
 		HTTPAddr:                     httpAddr,
+		KubernetesSyncEnabled:        kubernetesSyncEnabled,
 		ValkeyBaseDomain:             valkeyBaseDomain,
 		ValkeyPublicPort:             valkeyPublicPort,
 		ValkeyInstanceMaxVCPU:        valkeyInstanceMaxVCPU,
@@ -211,6 +220,20 @@ func positiveDurationWithDefault(name string, defaultValue time.Duration) (time.
 	parsed, err := time.ParseDuration(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("переменная %s должна быть положительной длительностью", name)
+	}
+
+	return parsed, nil
+}
+
+func boolWithDefault(name string, defaultValue bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("переменная %s должна быть логическим значением: %w", name, err)
 	}
 
 	return parsed, nil

@@ -16,7 +16,6 @@ fi
 
 release_dir=$deploy_root/releases/$release_sha
 shared_env=$deploy_root/shared/.env
-kubeconfig=$deploy_root/secrets/kubeconfig/api.kubeconfig
 compose_file=$release_dir/docker-compose.prod.yml
 release_env=$release_dir/release.env
 ready_url=${READY_URL:-https://app.h3llo-demo.com/readyz}
@@ -25,7 +24,6 @@ ready_delay_seconds=${READY_DELAY_SECONDS:-2}
 
 required_files=(
     "$shared_env"
-    "$kubeconfig"
     "$compose_file"
     "$release_env"
     "$release_dir/images/api.tar.gz"
