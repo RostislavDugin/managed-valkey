@@ -4,15 +4,22 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
+	envoyv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
@@ -23,6 +30,9 @@ func NewScheme() *runtime.Scheme {
 
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(valkeyv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
+	utilruntime.Must(envoyv1alpha1.AddToScheme(scheme))
 
 	return scheme
 }
@@ -57,9 +67,21 @@ func NewManager(
 	options ...Option,
 ) (ctrl.Manager, error) {
 	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
+	systemNamespace := cfg.SystemNamespace
+	if systemNamespace == "" {
+		systemNamespace = config.DefaultSystemNamespace
+	}
 
 	managerOptions := ctrl.Options{
 		Scheme: NewScheme(),
+		Cache: ctrlcache.Options{ByObject: map[client.Object]ctrlcache.ByObject{
+			&gatewayv1.Gateway{}: {
+				Namespaces: map[string]ctrlcache.Config{systemNamespace: {}},
+			},
+			&envoyv1alpha1.ClientTrafficPolicy{}: {
+				Namespaces: map[string]ctrlcache.Config{systemNamespace: {}},
+			},
+		}},
 
 		// Снимки инстансов идут в status ресурса; отдельный Prometheus-эндпоинт
 		// добавит изменение с поведением оператора.
@@ -68,7 +90,7 @@ func NewManager(
 		HealthProbeBindAddress:  config.ProbeAddr,
 		LeaderElection:          config.LeaderElection,
 		LeaderElectionID:        config.LeaderElectionID,
-		LeaderElectionNamespace: cfg.SystemNamespace,
+		LeaderElectionNamespace: systemNamespace,
 	}
 
 	for _, option := range options {
@@ -79,10 +101,33 @@ func NewManager(
 	if err != nil {
 		return nil, fmt.Errorf("создать manager: %w", err)
 	}
+	leaseScope := NewLeaseScope()
+	if err := mgr.Add(leaseScope); err != nil {
+		return nil, fmt.Errorf("добавить lifecycle Lease: %w", err)
+	}
+	valkeyImage := cfg.ValkeyImage
+	if valkeyImage == "" {
+		valkeyImage = config.DefaultValkeyImage
+	}
+	baseDomain := cfg.BaseDomain
+	if baseDomain == "" {
+		baseDomain = config.DefaultBaseDomain
+	}
 
 	reconciler := &ValkeyInstanceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		APIReader:       mgr.GetAPIReader(),
+		Scheme:          mgr.GetScheme(),
+		Recorder:        mgr.GetEventRecorder("managed-valkey-operator"),
+		Lease:           leaseScope,
+		SystemNamespace: systemNamespace,
+		ValkeyImage:     valkeyImage,
+		BaseDomain:      baseDomain,
+		Environment:     cfg.Logging.Environment,
+		OperatorCIDRs:   slices.Clone(cfg.OperatorCIDRs),
+		Clock:           clock.RealClock{},
+		RESTConfig:      restConfig,
+		EnvoyCache:      NewEnvoySnapshotCache(),
 	}
 
 	if err := reconciler.SetupWithManager(mgr); err != nil {

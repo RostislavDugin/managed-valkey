@@ -42,17 +42,6 @@ subjects:
     name: managed-valkey-operator
     namespace: valkey-system
 ---
-# Оператор читает admin API прокси Envoy для подтверждения конфигурации.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: managed-valkey-operator-portforward
-  namespace: envoy-gateway-system
-rules:
-  - apiGroups: [""]
-    resources: [pods/portforward]
-    verbs: [create]
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -61,7 +50,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: managed-valkey-operator-portforward
+  name: managed-valkey-operator
 subjects:
   - kind: ServiceAccount
     name: managed-valkey-operator

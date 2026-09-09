@@ -1,0 +1,67 @@
+{
+  "server": {
+    "version": "1.38.4",
+    "state": "LIVE"
+  },
+  "listener": {
+    "dumpType": "type.googleapis.com/envoy.admin.v3.ListenersConfigDump",
+    "name": "valkey-system/valkey/valkey-bootstrap",
+    "activeState": {
+      "versionInfo": "<xds-version>",
+      "filterChain": {
+        "name": "tcproute/valkey-example/example",
+        "serverNames": [
+          "example.valkey.localhost"
+        ],
+        "tlsSecret": "valkey-system/valkey-wildcard-tls",
+        "tcpProxy": {
+          "cluster": "tcproute/valkey-example/example/rule/-1",
+          "idleTimeout": "3600s"
+        }
+      }
+    },
+    "warmingState": null
+  },
+  "endpoint": {
+    "dumpType": "type.googleapis.com/envoy.admin.v3.EndpointsConfigDump",
+    "clusterName": "tcproute/valkey-example/example/rule/-1",
+    "addresses": [
+      {
+        "address": "<pod-ip>",
+        "portValue": 6379
+      }
+    ]
+  },
+  "whitelist": {
+    "off": {
+      "networkFilters": [
+        "envoy.filters.network.tcp_proxy"
+      ]
+    },
+    "allow": {
+      "networkFilters": [
+        "envoy.filters.network.rbac",
+        "envoy.filters.network.tcp_proxy"
+      ],
+      "rbac": {
+        "inputType": "type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.SourceIPInput",
+        "matcherType": "type.googleapis.com/envoy.extensions.matching.input_matchers.ip.v3.Ip",
+        "allowedCidrs": [
+          "203.0.113.0/24"
+        ],
+        "onMatch": "ALLOW",
+        "onNoMatch": "DENY"
+      }
+    },
+    "denyAll": {
+      "networkFilters": [
+        "envoy.filters.network.rbac",
+        "envoy.filters.network.tcp_proxy"
+      ],
+      "rbac": {
+        "matcherCount": 0,
+        "onNoMatch": "DENY"
+      }
+    }
+  }
+}
