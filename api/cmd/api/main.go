@@ -55,7 +55,7 @@ func run() error {
 
 	clock := auth.SystemClock{}
 	tokens := auth.NewTokenService(cfg.JWTSecret, clock)
-	auditService := audit.NewService(database)
+	auditService := audit.NewService(database, database)
 	authService, err := auth.NewService(database, database, auditService, tokens, clock)
 	if err != nil {
 		return fmt.Errorf("создать сервис авторизации: %w", err)
@@ -82,7 +82,7 @@ func run() error {
 		valkey.CryptoSlugGenerator{},
 	)
 
-	router, err := api.NewRouter(logger, database, authService, valkeyService)
+	router, err := api.NewRouter(logger, database, authService, valkeyService, auditService)
 	if err != nil {
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}

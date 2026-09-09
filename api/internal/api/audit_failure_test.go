@@ -17,7 +17,7 @@ import (
 var errAuditRejected = errors.New("управляемый отказ аудита")
 
 type failingAuditRepository struct {
-	delegate audit.Repository
+	delegate audit.WriteRepository
 	action   audit.EventAction
 	after    bool
 }
@@ -81,8 +81,8 @@ func TestLoginAuditFailureDoesNotIssueJWTOverHTTP(t *testing.T) {
 	)
 }
 
-func failAudit(action audit.EventAction, after bool) func(audit.Repository) audit.Repository {
-	return func(delegate audit.Repository) audit.Repository {
+func failAudit(action audit.EventAction, after bool) func(audit.WriteRepository) audit.WriteRepository {
+	return func(delegate audit.WriteRepository) audit.WriteRepository {
 		return failingAuditRepository{delegate: delegate, action: action, after: after}
 	}
 }

@@ -31,7 +31,7 @@ const testJWTSecret = "http-integration-secret"
 type testAPIConfig struct {
 	probe                api.Probe
 	addRoutes            func(*gin.Engine)
-	wrapAuditRepository  func(audit.Repository) audit.Repository
+	wrapAuditRepository  func(audit.WriteRepository) audit.WriteRepository
 	catalog              *valkeydomain.Catalog
 	clusterVCPU          int
 	clusterRAMGB         int
@@ -130,11 +130,11 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	})
 
 	clock := auth.SystemClock{}
-	auditRepository := audit.Repository(database)
+	auditRepository := audit.WriteRepository(database)
 	if config.wrapAuditRepository != nil {
 		auditRepository = config.wrapAuditRepository(auditRepository)
 	}
-	auditService := audit.NewService(auditRepository)
+	auditService := audit.NewService(auditRepository, database)
 	authService, err := auth.NewService(
 		database,
 		database,
@@ -191,7 +191,7 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	if probe == nil {
 		probe = database
 	}
-	router, err := api.NewRouter(logger, probe, authService, valkeyService)
+	router, err := api.NewRouter(logger, probe, authService, valkeyService, auditService)
 	if err != nil {
 		t.Fatalf("создать маршрутизатор: %v", err)
 	}

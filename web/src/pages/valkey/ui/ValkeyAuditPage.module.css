@@ -1,0 +1,78 @@
+.page {
+  width: 100%;
+  min-width: 0;
+  padding-bottom: 7.5rem;
+}
+
+.group h3 {
+  margin-bottom: var(--h3-space-sm);
+}
+
+.rows {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--h3-border);
+  border-radius: var(--h3-radius-md);
+  background: var(--h3-border);
+  gap: 1px;
+}
+
+.row {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  padding: var(--h3-space-sm);
+  background: var(--h3-bg);
+  gap: var(--h3-space-sm);
+  grid-template-columns: auto minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(11rem, auto);
+}
+
+.icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border-radius: var(--h3-radius-full);
+  background: var(--h3-bg-2);
+  color: var(--h3-text-2);
+}
+
+.action,
+.time {
+  min-width: 0;
+}
+
+.technicalAction {
+  display: inline-block;
+  margin-top: 0.25rem;
+  font-size: var(--h3-fs-xs);
+}
+
+.email {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--h3-font-family-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time {
+  text-align: right;
+}
+
+.state {
+  min-height: 18rem;
+}
+
+@media (max-width: 47.999em) {
+  .row {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .email,
+  .time {
+    grid-column: 2;
+    text-align: left;
+  }
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
+	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/domain"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
@@ -44,6 +45,15 @@ type ValkeyService interface {
 		valkeydomain.RotateInput,
 	) (valkeydomain.CredentialsResult, error)
 	Delete(context.Context, valkeydomain.Actor, uuid.UUID, string) error
+}
+
+type AuditService interface {
+	ListResource(
+		context.Context,
+		domain.ManagedService,
+		uuid.UUID,
+		audit.PageRequest,
+	) (audit.Page, error)
 }
 
 type createValkeyRequest struct {
@@ -83,7 +93,12 @@ type maintenanceRequest struct {
 	DurationMin *int `json:"duration_min"`
 }
 
-func RegisterValkey(engine *gin.Engine, authService AuthService, service ValkeyService) {
+func RegisterValkey(
+	engine *gin.Engine,
+	authService AuthService,
+	service ValkeyService,
+	auditService AuditService,
+) {
 	managed := engine.Group("/v1/managed/valkey", BearerAuth(authService))
 	managed.GET("/sizes", valkeySizesHandler(service))
 	managed.GET("/instances", valkeyListHandler(service))
@@ -96,6 +111,7 @@ func RegisterValkey(engine *gin.Engine, authService AuthService, service ValkeyS
 	owned.PUT("/whitelist", valkeyWhitelistHandler(service))
 	owned.GET("/credentials", valkeyCredentialsHandler(service))
 	owned.POST("/credentials/rotate", valkeyRotateHandler(service))
+	owned.GET("/audit", valkeyAuditHandler(auditService))
 	owned.DELETE("", valkeyDeleteHandler(service))
 }
 

@@ -15,6 +15,6 @@ export function formatDateTime(value: string | Date) {
   return Number.isNaN(date.getTime()) ? String(value) : DATE_TIME_FORMAT.format(date);
 }
 
-export function formatRelativeTime(value: string | Date) {
-  return dayjs(value).fromNow();
+export function formatRelativeTime(value: string | Date, now: string | Date = new Date()) {
+  return dayjs(value).from(now);
 }

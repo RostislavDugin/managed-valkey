@@ -34,20 +34,21 @@ type Event struct {
 	CreatedAt  time.Time
 }
 
-type Repository interface {
+type WriteRepository interface {
 	WriteAudit(context.Context, *gorm.DB, Event) error
 }
 
 type Service struct {
-	repository Repository
+	writer WriteRepository
+	reader ReadRepository
 }
 
-func NewService(repository Repository) *Service {
-	return &Service{repository: repository}
+func NewService(writer WriteRepository, reader ReadRepository) *Service {
+	return &Service{writer: writer, reader: reader}
 }
 
 func (s *Service) Write(ctx context.Context, tx *gorm.DB, event Event) error {
-	if err := s.repository.WriteAudit(ctx, tx, event); err != nil {
+	if err := s.writer.WriteAudit(ctx, tx, event); err != nil {
 		return fmt.Errorf("записать событие аудита: %w", err)
 	}
 

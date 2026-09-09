@@ -26,6 +26,7 @@ func NewRouter(
 	database Probe,
 	authService AuthService,
 	valkeyService ValkeyService,
+	auditService AuditService,
 ) (*gin.Engine, error) {
 	gin.SetMode(gin.ReleaseMode)
 
@@ -45,7 +46,7 @@ func NewRouter(
 
 	RegisterHealth(engine, database)
 	RegisterAuth(engine, authService, NewRateLimiter(auth.SystemClock{}, AuthRateLimit, AuthRateWindow))
-	RegisterValkey(engine, authService, valkeyService)
+	RegisterValkey(engine, authService, valkeyService, auditService)
 
 	return engine, nil
 }
