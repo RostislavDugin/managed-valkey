@@ -1,14 +1,17 @@
-name: managed-valkey-dev
+name: ${MANAGED_VALKEY_COMPOSE_PROJECT:-managed-valkey-dev}
 
 services:
   postgres:
     image: postgres:18.6
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-managed_valkey}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-managed_valkey}
       POSTGRES_DB: ${POSTGRES_DB:-managed_valkey}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-45432}:5432"
+    networks:
+      default:
+        ipv4_address: 172.27.0.2
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -23,7 +26,10 @@ services:
       - server
       - --disable=traefik
       - --disable=servicelb
-      - --node-name=k3s-server
+      - --cluster-cidr=${K3S_CLUSTER_CIDR:-10.42.0.0/16}
+      - --service-cidr=${K3S_SERVICE_CIDR:-10.43.0.0/16}
+      - --cluster-dns=${K3S_CLUSTER_DNS:-10.43.0.10}
+      - --node-name=${K3S_SERVER_NAME:-k3s-server}
       - --tls-san=k3s-server
       - --tls-san=127.0.0.1
     privileged: true
@@ -31,10 +37,13 @@ services:
       - /run
       - /var/run
     environment:
-      K3S_TOKEN: ${K3S_TOKEN:?задайте K3S_TOKEN в .env}
+      K3S_TOKEN: ${K3S_TOKEN:-managed-valkey-dev-token}
     ports:
-      - "127.0.0.1:6443:6443"
-      - "127.0.0.1:${VALKEY_PUBLIC_PORT:-41379}:31379"
+      - "${K3S_API_BINDING:-127.0.0.1:6443:6443}"
+      - "${K3S_PUBLIC_BINDING:-127.0.0.1:41379:31379}"
+    networks:
+      default:
+        ipv4_address: 172.27.0.3
     volumes:
       - k3s-server-data:/var/lib/rancher/k3s
     healthcheck:
@@ -55,7 +64,12 @@ services:
       - /var/run
     environment:
       K3S_URL: https://k3s-server:6443
-      K3S_TOKEN: ${K3S_TOKEN:?задайте K3S_TOKEN в .env}
+      K3S_TOKEN: ${K3S_TOKEN:-managed-valkey-dev-token}
+    networks:
+      default:
+        ipv4_address: 172.27.0.5
+    volumes:
+      - k3s-agent-1-node:/etc/rancher/node
     depends_on:
       k3s-server:
         condition: service_healthy
@@ -65,7 +79,20 @@ services:
     command:
       - agent
       - --node-name=k3s-agent-2
+    networks:
+      default:
+        ipv4_address: 172.27.0.4
+    volumes:
+      - k3s-agent-2-node:/etc/rancher/node
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.27.0.0/16
 
 volumes:
   postgres-data:
   k3s-server-data:
+  k3s-agent-1-node:
+  k3s-agent-2-node:

@@ -4,39 +4,17 @@ set dotenv-path := "../.env"
 export GOTOOLCHAIN := "auto"
 
 root := justfile_directory() / ".."
-envtest_version := "1.35.0"
 
-run: _generate
-    test -f {{ quote(root / "tmp/k3s/operator.kubeconfig") }} || \
+run: _check-generated
+    test -f {{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} || \
         { echo "сначала выполните scripts/k3s_bootstrap.sh" >&2; exit 1; }
-    test -f {{ quote(root / "tmp/k3s/operator.env") }} || \
+    test -f {{ quote(root / "tmp/k3s/dev/operator.env") }} || \
         { echo "сначала выполните scripts/k3s_bootstrap.sh для настройки сетевого доступа" >&2; exit 1; }
-    set -a && source {{ quote(root / "tmp/k3s/operator.env") }} && set +a && \
-        cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/operator.kubeconfig") }} go run ./operator/cmd/operator
+    set -a && source {{ quote(root / "tmp/k3s/dev/operator.env") }} && set +a && \
+        cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} go run ./operator/cmd/operator
 
-test-fast: _generate
-    cd {{ root }} && KUBEBUILDER_ASSETS="$(go tool setup-envtest use {{ envtest_version }} --bin-dir "$(pwd)/bin/envtest" -p path)" \
-        go test -tags envtest ./operator/... ./internal/...
-
-test-full: _generate
-    test -f {{ quote(root / "tmp/k3s/admin.kubeconfig") }} || \
-        { echo "test-full: отсутствует tmp/k3s/admin.kubeconfig; выполните scripts/k3s_bootstrap.sh" >&2; exit 1; }
-    test -f {{ quote(root / "tmp/k3s/operator.kubeconfig") }} || \
-        { echo "test-full: отсутствует tmp/k3s/operator.kubeconfig; выполните scripts/k3s_bootstrap.sh" >&2; exit 1; }
-    KUBECONFIG={{ quote(root / "tmp/k3s/admin.kubeconfig") }} kubectl get --raw=/readyz >/dev/null || \
-        { echo "test-full: Kubernetes API dev-стенда недоступен" >&2; exit 1; }
-    KUBECONFIG={{ quote(root / "tmp/k3s/admin.kubeconfig") }} kubectl -n valkey-system get \
-        gateway/valkey clienttrafficpolicy/valkey-connections secret/valkey-wildcard-tls >/dev/null || \
-        { echo "test-full: Gateway, ClientTrafficPolicy или TLS Secret не подготовлены" >&2; exit 1; }
-    KUBECONFIG={{ quote(root / "tmp/k3s/admin.kubeconfig") }} kubectl apply --server-side --force-conflicts \
-        -k {{ quote(root / "operator/config/crd") }} >/dev/null
-    KUBECONFIG={{ quote(root / "tmp/k3s/admin.kubeconfig") }} kubectl apply \
-        -f {{ quote(root / "operator/config/rbac") }} \
-        -f {{ quote(root / "deploy/dev/rbac/operator.yaml") }} >/dev/null
-    cd {{ root }} && \
-        MANAGED_VALKEY_ADMIN_KUBECONFIG={{ quote(root / "tmp/k3s/admin.kubeconfig") }} \
-        MANAGED_VALKEY_OPERATOR_KUBECONFIG={{ quote(root / "tmp/k3s/operator.kubeconfig") }} \
-        go test -tags=integration -count=1 -timeout=20m ./operator/integration
+test:
+    cd {{ root }} && scripts/test_environment.sh exec operator -- scripts/test_operator.sh
 
 _generate:
     cd {{ root }} && go tool controller-gen object paths=./operator/api/v1alpha1/...
@@ -44,3 +22,6 @@ _generate:
         output:crd:artifacts:config=operator/config/crd
     cd {{ root }} && go tool controller-gen rbac:roleName=managed-valkey-operator paths=./operator/internal/... \
         output:rbac:artifacts:config=operator/config/rbac
+
+_check-generated:
+    cd {{ root }} && scripts/check_operator_generated.sh

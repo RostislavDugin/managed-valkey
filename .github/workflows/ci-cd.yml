@@ -70,6 +70,7 @@ jobs:
     name: Тесты API
     needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
@@ -79,20 +80,25 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
-      - name: Запустить PostgreSQL
-        env:
-          POSTGRES_PASSWORD: ci-postgres-password
-        run: docker compose -f docker-compose.dev.yml up --detach --wait postgres
       - name: Запустить тесты
         working-directory: api
         env:
           POSTGRES_PASSWORD: ci-postgres-password
         run: just test
+      - name: Сохранить диагностику
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: api-test-diagnostics-${{ github.sha }}
+          path: tmp/k3s/api/*/diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7
 
   test-operator:
     name: Тесты оператора
     needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
@@ -102,9 +108,17 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
-      - name: Запустить быстрые тесты
+      - name: Запустить тесты
         working-directory: operator
-        run: just test-fast
+        run: just test
+      - name: Сохранить диагностику
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: operator-test-diagnostics-${{ github.sha }}
+          path: tmp/k3s/operator/*/diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7
 
   test-web:
     name: Тесты клиентского приложения
@@ -124,10 +138,13 @@ jobs:
           node-version: 24.8.0
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
+        with:
+          just-version: 1.43.0
       - name: Установить зависимости
         run: pnpm install --frozen-lockfile
       - name: Запустить тесты
-        run: pnpm test
+        run: just test
 
   build-api:
     name: Сборка API и миграций

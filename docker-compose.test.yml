@@ -1,0 +1,25 @@
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${K3S_DOCKER_SUBNET:?задайте K3S_DOCKER_SUBNET}
+
+services:
+  k3s-server:
+    networks:
+      default:
+        ipv4_address: ${K3S_SERVER_IP:?задайте K3S_SERVER_IP}
+
+  k3s-agent-1:
+    networks:
+      default:
+        ipv4_address: ${K3S_AGENT_1_IP:?задайте K3S_AGENT_1_IP}
+    ports:
+      - "127.0.0.1::31379"
+
+  k3s-agent-2:
+    networks:
+      default:
+        ipv4_address: ${K3S_AGENT_2_IP:?задайте K3S_AGENT_2_IP}
+    ports:
+      - "127.0.0.1::31379"

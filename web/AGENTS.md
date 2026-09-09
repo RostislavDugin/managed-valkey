@@ -39,6 +39,7 @@ React 19, TypeScript, Vite, React Router, Mantine 9 (`core`, `hooks`, `form`,
 | `pnpm lint:fsd` | Steiger: границы и структура FSD |
 | `pnpm lint` | обе проверки |
 | `pnpm test` | Vitest: модель, временный клиент и экраны раздела |
+| `just test` | тот же полный набор Vitest для корневого запуска и CI |
 | `pnpm format` / `pnpm format:check` | Oxfmt |
 | `pnpm check` | форматирование, обе проверки, типы, тесты и сборка подряд |
 

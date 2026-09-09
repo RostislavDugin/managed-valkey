@@ -64,7 +64,7 @@ func TestSingleLifecycle(t *testing.T) {
 	if notReady.Status.Initialized || notReady.Status.Phase == valkeyv1alpha1.InstancePhaseRunning {
 		t.Fatalf("остановленный во время создания оператор подтвердил готовность: %+v", notReady.Status)
 	}
-	if output, err := h.dockerCLI(t, first, "172.27.0.104", first.password, "PING"); err == nil &&
+	if output, err := h.dockerCLI(t, first, h.clientPreReady, first.password, "PING"); err == nil &&
 		strings.Contains(output, "PONG") {
 		t.Fatal("app доступен до завершения первоначальных проверок")
 	}
@@ -91,22 +91,22 @@ func TestSingleLifecycle(t *testing.T) {
 
 	second := h.createSingle(t, "fullb2", valkeyv1alpha1.WhitelistSpec{
 		IsEnabled: true,
-		CIDRs:     []string{"172.27.0.101/32"},
+		CIDRs:     []string{h.clientAllowed + "/32"},
 	})
 	h.waitRunning(t, second)
 	pingConnections(t, connections)
-	if output, err := h.dockerCLI(t, first, "172.27.0.102", first.password, "PING"); err != nil ||
+	if output, err := h.dockerCLI(t, first, h.clientBlocked, first.password, "PING"); err != nil ||
 		!strings.Contains(output, "PONG") {
 		t.Fatalf("выключенный whitelist не пропустил второго клиента: output=%q error=%v", output, err)
 	}
-	if output, err := h.dockerCLI(t, second, "172.27.0.101", second.password, "PING"); err != nil ||
+	if output, err := h.dockerCLI(t, second, h.clientAllowed, second.password, "PING"); err != nil ||
 		!strings.Contains(output, "PONG") {
 		t.Fatalf("разрешённый CIDR не пропустил клиента: output=%q error=%v", output, err)
 	}
 	if output, err := h.dockerCLI(
 		t,
 		second,
-		"172.27.0.102",
+		h.clientBlocked,
 		second.password,
 		"PING",
 	); err == nil &&
@@ -116,7 +116,7 @@ func TestSingleLifecycle(t *testing.T) {
 	if output, err := h.dockerCLI(
 		t,
 		second,
-		"172.27.0.101",
+		h.clientAllowed,
 		first.password,
 		"PING",
 	); err == nil &&
@@ -138,7 +138,7 @@ func TestSingleLifecycle(t *testing.T) {
 	if output, err := h.dockerCLI(
 		t,
 		third,
-		"172.27.0.101",
+		h.clientAllowed,
 		third.password,
 		"PING",
 	); err == nil &&
@@ -183,17 +183,21 @@ func TestSingleLifecycle(t *testing.T) {
 }
 
 type harness struct {
-	adminREST     *rest.Config
-	operatorREST  *rest.Config
-	k8s           client.Client
-	clientset     kubernetes.Interface
-	publicAddr    string
-	baseDomain    string
-	dockerNet     string
-	dockerHost    string
-	dockerPort    string
-	operatorCIDRs []string
-	caFile        string
+	adminREST      *rest.Config
+	operatorREST   *rest.Config
+	k8s            client.Client
+	clientset      kubernetes.Interface
+	publicAddr     string
+	baseDomain     string
+	dockerNet      string
+	dockerHost     string
+	dockerPort     string
+	clientAllowed  string
+	clientBlocked  string
+	clientWrongSNI string
+	clientPreReady string
+	operatorCIDRs  []string
+	caFile         string
 
 	mu       sync.Mutex
 	operator *operatorProcess
@@ -226,11 +230,15 @@ func newHarness(t *testing.T) *harness {
 	}
 	h := &harness{
 		adminREST: adminREST, operatorREST: operatorREST, k8s: k8s, clientset: clientset,
-		publicAddr: envOrDefault("MANAGED_VALKEY_PUBLIC_ADDRESS", "127.0.0.1:41379"),
-		baseDomain: envOrDefault("VALKEY_BASE_DOMAIN", operatorconfig.DefaultBaseDomain),
-		dockerNet:  envOrDefault("MANAGED_VALKEY_DOCKER_NETWORK", "managed-valkey-dev_default"),
-		dockerHost: envOrDefault("MANAGED_VALKEY_DOCKER_HOST", "k3s-server"),
-		dockerPort: envOrDefault("MANAGED_VALKEY_DOCKER_PORT", "31379"),
+		publicAddr:     envOrDefault("MANAGED_VALKEY_PUBLIC_ADDRESS", "127.0.0.1:41379"),
+		baseDomain:     envOrDefault("VALKEY_BASE_DOMAIN", operatorconfig.DefaultBaseDomain),
+		dockerNet:      envOrDefault("MANAGED_VALKEY_DOCKER_NETWORK", "managed-valkey-dev_default"),
+		dockerHost:     envOrDefault("MANAGED_VALKEY_DOCKER_HOST", "k3s-server"),
+		dockerPort:     envOrDefault("MANAGED_VALKEY_DOCKER_PORT", "31379"),
+		clientAllowed:  envOrDefault("MANAGED_VALKEY_CLIENT_ALLOWED", "172.27.0.101"),
+		clientBlocked:  envOrDefault("MANAGED_VALKEY_CLIENT_BLOCKED", "172.27.0.102"),
+		clientWrongSNI: envOrDefault("MANAGED_VALKEY_CLIENT_WRONG_SNI", "172.27.0.103"),
+		clientPreReady: envOrDefault("MANAGED_VALKEY_CLIENT_PRE_READY", "172.27.0.104"),
 	}
 	dockerCIDR := dockerGatewayCIDR(t, h.dockerNet)
 	processCIDR := podRouteSourceCIDR(t, h.k8s)
@@ -576,8 +584,14 @@ func (h *harness) dockerCLI(
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Second)
 	defer cancel()
+	containerName := "managed-valkey-test-" + uuid.NewString()
+	defer func() {
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+	}()
 	arguments := []string{
-		"run", "--rm", "--network", h.dockerNet, "--ip", address,
+		"run", "--rm", "--name", containerName,
+		"--label", "com.h3llo-demo.managed-valkey.test-network=" + h.dockerNet,
+		"--network", h.dockerNet, "--ip", address,
 		"-e", "REDISCLI_AUTH",
 		"-v", h.caFile + ":/ca.crt:ro", operatorconfig.DefaultValkeyImage,
 		"valkey-cli", "--tls", "--cacert", "/ca.crt", "--sni", instance.hostname,
@@ -713,13 +727,26 @@ func dialPersistentConnection(
 	if !roots.AppendCertsFromPEM(caPEM) {
 		t.Fatal("сертификат стенда не добавлен в пул доверия")
 	}
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	conn, err := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
-		MinVersion: tls.VersionTLS12, ServerName: hostname, RootCAs: roots,
-	})
-	if err != nil {
-		stop()
-		t.Fatalf("подключиться напрямую к Envoy: %v", err)
+	deadline := time.Now().Add(30 * time.Second)
+	var conn *tls.Conn
+	for {
+		dialer := &net.Dialer{Timeout: 3 * time.Second}
+		conn, err = tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+			MinVersion: tls.VersionTLS12, ServerName: hostname, RootCAs: roots,
+		})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			stop()
+			t.Fatalf("подключиться напрямую к Envoy: %v", err)
+		}
+		select {
+		case <-t.Context().Done():
+			stop()
+			t.Fatalf("подключиться напрямую к Envoy: %v", t.Context().Err())
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 
 	return &persistentConnection{conn: conn, read: bufio.NewReader(conn), stop: stop}
@@ -854,7 +881,7 @@ func assertWrongSNIRejected(t *testing.T, h *harness, instance *testInstance) {
 	if output, err := h.dockerCLI(
 		t,
 		&wrongHost,
-		"172.27.0.103",
+		h.clientWrongSNI,
 		instance.password,
 		"PING",
 	); err == nil &&

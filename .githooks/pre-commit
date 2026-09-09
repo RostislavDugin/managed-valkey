@@ -50,7 +50,7 @@ check_web() {
 
         echo "pre-commit: web формат"
         (cd web && printf '%s\n' "$staged_web" | sed 's|^web/||' | tr '\n' '\0' |
-            xargs -0 --no-run-if-empty pnpm exec oxfmt --)
+            xargs -0 --no-run-if-empty pnpm exec oxfmt --no-error-on-unmatched-pattern --)
         printf '%s\n' "$staged_web" | add_staged
     fi
 
