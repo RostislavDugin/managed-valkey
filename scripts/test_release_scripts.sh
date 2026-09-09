@@ -39,7 +39,6 @@ make_source() {
 
     mkdir -p "$source_dir/images"
     cp "$repo_root/docker-compose.prod.yml" "$source_dir/docker-compose.prod.yml"
-    cp "$repo_root/scripts/activate_release.sh" "$source_dir/activate_release.sh"
     cp "$repo_root/scripts/install_release.sh" "$source_dir/install_release.sh"
     printf '%s\n' 'POSTGRES_PASSWORD=test-password' 'JWT_SECRET=test-jwt-secret' >"$source_dir/.env"
     cat >"$source_dir/release.env" <<EOF
@@ -66,15 +65,24 @@ export TEST_CURL_RESULT=success
 export READY_ATTEMPTS=1
 export READY_DELAY_SECONDS=0
 
+mkdir -p "$deploy_root/bin" "$deploy_root/releases/legacy" "$deploy_root/shared"
+ln -s "$deploy_root/releases/legacy" "$deploy_root/current"
+printf '%s\n' legacy >"$deploy_root/shared/.env"
+
 "$repo_root/scripts/install_release.sh" "$sha_a" "$source_a" "$deploy_root"
-[[ $(readlink "$deploy_root/current") == "$deploy_root/releases/$sha_a" ]]
-[[ $(stat -c '%a' "$deploy_root/shared/.env") == 600 ]]
+[[ $(cat "$deploy_root/.deployed-sha") == "$sha_a" ]]
+[[ $(stat -c '%a' "$deploy_root/.env") == 600 ]]
+[[ ! -e $deploy_root/current && ! -L $deploy_root/current ]]
+[[ ! -d $deploy_root/bin ]]
+[[ ! -d $deploy_root/releases ]]
+[[ ! -d $deploy_root/shared ]]
+[[ ! -d $deploy_root/images ]]
 
 "$docker_bin" compose \
     --project-name managed-valkey \
-    --env-file "$deploy_root/shared/.env" \
-    --env-file "$deploy_root/releases/$sha_a/release.env" \
-    --file "$deploy_root/releases/$sha_a/docker-compose.prod.yml" \
+    --env-file "$deploy_root/.env" \
+    --env-file "$deploy_root/release.env" \
+    --file "$deploy_root/docker-compose.prod.yml" \
     config --quiet
 
 export TEST_CURL_RESULT=failure
@@ -82,17 +90,15 @@ if "$repo_root/scripts/install_release.sh" "$sha_b" "$source_b" "$deploy_root"; 
     echo "установка с ошибкой проверки готовности завершилась успешно" >&2
     exit 1
 fi
-[[ $(readlink "$deploy_root/current") == "$deploy_root/releases/$sha_a" ]]
+[[ $(cat "$deploy_root/.deployed-sha") == "$sha_a" ]]
 
 export TEST_CURL_RESULT=success
-"$repo_root/scripts/activate_release.sh" "$sha_b" "$deploy_root"
-[[ $(readlink "$deploy_root/current") == "$deploy_root/releases/$sha_b" ]]
-"$repo_root/scripts/activate_release.sh" "$sha_a" "$deploy_root"
-[[ $(readlink "$deploy_root/current") == "$deploy_root/releases/$sha_a" ]]
+"$repo_root/scripts/install_release.sh" "$sha_b" "$source_b" "$deploy_root"
+[[ $(cat "$deploy_root/.deployed-sha") == "$sha_b" ]]
 
 grep -q -- '--project-name managed-valkey' "$docker_log"
-if rg -n 'goose[[:space:]]+down' "$repo_root/scripts/activate_release.sh" "$repo_root/scripts/install_release.sh"; then
+if rg -n 'goose[[:space:]]+down' "$repo_root/scripts/install_release.sh"; then
     exit 1
 fi
 
-echo "сценарии установки и повторного запуска версии прошли"
+echo "сценарий установки в единый каталог прошёл"

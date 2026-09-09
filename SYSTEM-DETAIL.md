@@ -1451,25 +1451,21 @@ Caddy обслуживает `app.h3llo-demo.com` и `logs.h3llo-demo.com` по 
 
 В managed k8s h3llo стоят CRD, namespace `valkey-system` с оператором (StatefulSet, 1 реплика, `OnDelete`, headless Service и leader election), Envoy Gateway с `EnvoyProxy` на две реплики и Service типа LoadBalancer, общая `ClientTrafficPolicy valkey-connections`, cert-manager. Манифесты лежат в `deploy/prod` (kustomize). До подготовки отдельного kubeconfig API запускается с `KUBERNETES_SYNC_ENABLED=false`. После включения синхронизации kubeconfig монтируется в контейнер только для чтения и даёт права из [раздела 3](SYSTEM.md#3-кто-с-кем-разговаривает-и-где-авторизация). PostgreSQL доступен API по сети compose и администратору через внешний порт; у оператора нет конфигурации БД и адреса API сервиса. Оператор получает права Kubernetes через in-cluster ServiceAccount и отправляет логи через Caddy по HTTPS без отдельного секрета. Восстановление после удаления worker-ноды через ЛК следует [правилам раздела 6](SYSTEM.md#поды-на-недоступной-ноде); собственного клиента API h3llo и отдельной службы выключения VM в v1 нет.
 
-GitHub Actions передаёт готовые образы и файлы версии по SSH. Сценарий `scripts/install_release.sh` размещает их в `/opt/managed-valkey/releases/<sha>`, а общие секреты хранит в `/opt/managed-valkey/shared/.env`. Файл `release.env` содержит SHA и полные имена образов. Пока `KUBERNETES_SYNC_ENABLED=false`, kubeconfig для установки версии не требуется. Все версии используют проект Docker Compose `managed-valkey`, поэтому тома PostgreSQL, VictoriaLogs и Caddy сохраняются между запусками.
+GitHub Actions передаёт готовые образы и рабочие файлы по SSH во временный каталог. Сценарий `scripts/install_release.sh` загружает образы и размещает `.env`, `docker-compose.prod.yml`, `release.env` и собственную копию непосредственно в `/opt/managed-valkey`. Файл `release.env` содержит SHA и полные имена образов. Пока `KUBERNETES_SYNC_ENABLED=false`, kubeconfig для установки не требуется. Постоянное имя проекта Docker Compose `managed-valkey` сохраняет тома PostgreSQL, VictoriaLogs и Caddy между запусками.
 
 Пользователь `PRODUCTION_SSH_USER` должен иметь доступ к Docker Compose и право записи в `/opt/managed-valkey`.
 
 ```text
 /opt/managed-valkey/
-  current -> releases/<sha>
-  bin/
-    activate_release.sh
-    install_release.sh
-  shared/.env
+  .deployed-sha
+  .env
+  docker-compose.prod.yml
+  install_release.sh
+  release.env
   secrets/kubeconfig/api.kubeconfig
-  releases/<sha>/
-    docker-compose.prod.yml
-    release.env
-    images/
 ```
 
-После загрузки образов сценарий проверяет конфигурацию, запускает Docker Compose с ожиданием миграций и готовности сервисов, затем запрашивает `https://app.h3llo-demo.com/readyz`. Ссылка `/opt/managed-valkey/current` меняется только после успешного ответа. Для возврата к прежней версии запускают `/opt/managed-valkey/bin/activate_release.sh <sha>`; миграции `goose down` не выполняются.
+После загрузки образов сценарий проверяет конфигурацию, запускает Docker Compose с ожиданием миграций и готовности сервисов, затем запрашивает `https://app.h3llo-demo.com/readyz`. Файл `.deployed-sha` меняется только после успешного ответа. Каждый запуск заменяет файлы в том же каталоге; предыдущая ревизия на сервере не хранится, автоматического возврата нет. Миграции `goose down` не выполняются.
 
 Виртуалка отделяет API и PostgreSQL от control plane Kubernetes: вход, чтение последнего состояния и запись намерения удаления не требуют доступного kube-apiserver. VM и compose остаются собственной точкой отказа. Нужно обслуживать VM и доступ API к публичному endpoint Kubernetes. При потере этой связи доставка и импорт остановятся, после чего конфигурационные изменения блокируются по `is_stale`; запущенные Valkey и failover по существующим CR от связи с VM не зависят. Восстановление доступа запускает повторную сверку, но не возвращает пропущенную историю метрик.
 
@@ -1639,7 +1635,7 @@ Pre-commit hook отклоняет частично добавленные в и
 
 После тестов задания `build-api` и `build-web` параллельно собирают для `linux/amd64` образы API, миграций и Caddy со SPA. Полный SHA коммита входит в каждый тег. Архивы Docker сохраняются как результаты текущего запуска на один день и передаются заданию `deploy`; рабочая VM не компилирует исходный код.
 
-Задание `deploy` запускается только после успешного `push` в `main`, использует окружение GitHub `production` и группу последовательного выполнения `production`. Оно создаёт закрытый `.env`, передаёт архивы и сценарии по SSH, а затем запускает `scripts/install_release.sh`. Новая ссылка `current` появляется после успешной миграции, готовности Docker Compose и внешнего запроса к `/readyz`. Процесс разворачивает только VM. Оператор и `deploy/prod` остаются отдельной частью управляемого Kubernetes.
+Задание `deploy` запускается только после успешного `push` в `main`, использует окружение GitHub `production` и группу последовательного выполнения `production`. Оно создаёт закрытый `.env`, передаёт архивы и рабочие файлы по SSH, а затем запускает `scripts/install_release.sh`. Сценарий заменяет содержимое `/opt/managed-valkey` и записывает SHA в `.deployed-sha` после успешной миграции, готовности Docker Compose и внешнего запроса к `/readyz`. Процесс разворачивает только VM. Оператор и `deploy/prod` остаются отдельной частью управляемого Kubernetes.
 
 CodeQL, Trivy, общие integration и Playwright e2e-тесты пока не входят в `.github/workflows/ci-cd.yml`. Реальный набор подключается одновременно к корневому `just test` и отдельному обязательному job. Файлы клиентского приложения входят в образ Caddy; API собирается независимо от `web/dist`.
 

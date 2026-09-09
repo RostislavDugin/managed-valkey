@@ -343,14 +343,13 @@ jobs:
           CADDY_IMAGE=managed-valkey/caddy:$GITHUB_SHA
           EOF
           install -m 0644 docker-compose.prod.yml deploy-bundle/docker-compose.prod.yml
-          install -m 0755 scripts/activate_release.sh deploy-bundle/activate_release.sh
           install -m 0755 scripts/install_release.sh deploy-bundle/install_release.sh
           printf '%s\n' "$PRODUCTION_SSH_PRIVATE_KEY" >"$HOME/.ssh/production"
           printf '%s\n' "$PRODUCTION_SSH_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
           chmod 0600 "$HOME/.ssh/production" "$HOME/.ssh/known_hosts" deploy-bundle/.env
           test "$(find deploy-bundle/images -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 3
           test "$(stat -c '%a' deploy-bundle/.env)" = 600
-      - name: Передать и установить версию
+      - name: Передать и установить
         run: |
           ssh_options=(
             -i "$HOME/.ssh/production"

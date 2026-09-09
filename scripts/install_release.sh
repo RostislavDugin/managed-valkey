@@ -19,7 +19,6 @@ required_files=(
     "$source_dir/.env"
     "$source_dir/docker-compose.prod.yml"
     "$source_dir/release.env"
-    "$source_dir/activate_release.sh"
     "$source_dir/install_release.sh"
     "$source_dir/images/api.tar.gz"
     "$source_dir/images/migrate.tar.gz"
@@ -56,16 +55,59 @@ if ! awk -F= '
     exit 1
 fi
 
-release_dir=$deploy_root/releases/$release_sha
-mkdir -p "$deploy_root/bin" "$deploy_root/releases" "$deploy_root/shared" "$release_dir/images"
+if [[ $deploy_root != /* || $deploy_root == / || ${deploy_root##*/} != managed-valkey ]]; then
+    echo "корень развёртывания должен быть абсолютным каталогом managed-valkey" >&2
+    exit 2
+fi
 
-install -m 0600 "$source_dir/.env" "$deploy_root/shared/.env"
-install -m 0644 "$source_dir/docker-compose.prod.yml" "$release_dir/docker-compose.prod.yml"
-install -m 0644 "$source_dir/release.env" "$release_dir/release.env"
-install -m 0644 "$source_dir/images/api.tar.gz" "$release_dir/images/api.tar.gz"
-install -m 0644 "$source_dir/images/migrate.tar.gz" "$release_dir/images/migrate.tar.gz"
-install -m 0644 "$source_dir/images/caddy.tar.gz" "$release_dir/images/caddy.tar.gz"
-install -m 0755 "$source_dir/activate_release.sh" "$deploy_root/bin/activate_release.sh"
-install -m 0755 "$source_dir/install_release.sh" "$deploy_root/bin/install_release.sh"
+for archive in "$source_dir"/images/{api,migrate,caddy}.tar.gz; do
+    gzip -dc "$archive" | docker load >/dev/null
+done
 
-"$deploy_root/bin/activate_release.sh" "$release_sha" "$deploy_root"
+mkdir -p "$deploy_root"
+install -m 0600 "$source_dir/.env" "$deploy_root/.env"
+install -m 0644 "$source_dir/docker-compose.prod.yml" "$deploy_root/docker-compose.prod.yml"
+install -m 0644 "$source_dir/release.env" "$deploy_root/release.env"
+install -m 0755 "$source_dir/install_release.sh" "$deploy_root/install_release.sh"
+
+compose=(
+    docker compose
+    --project-name managed-valkey
+    --env-file "$deploy_root/.env"
+    --env-file "$deploy_root/release.env"
+    --file "$deploy_root/docker-compose.prod.yml"
+)
+
+"${compose[@]}" config --quiet
+"${compose[@]}" up --detach --remove-orphans --wait --wait-timeout 180
+
+ready_url=${READY_URL:-https://app.h3llo-demo.com/readyz}
+ready_attempts=${READY_ATTEMPTS:-30}
+ready_delay_seconds=${READY_DELAY_SECONDS:-2}
+ready=false
+
+for ((attempt = 1; attempt <= ready_attempts; attempt++)); do
+    if curl --fail --silent --show-error --max-time 10 "$ready_url" >/dev/null 2>&1; then
+        ready=true
+        break
+    fi
+
+    if ((attempt < ready_attempts)); then
+        sleep "$ready_delay_seconds"
+    fi
+done
+
+if [[ $ready != true ]]; then
+    echo "API не прошёл внешнюю проверку готовности: $ready_url" >&2
+    exit 1
+fi
+
+deployed_sha_file=$deploy_root/.deployed-sha
+next_deployed_sha=$deploy_root/.deployed-sha-$release_sha-$$
+printf '%s\n' "$release_sha" >"$next_deployed_sha"
+
+rm -f -- "$deploy_root/current"
+rm -rf -- "$deploy_root/bin" "$deploy_root/releases" "$deploy_root/shared"
+mv -f "$next_deployed_sha" "$deployed_sha_file"
+
+echo "установлена ревизия $release_sha"
