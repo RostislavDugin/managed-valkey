@@ -13,6 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM deps AS build
 COPY api ./api
 COPY internal ./internal
+COPY operator/api ./operator/api
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o /out/api ./api/cmd/api && \
