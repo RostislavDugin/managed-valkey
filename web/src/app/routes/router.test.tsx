@@ -65,7 +65,7 @@ describe('маршруты раздела Valkey', () => {
     renderAt('/valkey/management/instance-1/monitoring');
 
     expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Метрик пока нет')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Метрик пока нет' }, WAIT)).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Демонстрационные данные')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Мониторинг' })).toHaveAttribute(
