@@ -146,9 +146,61 @@ jobs:
       - name: Запустить тесты
         run: just test
 
+  test-e2e:
+    name: Сквозной тест регистрации
+    needs: [lint-api, lint-operator, lint-web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.33.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.8.0
+          cache: pnpm
+          cache-dependency-path: |
+            web/pnpm-lock.yaml
+            tests/e2e/pnpm-lock.yaml
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
+        with:
+          just-version: 1.43.0
+      - name: Установить зависимости клиентского приложения
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Установить зависимости e2e и Chromium
+        working-directory: tests/e2e
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Запустить сквозной тест
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+        run: just test-e2e
+      - name: Проверить диагностику на пароль
+        id: check-e2e-artifacts
+        if: failure()
+        run: scripts/check_e2e_artifacts.sh tmp/playwright/e2e tmp/k3s/e2e
+      - name: Сохранить диагностику
+        if: failure() && steps.check-e2e-artifacts.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: e2e-test-diagnostics-${{ github.sha }}
+          path: |
+            tmp/playwright/e2e/**
+            tmp/k3s/e2e/*/diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7
+
   build-api:
     name: Сборка API и миграций
-    needs: [test-api, test-operator, test-web]
+    needs: [test-api, test-operator, test-web, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -187,7 +239,7 @@ jobs:
 
   build-web:
     name: Сборка Caddy и клиентского приложения
-    needs: [test-api, test-operator, test-web]
+    needs: [test-api, test-operator, test-web, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

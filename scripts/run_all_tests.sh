@@ -4,8 +4,8 @@ set -uo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 run_id=${MANAGED_VALKEY_ROOT_RUN_ID:-root-$(date -u +%Y%m%d%H%M%S)-$$-$RANDOM}
 run_dir="$repo_root/tmp/test-runs/$run_id"
-suites=(api operator web)
-future_suites=(integration e2e)
+suites=(api operator web e2e)
+future_suites=(integration)
 declare -A pids statuses
 interrupted=0
 command_dir=${MANAGED_VALKEY_TEST_COMMAND_DIR:-}
@@ -14,7 +14,10 @@ mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
 
 suite_justfile() {
-    printf '%s/%s/Justfile\n' "$repo_root" "$1"
+    case "$1" in
+    e2e | integration) printf '%s/tests/%s/Justfile\n' "$repo_root" "$1" ;;
+    *) printf '%s/%s/Justfile\n' "$repo_root" "$1" ;;
+    esac
 }
 
 stop_suites() {
