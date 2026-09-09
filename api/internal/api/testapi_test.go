@@ -17,11 +17,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	clockutils "k8s.io/utils/clock"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
 	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
+	apiconfig "github.com/RostislavDugin/managed-valkey/api/internal/config"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
+	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
@@ -41,10 +45,17 @@ type testAPIConfig struct {
 }
 
 type testAPI struct {
-	server   *httptest.Server
-	client   *http.Client
-	database *store.Store
-	logs     *synchronizedBuffer
+	server          *httptest.Server
+	client          *http.Client
+	database        *store.Store
+	logs            *synchronizedBuffer
+	logger          *slog.Logger
+	kubernetes      client.Client
+	adminKubernetes client.Client
+	syncService     *valkeysync.Service
+	syncCancel      context.CancelFunc
+	syncRunner      *valkeysync.Runner
+	syncStopOnce    sync.Once
 }
 
 type synchronizedBuffer struct {
@@ -202,7 +213,47 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
-	return &testAPI{server: server, client: server.Client(), database: database, logs: logs}
+	return &testAPI{server: server, client: server.Client(), database: database, logs: logs, logger: logger}
+}
+
+func (app *testAPI) startSync(t *testing.T) {
+	t.Helper()
+
+	kubernetes, err := valkeysync.NewKubernetesClientFromFile(os.Getenv("KUBECONFIG"))
+	if err != nil {
+		t.Fatalf("создать рабочий клиент Kubernetes: %v", err)
+	}
+	adminKubernetes, err := valkeysync.NewKubernetesClientFromFile(os.Getenv("ADMIN_KUBECONFIG"))
+	if err != nil {
+		t.Fatalf("создать административный клиент Kubernetes: %v", err)
+	}
+
+	service := valkeysync.NewService(app.database, kubernetes, app.logger)
+	runner := valkeysync.NewRunner(
+		apiconfig.SyncInterval,
+		clockutils.RealClock{},
+		app.logger,
+		service.RunDelivery,
+		service.RunImport,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner.Start(ctx)
+	t.Cleanup(func() {
+		app.stopSync()
+	})
+
+	app.kubernetes = kubernetes
+	app.adminKubernetes = adminKubernetes
+	app.syncService = service
+	app.syncCancel = cancel
+	app.syncRunner = runner
+}
+
+func (app *testAPI) stopSync() {
+	app.syncStopOnce.Do(func() {
+		app.syncCancel()
+		app.syncRunner.Wait()
+	})
 }
 
 func (app *testAPI) registerAccount(t *testing.T, email string) testAccount {

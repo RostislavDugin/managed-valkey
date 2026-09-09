@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	instanceLabelKey = "valkey.h3llo-demo.com/instance"
-	userIDLabelKey   = "valkey.h3llo-demo.com/user-id"
+	instanceLabelKey = valkeyv1alpha1.InstanceLabelKey
+	userIDLabelKey   = valkeyv1alpha1.UserIDLabelKey
 )
 
 var (

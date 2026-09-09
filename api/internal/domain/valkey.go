@@ -39,6 +39,13 @@ const (
 	ValkeyNetworkVerificationUnknown  ValkeyNetworkVerificationStatus = "unknown"
 )
 
+type ValkeyDeletionStage string
+
+const (
+	ValkeyDeletionStageCRPrepared        ValkeyDeletionStage = "cr_delete_prepared"
+	ValkeyDeletionStageNamespacePrepared ValkeyDeletionStage = "namespace_delete_prepared"
+)
+
 type ValkeyNodeRole string
 
 const (

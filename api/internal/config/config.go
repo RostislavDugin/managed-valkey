@@ -18,7 +18,7 @@ import (
 const (
 	ServiceName     = "api"
 	ShutdownTimeout = 15 * time.Second
-	SyncInterval    = 5 * time.Second
+	SyncInterval    = time.Second
 	EnvDatabaseURL  = "DATABASE_URL"
 	EnvJWTSecret    = "JWT_SECRET"
 	EnvHTTPAddr     = "HTTP_ADDR"

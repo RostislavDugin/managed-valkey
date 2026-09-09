@@ -11,11 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	clockutils "k8s.io/utils/clock"
+
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
 	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
+	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 	"github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
@@ -81,16 +84,36 @@ func run() error {
 		cfg.ManagedK8SNodeRAMGB,
 		valkey.CryptoSlugGenerator{},
 	)
+	kubernetes, err := valkeysync.NewKubernetesClient()
+	if err != nil {
+		return err
+	}
+	syncService := valkeysync.NewService(database, kubernetes, logger)
+	syncRunner := valkeysync.NewRunner(
+		config.SyncInterval,
+		clockutils.RealClock{},
+		logger,
+		syncService.RunDelivery,
+		syncService.RunImport,
+	)
+	syncContext, stopSync := context.WithCancel(ctx)
+	syncRunner.Start(syncContext)
 
 	router, err := api.NewRouter(logger, database, authService, valkeyService, auditService)
 	if err != nil {
+		stopSync()
+		syncRunner.Wait()
+
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}
 
 	server := api.NewServer(cfg.HTTPAddr, router, logger, config.ShutdownTimeout)
 
-	if err := server.Run(ctx); err != nil {
-		return err
+	serverErr := server.Run(ctx)
+	stopSync()
+	syncRunner.Wait()
+	if serverErr != nil {
+		return serverErr
 	}
 
 	logger.Info("api остановлен")

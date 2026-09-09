@@ -17,7 +17,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
-const instanceFinalizer = "valkey.h3llo-demo.com/instance-protection"
+const instanceFinalizer = valkeyv1alpha1.InstanceFinalizer
 
 func (r *ValkeyInstanceReconciler) ensureInstanceFinalizer(
 	ctx context.Context,

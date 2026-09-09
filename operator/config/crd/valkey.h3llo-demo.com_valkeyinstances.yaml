@@ -368,6 +368,8 @@ spec:
                 enum:
                 - provisioning
                 - running
+                - updating
+                - degraded
                 - unavailable
                 - error
                 type: string

@@ -9,6 +9,14 @@ type ValkeyMode string
 const (
 	ValkeyModeSingle ValkeyMode = "single"
 	ValkeyModeHA     ValkeyMode = "ha"
+
+	InstanceFinalizer             = "valkey.h3llo-demo.com/instance-protection"
+	InstanceLabelKey              = "valkey.h3llo-demo.com/instance"
+	InstanceIDLabelKey            = "valkey.h3llo-demo.com/instance-id"
+	UserIDLabelKey                = "valkey.h3llo-demo.com/user-id"
+	ManagedByLabelKey             = "app.kubernetes.io/managed-by"
+	ManagedByLabelValue           = "managed-valkey-api"
+	ConditionTypeRecoveryRequired = "RecoveryRequired"
 )
 
 type InstancePhase string
@@ -16,6 +24,8 @@ type InstancePhase string
 const (
 	InstancePhaseProvisioning InstancePhase = "provisioning"
 	InstancePhaseRunning      InstancePhase = "running"
+	InstancePhaseUpdating     InstancePhase = "updating"
+	InstancePhaseDegraded     InstancePhase = "degraded"
 	InstancePhaseUnavailable  InstancePhase = "unavailable"
 	InstancePhaseError        InstancePhase = "error"
 )
@@ -173,7 +183,7 @@ type DeletionStatus struct {
 type ValkeyInstanceStatus struct {
 	CredentialsInitialized bool `json:"credentialsInitialized,omitempty"`
 	Initialized            bool `json:"initialized,omitempty"`
-	// +kubebuilder:validation:Enum=provisioning;running;unavailable;error
+	// +kubebuilder:validation:Enum=provisioning;running;updating;degraded;unavailable;error
 	// +optional
 	Phase                  InstancePhase          `json:"phase,omitempty"`
 	Reason                 string                 `json:"reason,omitempty"`

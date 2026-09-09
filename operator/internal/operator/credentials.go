@@ -25,7 +25,7 @@ import (
 
 const (
 	conditionTypeCredentialsReady = "CredentialsReady"
-	conditionTypeRecoveryRequired = "RecoveryRequired"
+	conditionTypeRecoveryRequired = valkeyv1alpha1.ConditionTypeRecoveryRequired
 )
 
 func (r *ValkeyInstanceReconciler) reconcileCredentials(
