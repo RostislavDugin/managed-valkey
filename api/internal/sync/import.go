@@ -19,6 +19,8 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
+const maxMetricSnapshots = 3
+
 func (s *Service) importInstance(ctx context.Context, instanceID uuid.UUID) error {
 	instance, err := s.repository.FindValkeyInstanceForSync(ctx, instanceID)
 	if err != nil {
@@ -62,22 +64,115 @@ func (s *Service) importInstance(ctx context.Context, instanceID uuid.UUID) erro
 		return err
 	}
 
+	metrics, rejected := buildMetricSnapshots(resource)
+	for _, rejection := range rejected {
+		s.logger.Warn(
+			"снимок метрик Valkey пропущен",
+			"instance_id", instance.ID,
+			"ordinal", rejection.ordinal,
+			"reason", rejection.reason,
+		)
+	}
+	var metricsErr error
+	if len(metrics) > 0 {
+		metricsErr = s.repository.ImportValkeyNodeMetrics(ctx, instance.ID, metrics, s.retention)
+		if metricsErr != nil {
+			s.logger.Error("не удалось сохранить метрики Valkey", "instance_id", instance.ID, "error", metricsErr)
+		}
+	}
+
 	observation, present, err := buildObservation(resource)
 	if err != nil {
-		return err
+		return errors.Join(metricsErr, err)
 	}
 	if !present {
-		return nil
+		return metricsErr
 	}
 	if err := s.repository.ImportValkeyObservation(ctx, instance.ID, observation); err != nil {
 		if errors.Is(err, store.ErrValkeyObservationStale) {
-			return nil
+			return metricsErr
 		}
 
-		return err
+		return errors.Join(metricsErr, err)
 	}
 
-	return nil
+	return metricsErr
+}
+
+type metricRejection struct {
+	ordinal int32
+	reason  string
+}
+
+func buildMetricSnapshots(
+	resource *valkeyv1alpha1.ValkeyInstance,
+) ([]store.ValkeyNodeMetric, []metricRejection) {
+	nodes := make(map[int32]valkeyv1alpha1.NodeStatus, len(resource.Status.Nodes))
+	duplicateNodes := make(map[int32]struct{})
+	for _, node := range resource.Status.Nodes {
+		if _, exists := nodes[node.Ordinal]; exists {
+			delete(nodes, node.Ordinal)
+			duplicateNodes[node.Ordinal] = struct{}{}
+			continue
+		}
+		if _, duplicate := duplicateNodes[node.Ordinal]; !duplicate {
+			nodes[node.Ordinal] = node
+		}
+	}
+
+	metrics := make([]store.ValkeyNodeMetric, 0, min(len(resource.Status.Metrics), maxMetricSnapshots))
+	rejected := make([]metricRejection, 0)
+	for _, metric := range resource.Status.Metrics {
+		reason := metricRejectionReason(metric, nodes)
+		if reason == "" && len(metrics) == maxMetricSnapshots {
+			reason = "превышен предел снимков"
+		}
+		if reason != "" {
+			rejected = append(rejected, metricRejection{ordinal: metric.Ordinal, reason: reason})
+			continue
+		}
+
+		metrics = append(metrics, store.ValkeyNodeMetric{
+			Ordinal:          int(metric.Ordinal),
+			TS:               metric.CollectedAt.UTC(),
+			Role:             domain.ValkeyNodeRole(metric.Role),
+			RunID:            metric.RunID,
+			UsedMemoryBytes:  metric.UsedMemoryBytes,
+			MaxmemoryBytes:   metric.MaxmemoryBytes,
+			ConnectedClients: metric.ConnectedClients,
+			OpsPerSec:        metric.OpsPerSec,
+			KeyspaceHits:     metric.KeyspaceHits,
+			KeyspaceMisses:   metric.KeyspaceMisses,
+			EvictedKeys:      metric.EvictedKeys,
+			CPUMillicores:    metric.CPUMillicores,
+		})
+	}
+
+	return metrics, rejected
+}
+
+func metricRejectionReason(
+	metric valkeyv1alpha1.NodeMetricStatus,
+	nodes map[int32]valkeyv1alpha1.NodeStatus,
+) string {
+	if metric.Ordinal < 0 || metric.PodUID == "" || metric.ContainerID == "" || metric.RunID == "" ||
+		metric.CollectedAt.IsZero() ||
+		(metric.Role != valkeyv1alpha1.NodeRolePrimary && metric.Role != valkeyv1alpha1.NodeRoleReplica) ||
+		metric.UsedMemoryBytes < 0 || metric.MaxmemoryBytes < 0 || metric.ConnectedClients < 0 ||
+		metric.OpsPerSec < 0 || metric.KeyspaceHits < 0 || metric.KeyspaceMisses < 0 ||
+		metric.EvictedKeys < 0 || metric.CPUMillicores != nil && *metric.CPUMillicores < 0 {
+		return "недопустимые поля"
+	}
+
+	node, exists := nodes[metric.Ordinal]
+	if !exists {
+		return "текущая нода не найдена"
+	}
+	if metric.PodUID != node.PodUID || metric.ContainerID != node.ContainerID || metric.RunID != node.RunID {
+		return "идентичность процесса не совпадает"
+	}
+
+	return ""
 }
 
 func buildObservation(resource *valkeyv1alpha1.ValkeyInstance) (store.ValkeyObservation, bool, error) {

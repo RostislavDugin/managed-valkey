@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	clockutils "k8s.io/utils/clock"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/api"
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
+	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 )
 
 type stubProbe struct {
@@ -67,6 +70,40 @@ func TestHealthUsesHTTP(t *testing.T) {
 			t.Errorf("проверок базы %d, ожидалась одна", probe.calls)
 		}
 	})
+}
+
+func TestMetricCleanupFailureDoesNotChangeReadiness(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	cleanupStarted := make(chan struct{})
+	blocked := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	runner := valkeysync.NewRunner(
+		time.Hour,
+		24*time.Hour,
+		clockutils.RealClock{},
+		app.logger,
+		blocked,
+		blocked,
+		func(context.Context) error {
+			close(cleanupStarted)
+			return errors.New("cleanup failed")
+		},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner.Start(ctx)
+	select {
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("очистка не началась")
+	}
+
+	response := app.requestJSON(t, http.MethodGet, api.PathReady, nil, nil)
+	assertStatus(t, response, http.StatusOK)
+
+	cancel()
+	runner.Wait()
 }
 
 func TestRequestIDUsesHTTPHeaders(t *testing.T) {

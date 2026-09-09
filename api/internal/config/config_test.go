@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
 )
@@ -34,6 +35,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv(config.EnvValkeyPublicPort, "")
 	t.Setenv(config.EnvValkeyVCPUPriceCoinsPerHour, "")
 	t.Setenv(config.EnvValkeyRAMGBPriceCoinsPerHour, "")
+	t.Setenv(config.EnvValkeyMetricsRetention, "")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -53,8 +55,36 @@ func TestLoadUsesDefaults(t *testing.T) {
 	}
 	if cfg.ValkeyPublicPort != config.DefaultValkeyPublicPort ||
 		cfg.ValkeyVCPUPriceCoinsPerHour != config.DefaultValkeyVCPUPriceCoinsPerHour ||
-		cfg.ValkeyRAMGBPriceCoinsPerHour != config.DefaultValkeyRAMGBPriceCoinsPerHour {
+		cfg.ValkeyRAMGBPriceCoinsPerHour != config.DefaultValkeyRAMGBPriceCoinsPerHour ||
+		cfg.ValkeyMetricsRetention != config.DefaultValkeyMetricsRetention {
 		t.Errorf("неожиданные значения Valkey по умолчанию: %+v", cfg)
+	}
+}
+
+func TestLoadValkeyMetricsRetention(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvValkeyMetricsRetention, "36h30m")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузить конфигурацию: %v", err)
+	}
+	if cfg.ValkeyMetricsRetention != 36*time.Hour+30*time.Minute {
+		t.Fatalf("срок хранения %s, ожидался 36h30m", cfg.ValkeyMetricsRetention)
+	}
+}
+
+func TestLoadRejectsInvalidValkeyMetricsRetention(t *testing.T) {
+	for _, value := range []string{"invalid", "0s", "-1h"} {
+		t.Run(value, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(config.EnvValkeyMetricsRetention, value)
+
+			_, err := config.Load()
+			if err == nil || !strings.Contains(err.Error(), config.EnvValkeyMetricsRetention) {
+				t.Fatalf("ошибка %v, ожидалось имя %s", err, config.EnvValkeyMetricsRetention)
+			}
+		})
 	}
 }
 
@@ -112,6 +142,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv(config.EnvValkeyInstanceMaxRAMGB, "16")
 	t.Setenv(config.EnvValkeyVCPUPriceCoinsPerHour, "125")
 	t.Setenv(config.EnvValkeyRAMGBPriceCoinsPerHour, "50")
+	t.Setenv(config.EnvValkeyMetricsRetention, "168h")
 	t.Setenv(config.EnvManagedK8SNodeVCPU, "24")
 	t.Setenv(config.EnvManagedK8SNodeRAMGB, "48")
 }

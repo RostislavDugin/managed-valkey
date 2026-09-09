@@ -3,12 +3,22 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/domain"
+)
+
+const maxValkeyMetricBatchSize = 3
+
+var (
+	ErrValkeyMetricBatchTooLarge = errors.New("пакет метрик Valkey содержит больше трёх строк")
+	ErrValkeyMetricsRetention    = errors.New("срок хранения метрик Valkey должен быть положительным")
 )
 
 type ValkeyMetricBucket struct {
@@ -22,6 +32,95 @@ type ValkeyMetricBucket struct {
 	KeyspaceHits     *int64                `gorm:"column:keyspace_hits"`
 	KeyspaceMisses   *int64                `gorm:"column:keyspace_misses"`
 	EvictedKeys      *int64                `gorm:"column:evicted_keys"`
+}
+
+func (s *Store) ImportValkeyNodeMetrics(
+	ctx context.Context,
+	instanceID uuid.UUID,
+	metrics []ValkeyNodeMetric,
+	retention time.Duration,
+) error {
+	if len(metrics) > maxValkeyMetricBatchSize {
+		return ErrValkeyMetricBatchTooLarge
+	}
+	if retention <= 0 {
+		return ErrValkeyMetricsRetention
+	}
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	return s.WithinTransaction(ctx, func(tx *gorm.DB) error {
+		instance, err := findValkeyInstanceForSyncUpdate(ctx, tx, instanceID)
+		if err != nil {
+			return err
+		}
+		if instance.DeletionRequestedAt != nil {
+			return nil
+		}
+
+		now, err := s.DatabaseTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		cutoff := now.Add(-retention)
+		accepted := make([]ValkeyNodeMetric, 0, len(metrics))
+		for _, metric := range metrics {
+			if metric.TS.Before(cutoff) {
+				continue
+			}
+
+			metric.InstanceID = instanceID
+			metric.TS = metric.TS.UTC()
+			accepted = append(accepted, metric)
+		}
+		if len(accepted) == 0 {
+			return nil
+		}
+
+		result := tx.WithContext(ctx).Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "instance_id"},
+				{Name: "ordinal"},
+				{Name: "ts"},
+			},
+			DoNothing: true,
+		}).Create(&accepted)
+		if result.Error != nil {
+			return fmt.Errorf("сохранить метрики Valkey: %w", result.Error)
+		}
+
+		return nil
+	})
+}
+
+func (s *Store) DeleteExpiredValkeyNodeMetrics(ctx context.Context, retention time.Duration) error {
+	if retention <= 0 {
+		return ErrValkeyMetricsRetention
+	}
+
+	return s.WithinTransaction(ctx, func(tx *gorm.DB) error {
+		now, err := s.DatabaseTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+
+		_, err = s.DeleteValkeyNodeMetricsBefore(ctx, tx, now.Add(-retention))
+		return err
+	})
+}
+
+func (s *Store) DeleteValkeyNodeMetricsBefore(
+	ctx context.Context,
+	tx *gorm.DB,
+	cutoff time.Time,
+) (int64, error) {
+	result := tx.WithContext(ctx).Where("ts < ?", cutoff.UTC()).Delete(&ValkeyNodeMetric{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("удалить просроченные метрики Valkey: %w", result.Error)
+	}
+
+	return result.RowsAffected, nil
 }
 
 func (s *Store) ReadValkeyMetricBuckets(

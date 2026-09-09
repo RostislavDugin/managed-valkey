@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	stdsync "sync"
+	"time"
 
 	"github.com/google/uuid"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,16 +24,23 @@ type Repository interface {
 	PrepareValkeyDeletion(context.Context, uuid.UUID, domain.ValkeyDeletionStage, string, *string) error
 	CompleteValkeyDeletion(context.Context, uuid.UUID) error
 	ImportValkeyObservation(context.Context, uuid.UUID, store.ValkeyObservation) error
+	ImportValkeyNodeMetrics(context.Context, uuid.UUID, []store.ValkeyNodeMetric, time.Duration) error
 }
 
 type Service struct {
 	repository Repository
 	kubernetes client.Client
 	logger     *slog.Logger
+	retention  time.Duration
 }
 
-func NewService(repository Repository, kubernetes client.Client, logger *slog.Logger) *Service {
-	return &Service{repository: repository, kubernetes: kubernetes, logger: logger}
+func NewService(
+	repository Repository,
+	kubernetes client.Client,
+	logger *slog.Logger,
+	retention time.Duration,
+) *Service {
+	return &Service{repository: repository, kubernetes: kubernetes, logger: logger, retention: retention}
 }
 
 func (s *Service) RunDelivery(ctx context.Context) error {

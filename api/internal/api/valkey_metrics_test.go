@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
 	"github.com/RostislavDugin/managed-valkey/api/internal/domain"
@@ -78,6 +81,178 @@ func TestValkeyMetricsSchemaAcceptsSnapshotsAndRejectsInvalidRows(t *testing.T) 
 		err,
 	) != "valkey_node_metrics_instance_id_fkey" {
 		t.Fatalf("чужой instance_id вернул %v", err)
+	}
+}
+
+func TestImportValkeyNodeMetricsStoresRecentBatchOnce(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import"})
+	ctx := context.Background()
+	now, err := app.database.DatabaseTime(ctx, app.database.DB())
+	if err != nil {
+		t.Fatalf("прочитать время PostgreSQL: %v", err)
+	}
+	collectedAt := now.Add(-time.Minute).Truncate(time.Second).Add(123456 * time.Microsecond)
+	rows := []store.ValkeyNodeMetric{
+		metricValues(
+			uuid.Nil, 0, collectedAt, domain.ValkeyNodeRolePrimary, "run-a",
+			100, nil, 1, 2, 3, 4, 5,
+		),
+		metricValues(
+			uuid.Nil, 1, collectedAt, domain.ValkeyNodeRoleReplica, "run-b",
+			200, int64Pointer(125), 6, 7, 8, 9, 10,
+		),
+		metricValues(
+			uuid.Nil, 2, collectedAt, domain.ValkeyNodeRoleReplica, "run-c",
+			300, int64Pointer(250), 11, 12, 13, 14, 15,
+		),
+	}
+
+	for range 2 {
+		if err := app.database.ImportValkeyNodeMetrics(ctx, instance.ID, rows, 24*time.Hour); err != nil {
+			t.Fatalf("импортировать метрики: %v", err)
+		}
+	}
+
+	var stored []store.ValkeyNodeMetric
+	if err := app.database.DB().Where("instance_id = ?", instance.ID).Order("ordinal").Find(&stored).Error; err != nil {
+		t.Fatalf("прочитать импортированные метрики: %v", err)
+	}
+	if len(stored) != 3 {
+		t.Fatalf("строк %d, ожидалось 3", len(stored))
+	}
+	if !stored[0].TS.Equal(collectedAt) || stored[0].CPUMillicores != nil || stored[0].RunID != "run-a" {
+		t.Fatalf("первая строка изменена: %+v", stored[0])
+	}
+	if stored[1].CPUMillicores == nil || *stored[1].CPUMillicores != 125 ||
+		stored[1].UsedMemoryBytes != 200 || stored[1].KeyspaceMisses != 9 {
+		t.Fatalf("вторая строка изменена: %+v", stored[1])
+	}
+}
+
+func TestImportValkeyNodeMetricsRejectsLargeBatchAndExpiredRows(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import-limits"})
+	ctx := context.Background()
+	now, err := app.database.DatabaseTime(ctx, app.database.DB())
+	if err != nil {
+		t.Fatalf("прочитать время PostgreSQL: %v", err)
+	}
+
+	tooMany := make([]store.ValkeyNodeMetric, 4)
+	if err := app.database.ImportValkeyNodeMetrics(ctx, instance.ID, tooMany, time.Hour); !errors.Is(
+		err,
+		store.ErrValkeyMetricBatchTooLarge,
+	) {
+		t.Fatalf("ошибка %v, ожидалась %v", err, store.ErrValkeyMetricBatchTooLarge)
+	}
+
+	rows := []store.ValkeyNodeMetric{
+		metricRecord(instance.ID, 0, now.Add(-2*time.Hour), "expired"),
+		metricRecord(instance.ID, 1, now.Add(-time.Minute), "recent"),
+	}
+	if err := app.database.ImportValkeyNodeMetrics(ctx, instance.ID, rows, time.Hour); err != nil {
+		t.Fatalf("импортировать метрики: %v", err)
+	}
+
+	var stored []store.ValkeyNodeMetric
+	if err := app.database.DB().Where("instance_id = ?", instance.ID).Find(&stored).Error; err != nil {
+		t.Fatalf("прочитать импортированные метрики: %v", err)
+	}
+	if len(stored) != 1 || stored[0].RunID != "recent" {
+		t.Fatalf("сохранены неожиданные строки: %+v", stored)
+	}
+}
+
+func TestImportValkeyNodeMetricsDoesNotRaceDeletion(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import-deletion"})
+	ctx := context.Background()
+
+	tx := app.database.DB().Begin()
+	if tx.Error != nil {
+		t.Fatalf("начать транзакцию удаления: %v", tx.Error)
+	}
+	t.Cleanup(func() { _ = tx.Rollback().Error })
+	var locked store.ValkeyInstance
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", instance.ID).
+		First(&locked).
+		Error; err != nil {
+		t.Fatalf("заблокировать инстанс: %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		result <- app.database.ImportValkeyNodeMetrics(ctx, instance.ID, []store.ValkeyNodeMetric{
+			metricRecord(instance.ID, 0, time.Now().UTC(), "concurrent"),
+		}, time.Hour)
+	}()
+
+	requestedAt := time.Now().UTC()
+	if err := tx.Model(&store.ValkeyInstance{}).Where("id = ?", instance.ID).
+		UpdateColumn("deletion_requested_at", requestedAt).Error; err != nil {
+		t.Fatalf("начать удаление: %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		t.Fatalf("завершить транзакцию удаления: %v", err)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("импорт при удалении: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("импорт не завершился после удаления")
+	}
+
+	var count int64
+	if err := app.database.DB().Model(&store.ValkeyNodeMetric{}).
+		Where("instance_id = ?", instance.ID).Count(&count).Error; err != nil {
+		t.Fatalf("посчитать метрики: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("при удалении сохранено строк: %d", count)
+	}
+}
+
+func TestDeleteValkeyNodeMetricsBeforeKeepsBoundary(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	instance := createValkey(t, app, account, map[string]any{"name": "metrics-cleanup"})
+	cutoff := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	rows := []store.ValkeyNodeMetric{
+		metricRecord(instance.ID, 0, cutoff.Add(-time.Microsecond), "old"),
+		metricRecord(instance.ID, 0, cutoff, "boundary"),
+		metricRecord(instance.ID, 0, cutoff.Add(time.Microsecond), "new"),
+	}
+	if err := app.database.DB().Create(&rows).Error; err != nil {
+		t.Fatalf("подготовить метрики: %v", err)
+	}
+
+	var deleted int64
+	err := app.database.WithinTransaction(context.Background(), func(tx *gorm.DB) error {
+		var deleteErr error
+		deleted, deleteErr = app.database.DeleteValkeyNodeMetricsBefore(context.Background(), tx, cutoff)
+		return deleteErr
+	})
+	if err != nil {
+		t.Fatalf("очистить метрики: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("удалено строк %d, ожидалась 1", deleted)
+	}
+
+	var stored []store.ValkeyNodeMetric
+	if err := app.database.DB().Where("instance_id = ?", instance.ID).Order("ts").Find(&stored).Error; err != nil {
+		t.Fatalf("прочитать метрики после очистки: %v", err)
+	}
+	if len(stored) != 2 || !stored[0].TS.Equal(cutoff) || stored[0].RunID != "boundary" {
+		t.Fatalf("после очистки остались неожиданные строки: %+v", stored)
 	}
 }
 

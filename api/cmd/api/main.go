@@ -88,13 +88,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	syncService := valkeysync.NewService(database, kubernetes, logger)
+	syncService := valkeysync.NewService(database, kubernetes, logger, cfg.ValkeyMetricsRetention)
 	syncRunner := valkeysync.NewRunner(
 		config.SyncInterval,
+		config.MetricsCleanupInterval,
 		clockutils.RealClock{},
 		logger,
 		syncService.RunDelivery,
 		syncService.RunImport,
+		func(ctx context.Context) error {
+			return database.DeleteExpiredValkeyNodeMetrics(ctx, cfg.ValkeyMetricsRetention)
+		},
 	)
 	syncContext, stopSync := context.WithCancel(ctx)
 	syncRunner.Start(syncContext)

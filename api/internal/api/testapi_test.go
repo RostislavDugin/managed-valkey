@@ -228,13 +228,22 @@ func (app *testAPI) startSync(t *testing.T) {
 		t.Fatalf("создать административный клиент Kubernetes: %v", err)
 	}
 
-	service := valkeysync.NewService(app.database, kubernetes, app.logger)
+	service := valkeysync.NewService(
+		app.database,
+		kubernetes,
+		app.logger,
+		apiconfig.DefaultValkeyMetricsRetention,
+	)
 	runner := valkeysync.NewRunner(
 		apiconfig.SyncInterval,
+		apiconfig.MetricsCleanupInterval,
 		clockutils.RealClock{},
 		app.logger,
 		service.RunDelivery,
 		service.RunImport,
+		func(ctx context.Context) error {
+			return app.database.DeleteExpiredValkeyNodeMetrics(ctx, apiconfig.DefaultValkeyMetricsRetention)
+		},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	runner.Start(ctx)

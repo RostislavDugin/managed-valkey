@@ -154,6 +154,64 @@ type NodeStatus struct {
 	Termination *ProcessTermination `json:"termination,omitempty"`
 }
 
+type NodeMetricStatus struct {
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	Ordinal int32 `json:"ordinal"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	PodUID string `json:"podUID"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	ContainerID string `json:"containerID"`
+
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	RunID string `json:"runId"`
+
+	// +required
+	CollectedAt metav1.MicroTime `json:"collectedAt"`
+
+	// +kubebuilder:validation:Enum=primary;replica
+	// +required
+	Role NodeRole `json:"role"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	UsedMemoryBytes int64 `json:"usedMemoryBytes"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	MaxmemoryBytes int64 `json:"maxmemoryBytes"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	ConnectedClients int64 `json:"connectedClients"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	OpsPerSec int64 `json:"opsPerSec"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	KeyspaceHits int64 `json:"keyspaceHits"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	KeyspaceMisses int64 `json:"keyspaceMisses"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +required
+	EvictedKeys int64 `json:"evictedKeys"`
+
+	// +kubebuilder:validation:Minimum=0
+	// +nullable
+	// +required
+	CPUMillicores *int64 `json:"cpuMillicores"`
+}
+
 type EnvoyProcessStatus struct {
 	PodUID      string `json:"podUID"`
 	NodeName    string `json:"nodeName"`
@@ -202,6 +260,12 @@ type ValkeyInstanceStatus struct {
 	// +listMapKey=ordinal
 	// +optional
 	Nodes []NodeStatus `json:"nodes,omitempty"`
+
+	// +listType=map
+	// +listMapKey=ordinal
+	// +kubebuilder:validation:MaxItems=3
+	// +optional
+	Metrics []NodeMetricStatus `json:"metrics,omitempty"`
 
 	// +listType=map
 	// +listMapKey=type

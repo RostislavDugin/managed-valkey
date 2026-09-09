@@ -16,13 +16,14 @@ import (
 )
 
 const (
-	ServiceName     = "api"
-	ShutdownTimeout = 15 * time.Second
-	SyncInterval    = time.Second
-	EnvDatabaseURL  = "DATABASE_URL"
-	EnvJWTSecret    = "JWT_SECRET"
-	EnvHTTPAddr     = "HTTP_ADDR"
-	DefaultHTTPAddr = ":8080"
+	ServiceName            = "api"
+	ShutdownTimeout        = 15 * time.Second
+	SyncInterval           = time.Second
+	MetricsCleanupInterval = 24 * time.Hour
+	EnvDatabaseURL         = "DATABASE_URL"
+	EnvJWTSecret           = "JWT_SECRET"
+	EnvHTTPAddr            = "HTTP_ADDR"
+	DefaultHTTPAddr        = ":8080"
 
 	EnvValkeyBaseDomain                 = "VALKEY_BASE_DOMAIN"
 	EnvValkeyPublicPort                 = "VALKEY_PUBLIC_PORT"
@@ -30,11 +31,13 @@ const (
 	EnvValkeyInstanceMaxRAMGB           = "VALKEY_INSTANCE_MAX_RAM_GB"
 	EnvValkeyVCPUPriceCoinsPerHour      = "VALKEY_INSTANCE_VCPU_PRICE_COINS_PER_HOUR"
 	EnvValkeyRAMGBPriceCoinsPerHour     = "VALKEY_INSTANCE_RAM_GB_PRICE_COINS_PER_HOUR"
+	EnvValkeyMetricsRetention           = "VALKEY_METRICS_RETENTION"
 	EnvManagedK8SNodeVCPU               = "MANAGED_K8S_NODE_VCPU"
 	EnvManagedK8SNodeRAMGB              = "MANAGED_K8S_NODE_RAM_GB"
 	DefaultValkeyPublicPort             = 41379
 	DefaultValkeyVCPUPriceCoinsPerHour  = 125
 	DefaultValkeyRAMGBPriceCoinsPerHour = 50
+	DefaultValkeyMetricsRetention       = 168 * time.Hour
 	MaxValkeyNodes                      = 3
 )
 
@@ -53,6 +56,7 @@ type Config struct {
 	ValkeyInstanceMaxRAMGB       int
 	ValkeyVCPUPriceCoinsPerHour  int64
 	ValkeyRAMGBPriceCoinsPerHour int64
+	ValkeyMetricsRetention       time.Duration
 	ManagedK8SNodeVCPU           int
 	ManagedK8SNodeRAMGB          int
 	Logging                      logging.Config
@@ -123,6 +127,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	valkeyMetricsRetention, err := positiveDurationWithDefault(
+		EnvValkeyMetricsRetention,
+		DefaultValkeyMetricsRetention,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+
 	if priceOverflows(valkeyVCPUPrice, valkeyRAMGBPrice, valkeyInstanceMaxVCPU, valkeyInstanceMaxRAMGB) {
 		return Config{}, errors.New("ставки Valkey переполняют целочисленный расчёт цены")
 	}
@@ -137,6 +149,7 @@ func Load() (Config, error) {
 		ValkeyInstanceMaxRAMGB:       valkeyInstanceMaxRAMGB,
 		ValkeyVCPUPriceCoinsPerHour:  valkeyVCPUPrice,
 		ValkeyRAMGBPriceCoinsPerHour: valkeyRAMGBPrice,
+		ValkeyMetricsRetention:       valkeyMetricsRetention,
 		ManagedK8SNodeVCPU:           managedK8SNodeVCPU,
 		ManagedK8SNodeRAMGB:          managedK8SNodeRAMGB,
 		Logging:                      logging.ConfigFromEnv(ServiceName),
@@ -184,6 +197,20 @@ func nonnegativeInt64WithDefault(name string, defaultValue int64) (int64, error)
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < 0 {
 		return 0, fmt.Errorf("переменная %s должна быть неотрицательным целым числом", name)
+	}
+
+	return parsed, nil
+}
+
+func positiveDurationWithDefault(name string, defaultValue time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return defaultValue, nil
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("переменная %s должна быть положительной длительностью", name)
 	}
 
 	return parsed, nil

@@ -265,6 +265,84 @@ spec:
                 type: object
               initialized:
                 type: boolean
+              metrics:
+                items:
+                  properties:
+                    collectedAt:
+                      format: date-time
+                      type: string
+                    connectedClients:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    containerID:
+                      minLength: 1
+                      type: string
+                    cpuMillicores:
+                      format: int64
+                      minimum: 0
+                      nullable: true
+                      type: integer
+                    evictedKeys:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    keyspaceHits:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    keyspaceMisses:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    maxmemoryBytes:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    opsPerSec:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    ordinal:
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    podUID:
+                      minLength: 1
+                      type: string
+                    role:
+                      enum:
+                      - primary
+                      - replica
+                      type: string
+                    runId:
+                      minLength: 1
+                      type: string
+                    usedMemoryBytes:
+                      format: int64
+                      minimum: 0
+                      type: integer
+                  required:
+                  - collectedAt
+                  - connectedClients
+                  - containerID
+                  - cpuMillicores
+                  - evictedKeys
+                  - keyspaceHits
+                  - keyspaceMisses
+                  - maxmemoryBytes
+                  - opsPerSec
+                  - ordinal
+                  - podUID
+                  - role
+                  - runId
+                  - usedMemoryBytes
+                  type: object
+                maxItems: 3
+                type: array
+                x-kubernetes-list-map-keys:
+                - ordinal
+                x-kubernetes-list-type: map
               network:
                 properties:
                   desiredFingerprint:

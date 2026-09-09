@@ -12,36 +12,44 @@ import (
 type Pass func(context.Context) error
 
 type Runner struct {
-	interval time.Duration
-	clock    clockutils.WithTicker
-	logger   *slog.Logger
-	delivery Pass
-	importer Pass
-	wait     stdsync.WaitGroup
+	syncInterval    time.Duration
+	cleanupInterval time.Duration
+	clock           clockutils.WithTicker
+	logger          *slog.Logger
+	delivery        Pass
+	importer        Pass
+	cleaner         Pass
+	wait            stdsync.WaitGroup
 }
 
 func NewRunner(
-	interval time.Duration,
+	syncInterval time.Duration,
+	cleanupInterval time.Duration,
 	clock clockutils.WithTicker,
 	logger *slog.Logger,
 	delivery Pass,
 	importer Pass,
+	cleaner Pass,
 ) *Runner {
-	return &Runner{interval: interval, clock: clock, logger: logger, delivery: delivery, importer: importer}
+	return &Runner{
+		syncInterval: syncInterval, cleanupInterval: cleanupInterval,
+		clock: clock, logger: logger, delivery: delivery, importer: importer, cleaner: cleaner,
+	}
 }
 
 func (r *Runner) Start(ctx context.Context) {
-	r.wait.Add(2)
+	r.wait.Add(3)
 
-	go r.run(ctx, "доставка намерений", r.delivery)
-	go r.run(ctx, "импорт наблюдений", r.importer)
+	go r.run(ctx, r.syncInterval, "доставка намерений", r.delivery)
+	go r.run(ctx, r.syncInterval, "импорт наблюдений", r.importer)
+	go r.run(ctx, r.cleanupInterval, "очистка метрик", r.cleaner)
 }
 
 func (r *Runner) Wait() {
 	r.wait.Wait()
 }
 
-func (r *Runner) run(ctx context.Context, name string, pass Pass) {
+func (r *Runner) run(ctx context.Context, interval time.Duration, name string, pass Pass) {
 	defer r.wait.Done()
 
 	for {
@@ -52,7 +60,7 @@ func (r *Runner) run(ctx context.Context, name string, pass Pass) {
 			return
 		}
 
-		ticker := r.clock.NewTicker(r.interval)
+		ticker := r.clock.NewTicker(interval)
 		select {
 		case <-ctx.Done():
 			ticker.Stop()

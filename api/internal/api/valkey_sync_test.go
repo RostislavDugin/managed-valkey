@@ -26,7 +26,10 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-const syncWaitTimeout = 20 * time.Second
+const (
+	syncWaitTimeout      = 20 * time.Second
+	testMetricsRetention = 168 * time.Hour
+)
 
 type interceptUpdateClient struct {
 	client.Client
@@ -134,6 +137,20 @@ type failingFindRepository struct {
 	*store.Store
 	instanceID uuid.UUID
 	err        error
+}
+
+type failingMetricsRepository struct {
+	*store.Store
+	err error
+}
+
+func (r failingMetricsRepository) ImportValkeyNodeMetrics(
+	context.Context,
+	uuid.UUID,
+	[]store.ValkeyNodeMetric,
+	time.Duration,
+) error {
+	return r.err
 }
 
 func (r failingFindRepository) FindValkeyInstanceForSync(
@@ -294,6 +311,182 @@ func TestValkeyStateSyncThroughK3S(t *testing.T) {
 	assertImportedRows(t, app, created.ID, 0, 4)
 }
 
+func TestValkeyMetricsSyncThroughK3S(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	setUserQuota(t, app, account.ID, 32, 128)
+	app.startSync(t)
+	created := createValkey(t, app, account, map[string]any{
+		"name": "metrics-sync", "prefix": "metrics", "mode": "ha", "vcpu": 1, "ram_gb": 1,
+	})
+	namespaceName := "valkey-" + created.Slug
+	t.Cleanup(func() {
+		app.stopSync()
+		cleanupSyncNamespace(t, app, namespaceName)
+	})
+
+	resource := waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool {
+		return true
+	})
+	confirmValkeyStatus(t, app, resource)
+	current := getValkeyInstance(t, app, namespaceName, created.Slug)
+	observedAt := current.Status.ObservedAt.DeepCopy()
+	nodes := []valkeyv1alpha1.NodeStatus{
+		metricNodeStatus(0, "pod-a", "container-a", "run-a", valkeyv1alpha1.NodeRolePrimary),
+		metricNodeStatus(1, "pod-b", "container-b", "run-b", valkeyv1alpha1.NodeRoleReplica),
+		metricNodeStatus(2, "pod-c", "container-c", "run-c", valkeyv1alpha1.NodeRoleReplica),
+	}
+	firstCollectedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(123456 * time.Microsecond)
+	current.Status.Nodes = nodes
+	current.Status.Metrics = []valkeyv1alpha1.NodeMetricStatus{
+		testNodeMetricStatus(nodes[0], firstCollectedAt, valkeyv1alpha1.NodeRolePrimary, nil, 100),
+	}
+	if err := app.adminKubernetes.Status().Update(context.Background(), current); err != nil {
+		t.Fatalf("записать первый снимок метрик: %v", err)
+	}
+
+	metrics := waitForHTTPMetrics(
+		t,
+		app,
+		account,
+		created.ID,
+		firstCollectedAt.Add(-time.Second),
+		firstCollectedAt.Add(time.Second),
+		func(metrics valkeydomain.Metrics) bool {
+			return len(metrics.Nodes) == 1 && len(metrics.Nodes[0].Points) == 1 &&
+				metrics.Nodes[0].Points[0].UsedMemoryBytes != nil
+		},
+	)
+	point := metrics.Nodes[0].Points[0]
+	assertFloatPointer(t, "память", point.UsedMemoryBytes, 100)
+	assertFloatPointer(t, "подключения", point.ConnectedClients, 3)
+	assertFloatPointer(t, "операции", point.OpsPerSec, 4)
+	assertIntPointer(t, "попадания", point.KeyspaceHits, 5)
+	assertIntPointer(t, "промахи", point.KeyspaceMisses, 6)
+	assertIntPointer(t, "вытеснения", point.EvictedKeys, 7)
+	if point.CPUMillicores != nil {
+		t.Fatalf("CPU равен %v, ожидался null", point.CPUMillicores)
+	}
+
+	if err := app.syncService.RunImport(context.Background()); err != nil {
+		t.Fatalf("повторить импорт первого снимка: %v", err)
+	}
+	waitForValkeyMetricCount(t, app, created.ID, 1)
+
+	current = getValkeyInstance(t, app, namespaceName, created.Slug)
+	secondCollectedAt := time.Now().UTC().Add(-20 * time.Second).Truncate(time.Microsecond)
+	expiredCollectedAt := time.Now().UTC().Add(-testMetricsRetention - time.Hour).Truncate(time.Microsecond)
+	current.Status.Metrics = []valkeyv1alpha1.NodeMetricStatus{
+		testNodeMetricStatus(nodes[0], secondCollectedAt, valkeyv1alpha1.NodeRoleReplica, pointer(int64(250)), 200),
+		testNodeMetricStatus(nodes[1], secondCollectedAt, valkeyv1alpha1.NodeRoleReplica, nil, 300),
+		testNodeMetricStatus(nodes[2], expiredCollectedAt, valkeyv1alpha1.NodeRoleReplica, nil, 400),
+	}
+	current.Status.Metrics[1].RunID = "former-run"
+	if err := app.adminKubernetes.Status().Update(context.Background(), current); err != nil {
+		t.Fatalf("записать смешанный список метрик: %v", err)
+	}
+	if current.Status.ObservedAt == nil || !current.Status.ObservedAt.Equal(observedAt) {
+		t.Fatalf("observedAt изменился: %v, ожидался %v", current.Status.ObservedAt, observedAt)
+	}
+
+	waitForValkeyMetricCount(t, app, created.ID, 2)
+	var stored []store.ValkeyNodeMetric
+	if err := app.database.DB().Where("instance_id = ?", created.ID).Order("ts").Find(&stored).Error; err != nil {
+		t.Fatalf("прочитать импортированные метрики: %v", err)
+	}
+	if len(stored) != 2 || !stored[0].TS.Equal(firstCollectedAt) || stored[0].RunID != "run-a" ||
+		stored[1].RunID != "run-a" ||
+		stored[1].Role != "replica" || stored[1].CPUMillicores == nil || *stored[1].CPUMillicores != 250 {
+		t.Fatalf("смешанный список импортирован неверно: %+v", stored)
+	}
+	written := app.logs.String()
+	if !strings.Contains(written, "снимок метрик Valkey пропущен") ||
+		!strings.Contains(written, "идентичность процесса не совпадает") {
+		t.Fatalf("отклонённый снимок не записан в журнал: %s", written)
+	}
+	if containsAny(written, "former-run", "container-b", "run-c") {
+		t.Fatalf("журнал содержит идентификатор процесса: %s", written)
+	}
+
+	current = getValkeyInstance(t, app, namespaceName, created.Slug)
+	thirdCollectedAt := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Microsecond)
+	current.Status.ObservedAt = nil
+	current.Status.Metrics = []valkeyv1alpha1.NodeMetricStatus{
+		testNodeMetricStatus(nodes[0], thirdCollectedAt, valkeyv1alpha1.NodeRolePrimary, nil, 500),
+	}
+	if err := app.adminKubernetes.Status().Update(context.Background(), current); err != nil {
+		t.Fatalf("записать метрику без observedAt: %v", err)
+	}
+	waitForValkeyMetricCount(t, app, created.ID, 3)
+
+	current = getValkeyInstance(t, app, namespaceName, created.Slug)
+	fourthCollectedAt := time.Now().UTC().Add(-5 * time.Second).Truncate(time.Microsecond)
+	staleObservedAt := metav1.NewTime(observedAt.Time.Add(-time.Hour))
+	current.Status.ObservedAt = &staleObservedAt
+	current.Status.Metrics = []valkeyv1alpha1.NodeMetricStatus{
+		testNodeMetricStatus(nodes[0], fourthCollectedAt, valkeyv1alpha1.NodeRolePrimary, nil, 600),
+	}
+	if err := app.adminKubernetes.Status().Update(context.Background(), current); err != nil {
+		t.Fatalf("записать метрику с устаревшим observedAt: %v", err)
+	}
+	waitForValkeyMetricCount(t, app, created.ID, 4)
+
+	assertInvalidMetricStatuses(t, app, current, nodes[0], secondCollectedAt)
+}
+
+func TestValkeyMetricImportLogsWriteFailureSafely(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	app.startSync(t)
+	app.stopSync()
+	created := createValkey(t, app, account, map[string]any{"name": "metrics-log", "prefix": "metricslog"})
+	namespaceName := "valkey-" + created.Slug
+	t.Cleanup(func() { cleanupSyncNamespace(t, app, namespaceName) })
+	if err := app.syncService.RunDelivery(context.Background()); err != nil {
+		t.Fatalf("доставить инстанс: %v", err)
+	}
+	resource := waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool {
+		return true
+	})
+	confirmValkeyStatus(t, app, resource)
+	current := getValkeyInstance(t, app, namespaceName, created.Slug)
+	secretRunID := "process-secret-run-id"
+	secretContainerID := "process-secret-container-id"
+	current.Status.Nodes[0].RunID = secretRunID
+	current.Status.Nodes[0].ContainerID = secretContainerID
+	current.Status.Metrics = []valkeyv1alpha1.NodeMetricStatus{
+		testNodeMetricStatus(
+			current.Status.Nodes[0],
+			time.Now().UTC().Truncate(time.Microsecond),
+			valkeyv1alpha1.NodeRolePrimary,
+			nil,
+			100,
+		),
+	}
+	if err := app.adminKubernetes.Status().Update(context.Background(), current); err != nil {
+		t.Fatalf("подготовить снимок метрик: %v", err)
+	}
+
+	failure := errors.New("запись метрик прервана тестом")
+	service := valkeysync.NewService(
+		failingMetricsRepository{Store: app.database, err: failure},
+		app.kubernetes,
+		app.logger,
+		testMetricsRetention,
+	)
+	if err := service.RunImport(context.Background()); err != nil {
+		t.Fatalf("выполнить импорт с отказом записи: %v", err)
+	}
+	written := app.logs.String()
+	if !strings.Contains(written, failure.Error()) ||
+		!strings.Contains(written, "не удалось сохранить метрики Valkey") {
+		t.Fatalf("ошибка записи не попала в журнал: %s", written)
+	}
+	if containsAny(written, secretRunID, secretContainerID, testValkeyPassword) {
+		t.Fatalf("журнал содержит секрет или идентификатор процесса: %s", written)
+	}
+}
+
 func TestValkeySyncStorePreservesIntentAndRollsBackObservation(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
@@ -427,6 +620,127 @@ func TestValkeySyncStorePreservesIntentAndRollsBackObservation(t *testing.T) {
 	if afterIdentity.KubernetesNamespaceUID == nil || *afterIdentity.KubernetesNamespaceUID != "namespace-a" ||
 		!afterIdentity.UpdatedAt.Equal(intent.UpdatedAt) {
 		t.Fatalf("привязка UID изменила намерение: %+v", afterIdentity)
+	}
+}
+
+func metricNodeStatus(
+	ordinal int32,
+	podUID string,
+	containerID string,
+	runID string,
+	role valkeyv1alpha1.NodeRole,
+) valkeyv1alpha1.NodeStatus {
+	return valkeyv1alpha1.NodeStatus{
+		Ordinal: ordinal, PodUID: podUID, ContainerID: containerID, RunID: runID,
+		NodeName: "k3s-server", NodeUID: "node-uid", Role: role, Readiness: true,
+	}
+}
+
+func testNodeMetricStatus(
+	node valkeyv1alpha1.NodeStatus,
+	collectedAt time.Time,
+	role valkeyv1alpha1.NodeRole,
+	cpu *int64,
+	usedMemory int64,
+) valkeyv1alpha1.NodeMetricStatus {
+	return valkeyv1alpha1.NodeMetricStatus{
+		Ordinal: node.Ordinal, PodUID: node.PodUID, ContainerID: node.ContainerID, RunID: node.RunID,
+		CollectedAt: metav1.NewMicroTime(collectedAt), Role: role,
+		UsedMemoryBytes: usedMemory, MaxmemoryBytes: 1024, ConnectedClients: 3, OpsPerSec: 4,
+		KeyspaceHits: 5, KeyspaceMisses: 6, EvictedKeys: 7, CPUMillicores: cpu,
+	}
+}
+
+func waitForValkeyMetricCount(t *testing.T, app *testAPI, instanceID uuid.UUID, expected int64) {
+	t.Helper()
+
+	deadline := time.Now().Add(syncWaitTimeout)
+	for time.Now().Before(deadline) {
+		count := databaseCount(
+			t,
+			app.database.DB().Model(&store.ValkeyNodeMetric{}).Where("instance_id = ?", instanceID),
+		)
+		if count == expected {
+			return
+		}
+		if count > expected {
+			t.Fatalf("строк метрик %d, ожидалось не больше %d", count, expected)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("число строк метрик не стало равно %d", expected)
+}
+
+func waitForHTTPMetrics(
+	t *testing.T,
+	app *testAPI,
+	account testAccount,
+	instanceID uuid.UUID,
+	from time.Time,
+	to time.Time,
+	matches func(valkeydomain.Metrics) bool,
+) valkeydomain.Metrics {
+	t.Helper()
+
+	deadline := time.Now().Add(syncWaitTimeout)
+	for time.Now().Before(deadline) {
+		response := app.requestJSON(t, http.MethodGet, metricsPath(instanceID, from, to), nil, bearer(account.Token))
+		if response.StatusCode == http.StatusOK {
+			metrics := decodeResponse[valkeydomain.Metrics](t, response)
+			if matches(metrics) {
+				return metrics
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("HTTP не вернул ожидаемые метрики инстанса %s", instanceID)
+	return valkeydomain.Metrics{}
+}
+
+func assertInvalidMetricStatuses(
+	t *testing.T,
+	app *testAPI,
+	resource *valkeyv1alpha1.ValkeyInstance,
+	node valkeyv1alpha1.NodeStatus,
+	collectedAt time.Time,
+) {
+	t.Helper()
+
+	tests := []struct {
+		name    string
+		metrics []valkeyv1alpha1.NodeMetricStatus
+	}{
+		{
+			name: "повтор ordinal",
+			metrics: []valkeyv1alpha1.NodeMetricStatus{
+				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRolePrimary, nil, 100),
+				testNodeMetricStatus(node, collectedAt.Add(time.Second), valkeyv1alpha1.NodeRolePrimary, nil, 100),
+			},
+		},
+		{
+			name: "отрицательный показатель",
+			metrics: []valkeyv1alpha1.NodeMetricStatus{
+				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRolePrimary, nil, -1),
+			},
+		},
+		{
+			name: "неизвестная роль",
+			metrics: []valkeyv1alpha1.NodeMetricStatus{
+				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRole("unknown"), nil, 100),
+			},
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			current := getValkeyInstance(t, app, resource.Namespace, resource.Name)
+			current.Status.Metrics = testCase.metrics
+			if err := app.adminKubernetes.Status().Update(context.Background(), current); !apierrors.IsInvalid(err) {
+				t.Fatalf("Kubernetes принял недопустимый status: %v", err)
+			}
+		})
 	}
 }
 
@@ -636,6 +950,7 @@ func TestValkeySyncLeavesForeignAndOrphanNamespacesUntouched(t *testing.T) {
 		failingFindRepository{Store: app.database, instanceID: orphanID, err: databaseFailure},
 		app.kubernetes,
 		app.logger,
+		testMetricsRetention,
 	)
 	if err := failingService.RunDelivery(context.Background()); !errors.Is(err, databaseFailure) {
 		t.Fatalf("ошибка PostgreSQL принята за отсутствие строки: %v", err)
@@ -692,7 +1007,7 @@ func TestValkeySyncContinuesPasswordDeliveryAndRetriesConflict(t *testing.T) {
 			return errors.New("запись ValkeyInstance прервана тестом")
 		},
 	}
-	failingService := valkeysync.NewService(app.database, failingClient, app.logger)
+	failingService := valkeysync.NewService(app.database, failingClient, app.logger, testMetricsRetention)
 	if err := failingService.RunDelivery(context.Background()); err != nil {
 		t.Fatalf("выполнить прерванную доставку: %v", err)
 	}
@@ -758,7 +1073,7 @@ func TestValkeySyncContinuesPasswordDeliveryAndRetriesConflict(t *testing.T) {
 			return app.kubernetes.Update(ctx, object, options...)
 		},
 	}
-	conflictingService := valkeysync.NewService(app.database, conflictingClient, app.logger)
+	conflictingService := valkeysync.NewService(app.database, conflictingClient, app.logger, testMetricsRetention)
 	if err := conflictingService.RunDelivery(context.Background()); err != nil {
 		t.Fatalf("повторить доставку после конфликта: %v", err)
 	}
@@ -799,7 +1114,7 @@ func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
 		blockingClient := &blockingUpdateClient{
 			Client: app.kubernetes, entered: make(chan struct{}), release: make(chan struct{}),
 		}
-		service := valkeysync.NewService(app.database, blockingClient, app.logger)
+		service := valkeysync.NewService(app.database, blockingClient, app.logger, testMetricsRetention)
 		done := make(chan error, 1)
 		go func() { done <- service.RunDelivery(context.Background()) }()
 		waitSignal(t, blockingClient.entered)
@@ -853,7 +1168,7 @@ func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
 		repository := &blockingImportRepository{
 			Store: app.database, entered: make(chan struct{}), release: make(chan struct{}),
 		}
-		service := valkeysync.NewService(repository, app.kubernetes, app.logger)
+		service := valkeysync.NewService(repository, app.kubernetes, app.logger, testMetricsRetention)
 		done := make(chan error, 1)
 		go func() { done <- service.RunImport(context.Background()) }()
 		waitSignal(t, repository.entered)
@@ -887,6 +1202,7 @@ func TestValkeySyncTransportFailureDoesNotAffectHTTPReadiness(t *testing.T) {
 		app.database,
 		transportFailureClient{Client: app.kubernetes, err: failure},
 		app.logger,
+		testMetricsRetention,
 	)
 	if err := service.RunDelivery(context.Background()); !errors.Is(err, failure) {
 		t.Fatalf("отказ Kubernetes вернул ошибку %v", err)
@@ -918,7 +1234,7 @@ func TestValkeySyncRecoversCreateBoundaries(t *testing.T) {
 				return errors.New("ответ Create потерян в тесте")
 			},
 		}
-		service := valkeysync.NewService(app.database, lostResponseClient, app.logger)
+		service := valkeysync.NewService(app.database, lostResponseClient, app.logger, testMetricsRetention)
 		if err := service.RunDelivery(context.Background()); err != nil {
 			t.Fatalf("выполнить доставку с потерянным ответом: %v", err)
 		}
@@ -950,7 +1266,7 @@ func TestValkeySyncRecoversCreateBoundaries(t *testing.T) {
 				return errors.New("создание CR прервано тестом")
 			},
 		}
-		service := valkeysync.NewService(app.database, failedCreateClient, app.logger)
+		service := valkeysync.NewService(app.database, failedCreateClient, app.logger, testMetricsRetention)
 		if err := service.RunDelivery(context.Background()); err != nil {
 			t.Fatalf("выполнить прерванное создание: %v", err)
 		}
@@ -1505,7 +1821,7 @@ func completeDeletionWithoutOperator(t *testing.T, app *testAPI, slug string, in
 	deadline := time.Now().Add(syncWaitTimeout)
 	finalizerRemoved := false
 	for time.Now().Before(deadline) {
-		service := valkeysync.NewService(app.database, app.kubernetes, app.logger)
+		service := valkeysync.NewService(app.database, app.kubernetes, app.logger, testMetricsRetention)
 		if err := service.RunDelivery(context.Background()); err != nil {
 			t.Fatalf("продолжить удаление: %v", err)
 		}
