@@ -85,7 +85,7 @@ describe('маршруты раздела Valkey', () => {
     renderAt('/valkey/management/instance-1/audit-logs');
 
     expect(await screen.findByRole('heading', { name: 'Аудит' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Действий с базой пока не было')).toBeVisible();
+    expect(await screen.findByText('Действий с базой пока не было', {}, WAIT)).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Аудит' })).toHaveAttribute('aria-selected', 'true');
     expect(

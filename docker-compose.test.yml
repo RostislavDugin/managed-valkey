@@ -3,6 +3,7 @@ networks:
     ipam:
       config:
         - subnet: ${K3S_DOCKER_SUBNET:?задайте K3S_DOCKER_SUBNET}
+          gateway: ${K3S_DOCKER_GATEWAY:?задайте K3S_DOCKER_GATEWAY}
 
 services:
   k3s-server:

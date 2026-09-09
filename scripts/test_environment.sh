@@ -170,6 +170,7 @@ allocate_environment() {
     fi
 
     K3S_CLUSTER_DNS="10.$((128 + slot)).0.10"
+    K3S_DOCKER_GATEWAY="172.28.${slot}.1"
     K3S_SERVER_IP="172.28.${slot}.10"
     K3S_AGENT_1_IP="172.28.${slot}.11"
     K3S_AGENT_2_IP="172.28.${slot}.12"
@@ -207,6 +208,7 @@ allocate_environment() {
     write_value MV_STATE_DIR "$state_dir"
     write_value MANAGED_VALKEY_COMPOSE_PROJECT "$MANAGED_VALKEY_COMPOSE_PROJECT"
     write_value K3S_DOCKER_SUBNET "$K3S_DOCKER_SUBNET"
+    write_value K3S_DOCKER_GATEWAY "$K3S_DOCKER_GATEWAY"
     write_value K3S_CLUSTER_CIDR "$K3S_CLUSTER_CIDR"
     write_value K3S_SERVICE_CIDR "$K3S_SERVICE_CIDR"
     write_value K3S_CLUSTER_DNS "$K3S_CLUSTER_DNS"

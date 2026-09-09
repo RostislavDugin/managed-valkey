@@ -347,10 +347,12 @@ YAML
 }
 
 write_operator_env() {
-    local gateway
+    local gateway=${K3S_DOCKER_GATEWAY:-}
 
-    gateway=$(docker network inspect "$MANAGED_VALKEY_DOCKER_NETWORK" \
-        --format '{{(index .IPAM.Config 0).Gateway}}')
+    if [[ -z "$gateway" ]]; then
+        gateway=$(docker network inspect "$MANAGED_VALKEY_DOCKER_NETWORK" \
+            --format '{{(index .IPAM.Config 0).Gateway}}')
+    fi
     if [[ -z "$gateway" ]]; then
         echo "bootstrap: не найден gateway сети $MANAGED_VALKEY_DOCKER_NETWORK" >&2
         return 1
