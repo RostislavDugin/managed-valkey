@@ -157,7 +157,8 @@ export function installStatefulValkeyApi(
       return jsonResponse(created, 202);
     }
 
-    const match = path.match(/^\/v1\/managed\/valkey\/instances\/([^/]+)(?:\/(.+))?$/);
+    const pathname = path.split('?')[0];
+    const match = pathname.match(/^\/v1\/managed\/valkey\/instances\/([^/]+)(?:\/(.+))?$/);
     if (!match) {
       return jsonResponse(
         { error: { code: 'NOT_FOUND', message: 'Маршрут не найден', details: {} } },
@@ -201,6 +202,15 @@ export function installStatefulValkeyApi(
 
     if (action === 'credentials' && method === 'GET') {
       return jsonResponse(credentialsDto(current));
+    }
+
+    if (action === 'metrics' && method === 'GET') {
+      return jsonResponse({
+        from: '2026-09-09T00:00:00Z',
+        to: '2026-09-09T00:05:00Z',
+        step_seconds: 10,
+        nodes: [],
+      });
     }
 
     if (action === 'credentials/rotate' && method === 'POST') {

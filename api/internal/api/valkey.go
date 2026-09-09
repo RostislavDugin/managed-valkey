@@ -23,6 +23,12 @@ type ValkeyService interface {
 	Owns(context.Context, valkeydomain.Actor, uuid.UUID) error
 	List(context.Context, valkeydomain.Actor) ([]valkeydomain.Instance, error)
 	Get(context.Context, valkeydomain.Actor, uuid.UUID) (valkeydomain.Instance, error)
+	Metrics(
+		context.Context,
+		valkeydomain.Actor,
+		uuid.UUID,
+		valkeydomain.MetricsInput,
+	) (valkeydomain.Metrics, error)
 	GetCredentials(context.Context, valkeydomain.Actor, uuid.UUID) (valkeydomain.Credentials, error)
 	Create(context.Context, valkeydomain.Actor, valkeydomain.CreateInput) (valkeydomain.InstanceResult, error)
 	Patch(context.Context, valkeydomain.Actor, uuid.UUID, valkeydomain.PatchInput) (valkeydomain.InstanceResult, error)
@@ -106,6 +112,7 @@ func RegisterValkey(
 
 	owned := managed.Group("/instances/:id", valkeyOwner(service))
 	owned.GET("", valkeyGetHandler(service))
+	owned.GET("/metrics", valkeyMetricsHandler(service))
 	owned.PATCH("", valkeyPatchHandler(service))
 	owned.POST("/resize", valkeyResizeHandler(service))
 	owned.PUT("/whitelist", valkeyWhitelistHandler(service))
@@ -187,6 +194,67 @@ func valkeyGetHandler(service ValkeyService) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, instance)
 	}
+}
+
+func valkeyMetricsHandler(service ValkeyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		input, err := metricInput(c)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
+		actor, instanceID, err := valkeyRequestContext(c)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
+
+		metrics, err := service.Metrics(c.Request.Context(), actor, instanceID, input)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
+
+		c.JSON(http.StatusOK, metrics)
+	}
+}
+
+func metricInput(c *gin.Context) (valkeydomain.MetricsInput, error) {
+	query := c.Request.URL.Query()
+	for key, values := range query {
+		if key != "range" && key != "from" && key != "to" {
+			return valkeydomain.MetricsInput{}, apierr.New(
+				apierr.CodeValidationFailed,
+				"Проверьте параметры окна метрик",
+				map[string]any{"reason": "unknown_query_parameter"},
+			)
+		}
+		if len(values) != 1 || values[0] == "" {
+			return valkeydomain.MetricsInput{}, apierr.New(
+				apierr.CodeValidationFailed,
+				"Проверьте параметры окна метрик",
+				map[string]any{"fields": map[string]string{key: "invalid_value"}},
+			)
+		}
+	}
+
+	return valkeydomain.MetricsInput{
+		Range: metricsQueryValue(query, "range"),
+		From:  metricsQueryValue(query, "from"),
+		To:    metricsQueryValue(query, "to"),
+	}, nil
+}
+
+func metricsQueryValue(query map[string][]string, key string) *string {
+	values, ok := query[key]
+	if !ok {
+		return nil
+	}
+
+	return &values[0]
 }
 
 func valkeyCredentialsHandler(service ValkeyService) gin.HandlerFunc {

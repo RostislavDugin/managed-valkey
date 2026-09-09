@@ -99,11 +99,23 @@ function installValkeyApi(instances: TestInstanceInput[]) {
       const auditId = path.match(
         /^\/v1\/managed\/valkey\/instances\/([^/]+)\/audit(?:\?.*)?$/
       )?.[1];
+      const metricsId = path.match(
+        /^\/v1\/managed\/valkey\/instances\/([^/]+)\/metrics\?range=(?:5m|1h|24h|7d)$/
+      )?.[1];
       const id =
-        auditId ?? path.match(/^\/v1\/managed\/valkey\/instances\/([^/]+)(?:\/credentials)?$/)?.[1];
+        auditId ??
+        metricsId ??
+        path.match(/^\/v1\/managed\/valkey\/instances\/([^/]+)(?:\/credentials)?$/)?.[1];
       const instance = dtos.find((item) => item.id === id);
       if (instance && auditId) {
         body = { items: [], next_cursor: null };
+      } else if (instance && metricsId) {
+        body = {
+          from: '2026-09-09T00:00:00Z',
+          to: '2026-09-09T00:05:00Z',
+          step_seconds: 10,
+          nodes: [],
+        };
       } else if (instance && path.endsWith('/credentials')) {
         body = {
           host: instance.host,

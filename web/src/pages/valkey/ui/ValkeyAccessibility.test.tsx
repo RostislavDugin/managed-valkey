@@ -45,6 +45,6 @@ describe('доступность управления Valkey', () => {
     await user.keyboard('{Enter}');
 
     expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Данных мониторинга пока нет')).toBeVisible();
+    expect(screen.getByText('Метрик пока нет')).toBeVisible();
   });
 });

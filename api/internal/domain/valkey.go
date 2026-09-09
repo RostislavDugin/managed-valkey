@@ -38,3 +38,11 @@ const (
 	ValkeyNetworkVerificationVerified ValkeyNetworkVerificationStatus = "verified"
 	ValkeyNetworkVerificationUnknown  ValkeyNetworkVerificationStatus = "unknown"
 )
+
+type ValkeyNodeRole string
+
+const (
+	ValkeyNodeRolePrimary ValkeyNodeRole = "primary"
+	ValkeyNodeRoleReplica ValkeyNodeRole = "replica"
+	ValkeyNodeRoleUnknown ValkeyNodeRole = "unknown"
+)

@@ -65,7 +65,7 @@ describe('маршруты раздела Valkey', () => {
     renderAt('/valkey/management/instance-1/monitoring');
 
     expect(await screen.findByRole('heading', { name: 'Мониторинг' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Данных мониторинга пока нет')).toBeVisible();
+    expect(screen.getByText('Метрик пока нет')).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Демонстрационные данные')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Мониторинг' })).toHaveAttribute(
@@ -73,8 +73,10 @@ describe('маршруты раздела Valkey', () => {
       'true'
     );
     expect(
-      vi.mocked(window.fetch).mock.calls.some(([input]) => String(input).includes('/metrics'))
-    ).toBe(false);
+      vi
+        .mocked(window.fetch)
+        .mock.calls.some(([input]) => String(input).endsWith('/metrics?range=5m'))
+    ).toBe(true);
   });
 
   it('открывает аудит базы по прямой ссылке', async () => {

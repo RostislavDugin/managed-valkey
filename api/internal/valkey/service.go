@@ -20,6 +20,13 @@ type Repository interface {
 	ListActiveValkeyInstances(context.Context, uuid.UUID) ([]store.ValkeyInstance, error)
 	FindActiveValkeyInstance(context.Context, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
 	FindOwnedValkeyInstance(context.Context, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
+	ReadValkeyMetricBuckets(
+		context.Context,
+		uuid.UUID,
+		time.Time,
+		time.Time,
+		time.Duration,
+	) ([]store.ValkeyMetricBucket, error)
 	FindOwnedValkeyInstanceForUpdate(context.Context, *gorm.DB, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
 	ValkeyNameExists(context.Context, *gorm.DB, uuid.UUID, string, *uuid.UUID) (bool, error)
 	CreateValkeyInstance(context.Context, *gorm.DB, *store.ValkeyInstance) (bool, error)

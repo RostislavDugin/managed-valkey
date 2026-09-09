@@ -247,6 +247,10 @@ func (app *testAPI) cleanupUser(t *testing.T, email string) {
 		}
 
 		queries := []*gorm.DB{
+			app.database.DB().Exec(`
+				DELETE FROM valkey_node_metrics
+				WHERE instance_id IN (SELECT id FROM valkey_instances WHERE user_id = ?)
+			`, user.ID),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.IdempotencyKey{}),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.BillingPeriod{}),
 			app.database.DB().Where("user_id = ?", user.ID).Delete(&store.AuditLog{}),
