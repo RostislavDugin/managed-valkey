@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI
 
 on:
   pull_request:
@@ -146,179 +146,180 @@ jobs:
       - name: Запустить тесты
         run: just test
 
-  build-api:
-    name: Сборка API и миграций
-    needs: [test-api, test-operator, test-web]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - name: Собрать образы
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --target runtime \
-            --tag "managed-valkey/api:${GITHUB_SHA}" \
-            --output "type=docker,dest=/tmp/api.tar" \
-            --file api/Dockerfile .
-          docker buildx build \
-            --platform linux/amd64 \
-            --target migrate \
-            --tag "managed-valkey/migrate:${GITHUB_SHA}" \
-            --output "type=docker,dest=/tmp/migrate.tar" \
-            --file api/Dockerfile .
-      - name: Проверить платформу образов
-        run: |
-          docker load --input /tmp/api.tar
-          docker load --input /tmp/migrate.tar
-          test "$(docker image inspect "managed-valkey/api:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
-          test "$(docker image inspect "managed-valkey/migrate:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
-      - name: Сжать образы
-        run: gzip -9 /tmp/api.tar /tmp/migrate.tar
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: api-images-${{ github.sha }}
-          path: |
-            /tmp/api.tar.gz
-            /tmp/migrate.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-  build-web:
-    name: Сборка Caddy и клиентского приложения
-    needs: [test-api, test-operator, test-web]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - name: Собрать образ
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --tag "managed-valkey/caddy:${GITHUB_SHA}" \
-            --output "type=docker,dest=/tmp/caddy.tar" \
-            --file caddy/Dockerfile .
-      - name: Проверить образ
-        run: |
-          docker load --input /tmp/caddy.tar
-          test "$(docker image inspect "managed-valkey/caddy:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
-          docker run --rm --entrypoint sh "managed-valkey/caddy:${GITHUB_SHA}" -c 'test -s /srv/index.html'
-          docker run --rm "managed-valkey/caddy:${GITHUB_SHA}" caddy validate --config /etc/caddy/Caddyfile
-      - name: Сжать образ
-        run: gzip -9 /tmp/caddy.tar
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: caddy-image-${{ github.sha }}
-          path: /tmp/caddy.tar.gz
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-  deploy:
-    name: Развёртывание рабочего окружения
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-api, build-web]
-    runs-on: ubuntu-24.04
-    environment: production
-    concurrency:
-      group: production
-      cancel-in-progress: false
-    env:
-      PRODUCTION_HOST: ${{ vars.PRODUCTION_HOST }}
-      PRODUCTION_SSH_USER: ${{ vars.PRODUCTION_SSH_USER }}
-      PRODUCTION_SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT }}
-      PRODUCTION_SSH_KNOWN_HOSTS: ${{ vars.PRODUCTION_SSH_KNOWN_HOSTS }}
-      PRODUCTION_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: api-images-${{ github.sha }}
-          path: deploy-bundle/images
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: caddy-image-${{ github.sha }}
-          path: deploy-bundle/images
-      - name: Подготовить файлы
-        run: |
-          required=(
-            PRODUCTION_HOST
-            PRODUCTION_SSH_USER
-            PRODUCTION_SSH_PORT
-            PRODUCTION_SSH_KNOWN_HOSTS
-            PRODUCTION_SSH_PRIVATE_KEY
-            POSTGRES_PASSWORD
-            JWT_SECRET
-          )
-          for name in "${required[@]}"; do
-            if [[ -z ${!name} ]]; then
-              echo "не задано обязательное значение $name" >&2
-              exit 1
-            fi
-          done
-          if [[ ! $PRODUCTION_HOST =~ ^[A-Za-z0-9.-]+$ ]]; then
-            echo "PRODUCTION_HOST содержит недопустимые символы" >&2
-            exit 1
-          fi
-          if [[ ! $PRODUCTION_SSH_USER =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-            echo "PRODUCTION_SSH_USER содержит недопустимые символы" >&2
-            exit 1
-          fi
-          if [[ ! $PRODUCTION_SSH_PORT =~ ^[0-9]+$ ]] || ((PRODUCTION_SSH_PORT < 1 || PRODUCTION_SSH_PORT > 65535)); then
-            echo "PRODUCTION_SSH_PORT должен быть числом от 1 до 65535" >&2
-            exit 1
-          fi
-          if [[ ! $POSTGRES_PASSWORD =~ ^[A-Za-z0-9._~-]+$ ]]; then
-            echo "POSTGRES_PASSWORD должен состоять из символов, допустимых в URL без кодирования" >&2
-            exit 1
-          fi
-          if [[ $JWT_SECRET == *$'\n'* || $JWT_SECRET == *$'\r'* ]]; then
-            echo "JWT_SECRET не должен содержать перевод строки" >&2
-            exit 1
-          fi
-
-          umask 077
-          mkdir -p deploy-bundle/images "$HOME/.ssh"
-          jwt_secret_escaped=${JWT_SECRET//\'/\\\'}
-          printf "POSTGRES_PASSWORD=%s\nJWT_SECRET='%s'\n" "$POSTGRES_PASSWORD" "$jwt_secret_escaped" >deploy-bundle/.env
-          cat >deploy-bundle/release.env <<EOF
-          RELEASE_SHA=$GITHUB_SHA
-          API_IMAGE=managed-valkey/api:$GITHUB_SHA
-          MIGRATE_IMAGE=managed-valkey/migrate:$GITHUB_SHA
-          CADDY_IMAGE=managed-valkey/caddy:$GITHUB_SHA
-          EOF
-          install -m 0644 docker-compose.prod.yml deploy-bundle/docker-compose.prod.yml
-          install -m 0755 scripts/activate_release.sh deploy-bundle/activate_release.sh
-          install -m 0755 scripts/install_release.sh deploy-bundle/install_release.sh
-          printf '%s\n' "$PRODUCTION_SSH_PRIVATE_KEY" >"$HOME/.ssh/production"
-          printf '%s\n' "$PRODUCTION_SSH_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
-          chmod 0600 "$HOME/.ssh/production" "$HOME/.ssh/known_hosts" deploy-bundle/.env
-          test "$(find deploy-bundle/images -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 3
-          test "$(stat -c '%a' deploy-bundle/.env)" = 600
-      - name: Передать и установить версию
-        run: |
-          ssh_options=(
-            -i "$HOME/.ssh/production"
-            -p "$PRODUCTION_SSH_PORT"
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
-          )
-          remote="$PRODUCTION_SSH_USER@$PRODUCTION_HOST"
-          staging="/tmp/managed-valkey-$GITHUB_SHA"
-
-          ssh "${ssh_options[@]}" "$remote" "install -d -m 0700 '$staging'"
-          scp \
-            -i "$HOME/.ssh/production" \
-            -P "$PRODUCTION_SSH_PORT" \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            -r deploy-bundle/. "$remote:$staging/"
-          ssh "${ssh_options[@]}" "$remote" \
-            "trap 'rm -rf \"$staging\"' EXIT; bash '$staging/install_release.sh' '$GITHUB_SHA' '$staging'"
+  # Сборка образов и развёртывание временно отключены.
+#   build-api:
+#     name: Сборка API и миграций
+#     needs: [test-api, test-operator, test-web]
+#     runs-on: ubuntu-24.04
+#     steps:
+#       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+#       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+#       - name: Собрать образы
+#         run: |
+#           docker buildx build \
+#             --platform linux/amd64 \
+#             --target runtime \
+#             --tag "managed-valkey/api:${GITHUB_SHA}" \
+#             --output "type=docker,dest=/tmp/api.tar" \
+#             --file api/Dockerfile .
+#           docker buildx build \
+#             --platform linux/amd64 \
+#             --target migrate \
+#             --tag "managed-valkey/migrate:${GITHUB_SHA}" \
+#             --output "type=docker,dest=/tmp/migrate.tar" \
+#             --file api/Dockerfile .
+#       - name: Проверить платформу образов
+#         run: |
+#           docker load --input /tmp/api.tar
+#           docker load --input /tmp/migrate.tar
+#           test "$(docker image inspect "managed-valkey/api:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+#           test "$(docker image inspect "managed-valkey/migrate:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+#       - name: Сжать образы
+#         run: gzip -9 /tmp/api.tar /tmp/migrate.tar
+#       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+#         with:
+#           name: api-images-${{ github.sha }}
+#           path: |
+#             /tmp/api.tar.gz
+#             /tmp/migrate.tar.gz
+#           compression-level: 0
+#           retention-days: 1
+#           if-no-files-found: error
+#
+#   build-web:
+#     name: Сборка Caddy и клиентского приложения
+#     needs: [test-api, test-operator, test-web]
+#     runs-on: ubuntu-24.04
+#     steps:
+#       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+#       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+#       - name: Собрать образ
+#         run: |
+#           docker buildx build \
+#             --platform linux/amd64 \
+#             --tag "managed-valkey/caddy:${GITHUB_SHA}" \
+#             --output "type=docker,dest=/tmp/caddy.tar" \
+#             --file caddy/Dockerfile .
+#       - name: Проверить образ
+#         run: |
+#           docker load --input /tmp/caddy.tar
+#           test "$(docker image inspect "managed-valkey/caddy:${GITHUB_SHA}" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+#           docker run --rm --entrypoint sh "managed-valkey/caddy:${GITHUB_SHA}" -c 'test -s /srv/index.html'
+#           docker run --rm "managed-valkey/caddy:${GITHUB_SHA}" caddy validate --config /etc/caddy/Caddyfile
+#       - name: Сжать образ
+#         run: gzip -9 /tmp/caddy.tar
+#       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+#         with:
+#           name: caddy-image-${{ github.sha }}
+#           path: /tmp/caddy.tar.gz
+#           compression-level: 0
+#           retention-days: 1
+#           if-no-files-found: error
+#
+#   deploy:
+#     name: Развёртывание рабочего окружения
+#     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+#     needs: [build-api, build-web]
+#     runs-on: ubuntu-24.04
+#     environment: production
+#     concurrency:
+#       group: production
+#       cancel-in-progress: false
+#     env:
+#       PRODUCTION_HOST: ${{ vars.PRODUCTION_HOST }}
+#       PRODUCTION_SSH_USER: ${{ vars.PRODUCTION_SSH_USER }}
+#       PRODUCTION_SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT }}
+#       PRODUCTION_SSH_KNOWN_HOSTS: ${{ vars.PRODUCTION_SSH_KNOWN_HOSTS }}
+#       PRODUCTION_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+#       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+#       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+#     steps:
+#       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+#       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+#         with:
+#           name: api-images-${{ github.sha }}
+#           path: deploy-bundle/images
+#       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+#         with:
+#           name: caddy-image-${{ github.sha }}
+#           path: deploy-bundle/images
+#       - name: Подготовить файлы
+#         run: |
+#           required=(
+#             PRODUCTION_HOST
+#             PRODUCTION_SSH_USER
+#             PRODUCTION_SSH_PORT
+#             PRODUCTION_SSH_KNOWN_HOSTS
+#             PRODUCTION_SSH_PRIVATE_KEY
+#             POSTGRES_PASSWORD
+#             JWT_SECRET
+#           )
+#           for name in "${required[@]}"; do
+#             if [[ -z ${!name} ]]; then
+#               echo "не задано обязательное значение $name" >&2
+#               exit 1
+#             fi
+#           done
+#           if [[ ! $PRODUCTION_HOST =~ ^[A-Za-z0-9.-]+$ ]]; then
+#             echo "PRODUCTION_HOST содержит недопустимые символы" >&2
+#             exit 1
+#           fi
+#           if [[ ! $PRODUCTION_SSH_USER =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+#             echo "PRODUCTION_SSH_USER содержит недопустимые символы" >&2
+#             exit 1
+#           fi
+#           if [[ ! $PRODUCTION_SSH_PORT =~ ^[0-9]+$ ]] || ((PRODUCTION_SSH_PORT < 1 || PRODUCTION_SSH_PORT > 65535)); then
+#             echo "PRODUCTION_SSH_PORT должен быть числом от 1 до 65535" >&2
+#             exit 1
+#           fi
+#           if [[ ! $POSTGRES_PASSWORD =~ ^[A-Za-z0-9._~-]+$ ]]; then
+#             echo "POSTGRES_PASSWORD должен состоять из символов, допустимых в URL без кодирования" >&2
+#             exit 1
+#           fi
+#           if [[ $JWT_SECRET == *$'\n'* || $JWT_SECRET == *$'\r'* ]]; then
+#             echo "JWT_SECRET не должен содержать перевод строки" >&2
+#             exit 1
+#           fi
+#
+#           umask 077
+#           mkdir -p deploy-bundle/images "$HOME/.ssh"
+#           jwt_secret_escaped=${JWT_SECRET//\'/\\\'}
+#           printf "POSTGRES_PASSWORD=%s\nJWT_SECRET='%s'\n" "$POSTGRES_PASSWORD" "$jwt_secret_escaped" >deploy-bundle/.env
+#           cat >deploy-bundle/release.env <<EOF
+#           RELEASE_SHA=$GITHUB_SHA
+#           API_IMAGE=managed-valkey/api:$GITHUB_SHA
+#           MIGRATE_IMAGE=managed-valkey/migrate:$GITHUB_SHA
+#           CADDY_IMAGE=managed-valkey/caddy:$GITHUB_SHA
+#           EOF
+#           install -m 0644 docker-compose.prod.yml deploy-bundle/docker-compose.prod.yml
+#           install -m 0755 scripts/activate_release.sh deploy-bundle/activate_release.sh
+#           install -m 0755 scripts/install_release.sh deploy-bundle/install_release.sh
+#           printf '%s\n' "$PRODUCTION_SSH_PRIVATE_KEY" >"$HOME/.ssh/production"
+#           printf '%s\n' "$PRODUCTION_SSH_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
+#           chmod 0600 "$HOME/.ssh/production" "$HOME/.ssh/known_hosts" deploy-bundle/.env
+#           test "$(find deploy-bundle/images -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 3
+#           test "$(stat -c '%a' deploy-bundle/.env)" = 600
+#       - name: Передать и установить версию
+#         run: |
+#           ssh_options=(
+#             -i "$HOME/.ssh/production"
+#             -p "$PRODUCTION_SSH_PORT"
+#             -o BatchMode=yes
+#             -o IdentitiesOnly=yes
+#             -o StrictHostKeyChecking=yes
+#             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+#           )
+#           remote="$PRODUCTION_SSH_USER@$PRODUCTION_HOST"
+#           staging="/tmp/managed-valkey-$GITHUB_SHA"
+#
+#           ssh "${ssh_options[@]}" "$remote" "install -d -m 0700 '$staging'"
+#           scp \
+#             -i "$HOME/.ssh/production" \
+#             -P "$PRODUCTION_SSH_PORT" \
+#             -o BatchMode=yes \
+#             -o IdentitiesOnly=yes \
+#             -o StrictHostKeyChecking=yes \
+#             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+#             -r deploy-bundle/. "$remote:$staging/"
+#           ssh "${ssh_options[@]}" "$remote" \
+#             "trap 'rm -rf \"$staging\"' EXIT; bash '$staging/install_release.sh' '$GITHUB_SHA' '$staging'"
