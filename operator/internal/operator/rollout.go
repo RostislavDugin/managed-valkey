@@ -291,9 +291,10 @@ func (r *ValkeyInstanceReconciler) reconcileRollingReplacement(
 		if err := runProcessActionControl(ctx, "rollout-replacement-ready", pod, current); err != nil {
 			return ctrl.Result{}, err
 		}
+		replacedProcess := *rollout.Process
 		changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			if status.Rollout != nil && status.Rollout.Process != nil &&
-				sameIdentity(*status.Rollout.Process, *rollout.Process) {
+				sameIdentity(*status.Rollout.Process, replacedProcess) {
 				status.Rollout.Process = nil
 			}
 		})

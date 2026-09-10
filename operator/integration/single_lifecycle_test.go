@@ -71,6 +71,7 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 	h.startOperator(t)
 	firstStatus := h.waitRunning(t, first)
 	assertAppliedStatus(t, firstStatus)
+	firstMetric := h.waitForCurrentMetric(t, first, 0)
 	servicePasswords := h.servicePasswords(t, first)
 
 	firstClient := openPersistentConnection(t, h.publicAddr, first, h.caFile, false, func() {})
@@ -158,8 +159,15 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 	h.startOperator(t)
 	newPod := h.waitForReplacement(t, first, oldPod.UID)
 	h.waitRunning(t, first)
+	replacementMetric := h.waitForCurrentMetric(t, first, 0)
 	if newPod.UID == oldPod.UID {
 		t.Fatal("завершённый процесс не заменён")
+	}
+	if replacementMetric.PodUID != string(newPod.UID) ||
+		replacementMetric.PodUID == firstMetric.PodUID ||
+		replacementMetric.ContainerID == firstMetric.ContainerID ||
+		replacementMetric.RunID == firstMetric.RunID {
+		t.Fatalf("снимок не относится к новому процессу: old=%+v new=%+v", firstMetric, replacementMetric)
 	}
 	replacementClient := openPersistentConnection(t, h.publicAddr, first, h.caFile, false, func() {})
 	if replacementPasswords := h.servicePasswords(t, first); replacementPasswords != servicePasswords {
@@ -415,6 +423,44 @@ func (h *harness) waitRunning(t *testing.T, instance *testInstance) *valkeyv1alp
 			current.Status.Network.DesiredFingerprint != "" &&
 			current.Status.Network.DesiredFingerprint == current.Status.Network.VerifiedFingerprint
 	}, "фазы running")
+}
+
+func (h *harness) waitForCurrentMetric(
+	t *testing.T,
+	instance *testInstance,
+	ordinal int32,
+) valkeyv1alpha1.NodeMetricStatus {
+	t.Helper()
+	current := h.waitFor(t, instance, func(resource *valkeyv1alpha1.ValkeyInstance) bool {
+		var node *valkeyv1alpha1.NodeStatus
+		for index := range resource.Status.Nodes {
+			if resource.Status.Nodes[index].Ordinal == ordinal {
+				node = &resource.Status.Nodes[index]
+				break
+			}
+		}
+		if node == nil {
+			return false
+		}
+		for _, metric := range resource.Status.Metrics {
+			if metric.Ordinal == ordinal && metric.PodUID == node.PodUID &&
+				metric.ContainerID == node.ContainerID && metric.RunID == node.RunID &&
+				metric.CPUMillicores != nil {
+				return true
+			}
+		}
+
+		return false
+	}, "снимка метрик текущего процесса с CPU")
+	for _, metric := range current.Status.Metrics {
+		if metric.Ordinal == ordinal {
+			return metric
+		}
+	}
+
+	t.Fatalf("снимок ordinal %d исчез после ожидания", ordinal)
+
+	return valkeyv1alpha1.NodeMetricStatus{}
 }
 
 func (h *harness) servicePasswords(t *testing.T, instance *testInstance) [3]string {

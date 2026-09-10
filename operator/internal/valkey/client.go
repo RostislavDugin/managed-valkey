@@ -30,6 +30,7 @@ var (
 	ErrAuthentication   = errors.New("valkey отклонил авторизацию")
 	ErrNoBusyProcess    = errors.New("занятый Lua или Function не найден")
 	ErrUnkillable       = errors.New("занятый Lua или Function уже изменил данные")
+	ErrProcessChanged   = errors.New("процесс Valkey изменился во время чтения")
 )
 
 type ErrorKind string
@@ -183,6 +184,18 @@ type ReplicationState struct {
 	SyncedAt               *time.Time
 }
 
+type Metrics struct {
+	Role             string
+	RunID            string
+	UsedMemoryBytes  int64
+	MaxmemoryBytes   int64
+	ConnectedClients int64
+	OpsPerSec        int64
+	KeyspaceHits     int64
+	KeyspaceMisses   int64
+	EvictedKeys      int64
+}
+
 func (s *Session) Close() {
 	if s == nil {
 		return
@@ -305,6 +318,77 @@ func (s *Session) Observe(ctx context.Context, operatorPassword string) (Process
 		return ProcessState{}, err
 	}
 	return s.readState(ctx)
+}
+
+func (s *Session) ReadMetrics(ctx context.Context, operatorPassword string) (Metrics, error) {
+	if err := s.authenticate(ctx, operatorPassword); err != nil {
+		return Metrics{}, err
+	}
+
+	result, err := s.execute(ctx, "INFO", false, s.raw.B().Info().Build())
+	if err != nil {
+		return Metrics{}, err
+	}
+	info, err := result.ToString()
+	if err != nil {
+		return Metrics{}, commandError("INFO", false, errors.Join(ErrUnexpectedReply, err))
+	}
+
+	values := parseInfo(info)
+	role := values["role"]
+	switch role {
+	case "master":
+		role = "primary"
+	case "slave":
+		role = "replica"
+	default:
+		return Metrics{}, commandError("INFO", false, ErrUnexpectedReply)
+	}
+	if values["run_id"] == "" {
+		return Metrics{}, commandError("INFO", false, ErrUnexpectedReply)
+	}
+
+	fields := [...]struct {
+		name   string
+		target *int64
+	}{
+		{name: "used_memory"},
+		{name: "maxmemory"},
+		{name: "connected_clients"},
+		{name: "instantaneous_ops_per_sec"},
+		{name: "keyspace_hits"},
+		{name: "keyspace_misses"},
+		{name: "evicted_keys"},
+	}
+	metrics := Metrics{Role: role, RunID: values["run_id"]}
+	fields[0].target = &metrics.UsedMemoryBytes
+	fields[1].target = &metrics.MaxmemoryBytes
+	fields[2].target = &metrics.ConnectedClients
+	fields[3].target = &metrics.OpsPerSec
+	fields[4].target = &metrics.KeyspaceHits
+	fields[5].target = &metrics.KeyspaceMisses
+	fields[6].target = &metrics.EvictedKeys
+	for _, field := range fields {
+		value, err := parseInfoInt(values, field.name)
+		if err != nil || value < 0 {
+			return Metrics{}, commandError("INFO", false, errors.Join(ErrUnexpectedReply, err))
+		}
+		*field.target = value
+	}
+
+	return metrics, nil
+}
+
+func (s *Session) VerifyRunID(ctx context.Context, expected string) error {
+	runID, err := s.readRunID(ctx)
+	if err != nil {
+		return err
+	}
+	if runID != expected {
+		return commandError("INFO server", false, ErrProcessChanged)
+	}
+
+	return nil
 }
 
 func (s *Session) Promote(ctx context.Context) error {

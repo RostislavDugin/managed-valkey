@@ -173,9 +173,9 @@ API SHALL удалять ресурсы только при `deletion_requested_
 - **WHEN** удаление принято до первого CR и отсутствуют следы начавшейся работы оператора
 - **THEN** API удаляет только принадлежащие этому созданию остатки `Namespace` и подтверждает завершение без запуска CR
 
-### Requirement: CR принимает последние снимки метрик нод
+### Requirement: Ресурс принимает последние снимки метрик узлов
 
-`status.metrics` ресурса `ValkeyInstance` SHALL принимать не более трёх элементов с уникальным `ordinal`. Каждый элемент SHALL содержать `ordinal`, `podUID`, `containerID`, `runId`, `collectedAt`, `role`, `usedMemoryBytes`, `maxmemoryBytes`, `connectedClients`, `opsPerSec`, `keyspaceHits`, `keyspaceMisses`, `evictedKeys` и допускающее `null` поле `cpuMillicores`. Идентификаторы SHALL быть непустыми, роль SHALL быть `primary` или `replica`, числовые показатели SHALL быть неотрицательными. `collectedAt` SHALL сохранять время UTC с точностью до микросекунд. Контракт не требует, чтобы оператор заполнял это поле в рамках данного изменения.
+`status.metrics` ресурса `ValkeyInstance` SHALL принимать не более трёх элементов с уникальным `ordinal`. Каждый элемент SHALL содержать `ordinal`, `podUID`, `containerID`, `runId`, `collectedAt`, `role`, `usedMemoryBytes`, `maxmemoryBytes`, `connectedClients`, `opsPerSec`, `keyspaceHits`, `keyspaceMisses`, `evictedKeys` и допускающее `null` поле `cpuMillicores`. Идентификаторы SHALL быть непустыми, роль SHALL быть `primary` или `replica`, числовые показатели SHALL быть неотрицательными. `collectedAt` SHALL сохранять время UTC с точностью до микросекунд. Оператор SHALL заполнять поле последними успешными снимками текущих процессов согласно контракту `operator-valkey-metrics`.
 
 #### Scenario: Снимок с недоступным CPU
 

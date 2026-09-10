@@ -13,6 +13,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	metricsclientset "k8s.io/metrics/pkg/client/clientset/versioned"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -147,9 +148,20 @@ func NewManager(
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return nil, fmt.Errorf("зарегистрировать контроллер ValkeyInstance: %w", err)
 	}
+	metricsClient, err := metricsclientset.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("создать клиент метрик Kubernetes: %w", err)
+	}
+	metricsReconciler := &ValkeyMetricsReconciler{
+		Client: mgr.GetClient(), APIReader: mgr.GetAPIReader(), Lease: leaseScope,
+		PodMetrics: kubernetesPodMetricsReader{client: metricsClient},
+		Clock:      clock.RealClock{},
+		Interval:   config.MetricsInterval,
+	}
+	if err := metricsReconciler.SetupWithManager(mgr); err != nil {
+		return nil, fmt.Errorf("зарегистрировать контроллер метрик Valkey: %w", err)
+	}
 
-	// Готовность это запущенный manager с синхронизированным cache: фоновых
-	// циклов, которые могли бы её задерживать, пока нет.
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		return nil, fmt.Errorf("добавить проверку живого процесса: %w", err)
 	}

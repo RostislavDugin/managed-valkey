@@ -3184,7 +3184,7 @@ func sameProcessIdentityMap(
 
 func matrixScenarioID(t *testing.T) string {
 	t.Helper()
-	name := strings.TrimPrefix(t.Name(), "Test")
+	name := strings.TrimPrefix(t.Name(), "Test_")
 	if len(name) < 4 || name[0] < 'A' || name[0] > 'Z' || name[1] < 'A' || name[1] > 'Z' ||
 		name[2] < '0' || name[2] > '9' || name[3] < '0' || name[3] > '9' {
 		t.Fatalf("имя теста %s не начинается с ID матрицы", t.Name())

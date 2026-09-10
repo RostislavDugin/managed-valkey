@@ -299,6 +299,81 @@ func Test_RZ11_ReconcileRolloutDeletion_WhenStatusChangesConcurrently_UsesFreshI
 	}
 }
 
+func Test_RZ11_ReconcileRollingReplacement_WhenStatusWriteConflicts_RetriesWithCopiedProcessIdentity(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	instance, pod, node, _ := processObservationObjects()
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.Rollout = &valkeyv1alpha1.RolloutStatus{
+		DesiredGeneration: 2,
+		VCPU:              2,
+		RAMGB:             4,
+		Image:             "valkey:fixed",
+		Stage:             valkeyv1alpha1.RolloutStageReplacingReplicas,
+	}
+	pod.Spec.Volumes = []corev1.Volume{{
+		Name: "config",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: rolloutConfigMapName(instance)},
+		}},
+	}}
+	pod.Spec.Containers = []corev1.Container{{
+		Name:  "valkey",
+		Image: instance.Status.Rollout.Image,
+		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		}},
+	}}
+	current := testObservedNode(pod)
+	current.Role = valkeyv1alpha1.NodeRoleReplica
+	current.AppEnabled = true
+	current.AppPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
+	current.Replication = &valkeyv1alpha1.ReplicationStatus{
+		LinkUp: true, SyncedAt: &metav1.Time{Time: metav1.Now().Time},
+	}
+	old := current
+	old.PodUID = "replaced-pod"
+	old.ContainerID = "containerd://replaced"
+	old.RunID = "replaced-run"
+	old.Termination = &valkeyv1alpha1.ProcessTermination{Evidence: "container_status"}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{current}
+	instance.Status.PreviousProcesses = []valkeyv1alpha1.NodeStatus{old}
+	identity := processIdentity(old)
+	instance.Status.Rollout.Process = &identity
+
+	base := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, pod, node).
+		Build()
+	loaded := &valkeyv1alpha1.ValkeyInstance{}
+	if err := base.Get(ctx, client.ObjectKeyFromObject(instance), loaded); err != nil {
+		t.Fatalf("прочитать ValkeyInstance: %v", err)
+	}
+	reconciler := &ValkeyInstanceReconciler{
+		Client: &conflictingStatusClient{Client: base}, APIReader: base,
+	}
+
+	result, err := reconciler.reconcileRollingReplacement(
+		ctx,
+		loaded,
+		valkeyv1alpha1.RolloutStageSwitchingPrimary,
+	)
+	if err != nil || result.IsZero() {
+		t.Fatalf("повторить запись после конфликта: result=%+v error=%v", result, err)
+	}
+	observed := &valkeyv1alpha1.ValkeyInstance{}
+	if err := base.Get(ctx, client.ObjectKeyFromObject(instance), observed); err != nil {
+		t.Fatalf("прочитать результат замены: %v", err)
+	}
+	if observed.Status.Rollout == nil || observed.Status.Rollout.Process != nil ||
+		observed.Status.Reason != "CONCURRENT_OBSERVATION" {
+		t.Fatalf("повтор записи потерял состояние: %+v", observed.Status)
+	}
+}
+
 func Test_RZ07_ReconcileRolloutReplacement_WhenPodReadFails_StopsReplacement(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
