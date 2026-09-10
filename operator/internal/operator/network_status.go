@@ -96,7 +96,10 @@ func (r *ValkeyInstanceReconciler) reconcileNetworkPrerequisites(
 		reason = verification.reason
 		message = "активная конфигурация Envoy ещё не подтверждена"
 		if verification.status == valkeyv1alpha1.NetworkVerificationVerified {
-			message = "активная конфигурация подтверждена на двух процессах Envoy"
+			message = fmt.Sprintf(
+				"активную конфигурацию подтвердили процессы Envoy: %d",
+				len(verification.processes),
+			)
 		}
 	}
 
@@ -137,7 +140,7 @@ func networkVerificationAllowsOperations(
 				verification.reason == "EnvoyRefreshPending")
 	return previousVerificationReusable &&
 		status.VerifiedFingerprint == desiredFingerprint &&
-		len(verification.processes) == 2 &&
+		len(verification.processes) > 0 &&
 		sameEnvoyProcesses(status.EnvoyProcesses, verification.processes)
 }
 

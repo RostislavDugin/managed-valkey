@@ -270,6 +270,7 @@ func (h *harness) startOperator(t *testing.T) {
 			ValkeyImage:     operatorconfig.DefaultValkeyImage,
 			BaseDomain:      h.baseDomain,
 			OperatorCIDRs:   h.operatorCIDRs,
+			EnvoyProcesses:  envoyProcessCount(t),
 			Logging: logging.Config{
 				ServiceName: operatorconfig.ServiceName, Environment: logging.EnvironmentDev,
 			},
@@ -1032,6 +1033,17 @@ func envOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envoyProcessCount(t *testing.T) int {
+	t.Helper()
+	value := envOrDefault("MANAGED_VALKEY_ENVOY_REPLICAS", strconv.Itoa(operatorconfig.DefaultEnvoyProcesses))
+	count, err := strconv.Atoi(value)
+	if err != nil || count < 1 || count > operatorconfig.DefaultEnvoyProcesses {
+		t.Fatalf("MANAGED_VALKEY_ENVOY_REPLICAS должно быть от 1 до %d", operatorconfig.DefaultEnvoyProcesses)
+	}
+
+	return count
 }
 
 func dockerGatewayCIDR(t *testing.T, networkName string) string {

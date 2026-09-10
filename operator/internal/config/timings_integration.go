@@ -22,6 +22,6 @@ const (
 	ProcessDeletionGracePeriod = int64(2)
 	ReadinessCommandTimeout    = 1
 	ReadinessProbePeriod       = 1
-	ReadinessProbeTimeout      = 2
+	ReadinessProbeTimeout      = 5
 	ReadinessProbeFailures     = 1
 )

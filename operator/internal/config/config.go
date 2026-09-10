@@ -18,6 +18,7 @@ const (
 	LeaderElection          = true
 	MaxConcurrentReconciles = 4
 	PrimaryFailureThreshold = 3
+	DefaultEnvoyProcesses   = 2
 	EnvSystemNamespace      = "VALKEY_SYSTEM_NAMESPACE"
 	EnvValkeyImage          = "VALKEY_IMAGE"
 	EnvBaseDomain           = "VALKEY_BASE_DOMAIN"
@@ -35,11 +36,16 @@ type Config struct {
 	ValkeyImage     string
 	BaseDomain      string
 	OperatorCIDRs   []string
+	EnvoyProcesses  int
 	Logging         logging.Config
 }
 
 func Load() (Config, error) {
 	operatorCIDRs, err := parseCIDRs(os.Getenv(EnvOperatorCIDRs))
+	if err != nil {
+		return Config{}, err
+	}
+	envoyProcesses, err := configuredEnvoyProcesses()
 	if err != nil {
 		return Config{}, err
 	}
@@ -49,6 +55,7 @@ func Load() (Config, error) {
 		ValkeyImage:     stringOrDefault(EnvValkeyImage, DefaultValkeyImage),
 		BaseDomain:      stringOrDefault(EnvBaseDomain, DefaultBaseDomain),
 		OperatorCIDRs:   operatorCIDRs,
+		EnvoyProcesses:  envoyProcesses,
 		Logging:         logging.ConfigFromEnv(ServiceName),
 	}, nil
 }

@@ -59,6 +59,7 @@ type ValkeyInstanceReconciler struct {
 	RESTConfig           *rest.Config
 	ReadEnvoy            EnvoySnapshotReader
 	EnvoyCache           *EnvoySnapshotCache
+	EnvoyProcesses       int
 	UpdateAppAccess      AppAccessUpdater
 	PromoteProcess       ProcessPromoter
 	FollowProcess        ProcessFollower

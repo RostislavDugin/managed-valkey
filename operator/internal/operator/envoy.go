@@ -203,7 +203,11 @@ func (r *ValkeyInstanceReconciler) verifyEnvoy(
 	expected networkPrerequisites,
 ) envoyVerification {
 	targets, err := r.envoyTargets(ctx)
-	if err != nil || len(targets) != 2 {
+	expectedProcesses := r.EnvoyProcesses
+	if expectedProcesses == 0 {
+		expectedProcesses = config.DefaultEnvoyProcesses
+	}
+	if err != nil || len(targets) != expectedProcesses {
 		return envoyVerification{
 			status: valkeyv1alpha1.NetworkVerificationUnknown,
 			reason: "EnvoyCompositionUnknown",

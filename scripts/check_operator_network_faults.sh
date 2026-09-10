@@ -159,14 +159,21 @@ outer_nodes=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get nodes \
 dev_snapshot=$(project_snapshot managed-valkey-dev)
 nested_run_id="ct12-full-$(date +%s)-$$-$RANDOM"
 nested_state="$repo_root/tmp/k3s/operator/$nested_run_id"
+nested_ready_seconds=${MV_CT12_NESTED_READY_SECONDS:-600}
+[[ "$nested_ready_seconds" =~ ^[1-9][0-9]*$ ]] || {
+    echo "CT-12: MV_CT12_NESTED_READY_SECONDS должно быть положительным числом" >&2
+    exit 1
+}
 
 MV_DIAGNOSTIC_SCENARIO=CT-12 \
+    env -u MANAGED_VALKEY_K3S_NODES -u MANAGED_VALKEY_ENVOY_REPLICAS \
     "$environment_script" exec operator "$nested_run_id" -- \
     "$0" full-run-child "$MANAGED_VALKEY_OPERATOR_IMAGE" "$MANAGED_VALKEY_VALKEY_IMAGE" &
 nested_wrapper_pid=$!
 
 nested_ready=0
-for _ in $(seq 1 600); do
+deadline=$((SECONDS + nested_ready_seconds))
+while ((SECONDS < deadline)); do
     if [[ -f "$nested_state/ct12-full-run-ready" ]]; then
         nested_ready=1
         break
@@ -177,12 +184,13 @@ for _ in $(seq 1 600); do
     sleep 0.5
 done
 if ((nested_ready == 0)); then
+    kill -TERM "$nested_wrapper_pid" 2>/dev/null || true
     set +e
     wait "$nested_wrapper_pid"
     nested_status=$?
     set -e
     nested_wrapper_pid=0
-    echo "CT-12: вложенный полный запуск не дошёл до сетевого отказа, status=$nested_status" >&2
+    echo "CT-12: вложенный полный запуск не дошёл до сетевого отказа за ${nested_ready_seconds}s, status=$nested_status" >&2
     exit 1
 fi
 

@@ -269,6 +269,30 @@ func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
 	}
 }
 
+func TestNetworkVerificationAllowsOperationsWithOneUnchangedEnvoy(t *testing.T) {
+	processes := []valkeyv1alpha1.EnvoyProcessStatus{{
+		PodUID: "envoy-1", NodeName: "worker-1", NodeUID: "node-1", ContainerID: "containerd://1",
+	}}
+	status := &valkeyv1alpha1.NetworkStatus{
+		VerifiedFingerprint: "same",
+		EnvoyProcesses:      processes,
+	}
+	verification := envoyVerification{
+		status:    valkeyv1alpha1.NetworkVerificationUnknown,
+		reason:    "EnvoyAdminUnavailable",
+		processes: processes,
+	}
+
+	if !networkVerificationAllowsOperations(status, verification, "same") {
+		t.Fatal("один неизменный процесс Envoy заблокирован из-за недоступного admin API")
+	}
+	verification.processes = nil
+	status.EnvoyProcesses = nil
+	if networkVerificationAllowsOperations(status, verification, "same") {
+		t.Fatal("пустой состав Envoy допущен по прежнему подтверждению")
+	}
+}
+
 func TestCertificateResourceRulesDifferByEnvironment(t *testing.T) {
 	ctx := context.Background()
 	withoutCertificate := fake.NewClientBuilder().WithScheme(NewScheme()).Build()

@@ -14,7 +14,10 @@ run: _check-generated
         cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} go run ./operator/cmd/operator
 
 test:
-    cd {{ root }} && scripts/test_environment.sh exec operator -- scripts/test_operator.sh
+    cd {{ root }} && scripts/test_operator.sh
+
+test-ci:
+    cd {{ root }} && scripts/test_operator_ci.sh
 
 _generate:
     cd {{ root }} && go tool controller-gen object paths=./operator/api/v1alpha1/...

@@ -25,6 +25,7 @@ VALKEY_LISTENER_PORT=${VALKEY_LISTENER_PORT:-41379}
 ENVOY_NODE_PORT=${ENVOY_NODE_PORT:-31379}
 BOOTSTRAP_PROFILE=${BOOTSTRAP_PROFILE:-full}
 K3S_EXPECTED_NODES=${K3S_EXPECTED_NODES:-3}
+MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-2}
 MANAGED_VALKEY_DOCKER_NETWORK=${MANAGED_VALKEY_DOCKER_NETWORK:-${project}_default}
 MANAGED_VALKEY_CA_FILE=${MANAGED_VALKEY_CA_FILE:-$state_dir/ca.crt}
 
@@ -78,13 +79,12 @@ wait_for_api() {
 }
 
 expected_nodes() {
+    local index
+
     printf '%s\n' k3s-server
-    if ((K3S_EXPECTED_NODES >= 3)); then
-        printf '%s\n' k3s-agent-1 k3s-agent-2
-    fi
-    if ((K3S_EXPECTED_NODES == 4)); then
-        printf '%s\n' k3s-agent-3
-    fi
+    for ((index = 1; index < K3S_EXPECTED_NODES; index++)); do
+        printf 'k3s-agent-%d\n' "$index"
+    done
 }
 
 remove_stale_nodes() {
@@ -103,7 +103,7 @@ remove_stale_nodes() {
 repair_rejected_agents() {
     local container node running
 
-    ((K3S_EXPECTED_NODES >= 3)) || return 0
+    ((K3S_EXPECTED_NODES >= 2)) || return 0
     for node in $(expected_nodes | sed '1d'); do
         container=$(docker ps -aq \
             --filter "label=com.docker.compose.project=$project" \
@@ -214,12 +214,20 @@ install_rbac() {
 }
 
 install_managed_valkey() {
+    local envoy_patch
+
     kubectl apply --server-side --force-conflicts -k "$repo_root/operator/config/crd"
     kubectl apply -f "$repo_root/deploy/dev/infra/namespace.yaml"
     kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/valkey-system --timeout=60s
 
     if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
         kubectl apply -f "$repo_root/deploy/dev/infra"
+        envoy_patch="{\"spec\":{\"provider\":{\"kubernetes\":{\"envoyDeployment\":{\"replicas\":${MANAGED_VALKEY_ENVOY_REPLICAS}}}}}}"
+        if ((MANAGED_VALKEY_ENVOY_REPLICAS == 1)); then
+            envoy_patch='{"spec":{"provider":{"kubernetes":{"envoyDeployment":{"replicas":1,"pod":{"nodeSelector":{"kubernetes.io/hostname":"k3s-server"}}}}}}}'
+        fi
+        kubectl -n valkey-system patch envoyproxy valkey-dev --type=merge \
+            -p "$envoy_patch"
     else
         kubectl create namespace envoy-gateway-system --dry-run=client -o yaml | kubectl apply -f -
     fi
@@ -366,7 +374,19 @@ write_operator_env() {
 }
 
 require_commands docker kubectl base64
+if [[ ! "$K3S_EXPECTED_NODES" =~ ^[1-4]$ ]]; then
+    echo "bootstrap: число нод должно быть от 1 до 4" >&2
+    exit 1
+fi
 if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
+    if [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" != 1 && "$MANAGED_VALKEY_ENVOY_REPLICAS" != 2 ]]; then
+        echo "bootstrap: число реплик Envoy должно быть 1 или 2" >&2
+        exit 1
+    fi
+    if ((MANAGED_VALKEY_ENVOY_REPLICAS > K3S_EXPECTED_NODES)); then
+        echo "bootstrap: реплики Envoy нельзя разнести по $K3S_EXPECTED_NODES нодам" >&2
+        exit 1
+    fi
     require_commands helm ip openssl sudo
     if [[ "$project" == managed-valkey-dev ]]; then
         require_commands mkcert

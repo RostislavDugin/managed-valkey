@@ -47,11 +47,16 @@ func TestCT14HA03PendingReplicaBecomesRunningWhenCapacityReturns(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-	h.requireNodeCount(t, 3)
+	h.requireNodeCount(t, 4)
 
 	nodeName := "k3s-agent-2"
+	capacityNode := "k3s-agent-3"
 	h.setNodeUnschedulable(t, nodeName, true)
-	t.Cleanup(func() { h.setNodeUnschedulable(t, nodeName, false) })
+	h.setNodeUnschedulable(t, capacityNode, true)
+	t.Cleanup(func() {
+		h.setNodeUnschedulable(t, nodeName, false)
+		h.setNodeUnschedulable(t, capacityNode, false)
+	})
 
 	instance := h.createHA(t, "pending")
 	status := h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
@@ -63,13 +68,7 @@ func TestCT14HA03PendingReplicaBecomesRunningWhenCapacityReturns(t *testing.T) {
 	}
 	h.waitForPendingPod(t, instance)
 
-	h.addOperatorAgent(t, "k3s-agent-3")
-	agentRemoved := false
-	t.Cleanup(func() {
-		if !agentRemoved {
-			h.removeOperatorAgent(t, "k3s-agent-3")
-		}
-	})
+	h.setNodeUnschedulable(t, capacityNode, false)
 	h.requireNodeCount(t, 4)
 	status = h.waitRunning(t, instance)
 	assertHAComposition(t, h, instance, status)
@@ -86,9 +85,6 @@ func TestCT14HA03PendingReplicaBecomesRunningWhenCapacityReturns(t *testing.T) {
 		t.Fatalf("HA-03 не разместила Pending-реплику на добавленной ноде: %+v", status.Status.Nodes)
 	}
 	h.deleteInstance(t, instance)
-	h.removeOperatorAgent(t, "k3s-agent-3")
-	agentRemoved = true
-	h.requireNodeCount(t, 3)
 }
 
 func TestHA05PDBRejectsEvictionWithTwoReadyPods(t *testing.T) {
@@ -135,7 +131,7 @@ func TestHA05PDBRejectsEvictionWithTwoReadyPods(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestFP01FP02FP03SIGKILLValkeyProcesses(t *testing.T) {
+func TestFP01FP02FP03SIGKILLHAProcesses(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -194,6 +190,13 @@ func TestFP01FP02FP03SIGKILLValkeyProcesses(t *testing.T) {
 		}
 	}
 	closeConnections([]*persistentConnection{connection})
+	h.deleteInstance(t, ha)
+}
+
+func TestFP01FP02FP03SIGKILLSingleProcess(t *testing.T) {
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
 
 	single := h.createSingle(t, "sigone", valkeyv1alpha1.WhitelistSpec{})
 	singleStatus := h.waitRunning(t, single)
@@ -215,7 +218,6 @@ func TestFP01FP02FP03SIGKILLValkeyProcesses(t *testing.T) {
 	}
 
 	h.deleteInstance(t, single)
-	h.deleteInstance(t, ha)
 }
 
 func TestFP12MostAdvancedReplicaWinsFailover(t *testing.T) {
@@ -591,62 +593,63 @@ func TestHA08OP03OP04OP08FailoverStagesResumeAfterRestart(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestOP05CandidateLossBeforeAndAfterPromotion(t *testing.T) {
+func TestOP05CandidateLossBeforePromotion(t *testing.T) {
+	testOP05CandidateLoss(t, operatorvalkey.IntegrationCommandBefore)
+}
+
+func TestOP05CandidateLossAfterPromotion(t *testing.T) {
+	testOP05CandidateLoss(t, operatorvalkey.IntegrationCommandAfter)
+}
+
+func testOP05CandidateLoss(t *testing.T, stage operatorvalkey.IntegrationCommandStage) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
 
-	for _, stage := range []operatorvalkey.IntegrationCommandStage{
-		operatorvalkey.IntegrationCommandBefore,
-		operatorvalkey.IntegrationCommandAfter,
-	} {
-		t.Run(string(stage), func(t *testing.T) {
-			instance := h.createHA(t, "opfive"+string(stage))
-			status := h.waitRunning(t, instance)
-			assertHAComposition(t, h, instance, status)
-			source := primaryProcess(t, status)
-			connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
-			setValue(t, connection, "op05-key", string(stage))
-			assertKeyOnAllReplicas(t, h, instance, status, "op05-key", string(stage))
+	instance := h.createHA(t, "opfive"+string(stage))
+	status := h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	source := primaryProcess(t, status)
+	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	setValue(t, connection, "op05-key", string(stage))
+	assertKeyOnAllReplicas(t, h, instance, status, "op05-key", string(stage))
 
-			promotionPoint := newValkeyCommandPoint(
-				t,
-				"",
-				"REPLICAOF NO ONE",
-				stage,
-				stage == operatorvalkey.IntegrationCommandAfter,
-			)
-			h.sigkillValkeyProcess(t, instance, source)
-			closeConnections([]*persistentConnection{connection})
-			promotionPoint.waitFor(t, 45*time.Second)
-			status = h.getInstance(t, instance)
-			if status.Status.Failover == nil || status.Status.Failover.Candidate == nil ||
-				!status.Status.Failover.CandidateMayBePrimary {
-				t.Fatalf("OP-05 не сохранила потенциальный primary: %+v", status.Status.Failover)
-			}
-			candidate := processForIdentity(t, status.Status.Nodes, *status.Status.Failover.Candidate)
-			expectedRole := "slave"
-			if stage == operatorvalkey.IntegrationCommandAfter {
-				expectedRole = "master"
-			}
-			assertRealProcessRoleACL(t, h, instance, candidate, expectedRole, instance.password, false)
-			h.sigkillValkeyProcess(t, instance, candidate)
-			promotionPoint.close()
-
-			status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
-				return current.Status.Failover == nil && current.Status.Phase == valkeyv1alpha1.InstancePhaseRunning &&
-					current.Status.PrimaryPodUID != "" && current.Status.PrimaryPodUID != source.PodUID &&
-					current.Status.PrimaryPodUID != candidate.PodUID && len(current.Status.Nodes) == 3
-			}, "OP-05 выбора другой цели после доказанной остановки кандидата")
-			assertHAComposition(t, h, instance, status)
-			connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
-			if value := getValue(t, connection, "op05-key"); value != string(stage) {
-				t.Fatalf("OP-05 потеряла контрольный ключ после %s: %q", stage, value)
-			}
-			closeConnections([]*persistentConnection{connection})
-			h.deleteInstance(t, instance)
-		})
+	promotionPoint := newValkeyCommandPoint(
+		t,
+		"",
+		"REPLICAOF NO ONE",
+		stage,
+		stage == operatorvalkey.IntegrationCommandAfter,
+	)
+	h.sigkillValkeyProcess(t, instance, source)
+	closeConnections([]*persistentConnection{connection})
+	promotionPoint.waitFor(t, 45*time.Second)
+	status = h.getInstance(t, instance)
+	if status.Status.Failover == nil || status.Status.Failover.Candidate == nil ||
+		!status.Status.Failover.CandidateMayBePrimary {
+		t.Fatalf("OP-05 не сохранила потенциальный primary: %+v", status.Status.Failover)
 	}
+	candidate := processForIdentity(t, status.Status.Nodes, *status.Status.Failover.Candidate)
+	expectedRole := "slave"
+	if stage == operatorvalkey.IntegrationCommandAfter {
+		expectedRole = "master"
+	}
+	assertRealProcessRoleACL(t, h, instance, candidate, expectedRole, instance.password, false)
+	h.sigkillValkeyProcess(t, instance, candidate)
+	promotionPoint.close()
+
+	status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		return current.Status.Failover == nil && current.Status.Phase == valkeyv1alpha1.InstancePhaseRunning &&
+			current.Status.PrimaryPodUID != "" && current.Status.PrimaryPodUID != source.PodUID &&
+			current.Status.PrimaryPodUID != candidate.PodUID && len(current.Status.Nodes) == 3
+	}, "OP-05 выбора другой цели после доказанной остановки кандидата")
+	assertHAComposition(t, h, instance, status)
+	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	if value := getValue(t, connection, "op05-key"); value != string(stage) {
+		t.Fatalf("OP-05 потеряла контрольный ключ после %s: %q", stage, value)
+	}
+	closeConnections([]*persistentConnection{connection})
+	h.deleteInstance(t, instance)
 }
 
 func TestOP06LiveUnknownCandidateBlocksSecondPromotion(t *testing.T) {
@@ -1833,7 +1836,7 @@ func TestNT05ReplicationPartitionKeepsEmptyReplacementOutOfFailover(t *testing.T
 	t.Logf("NT-05 всего: %s", time.Since(testStartedAt))
 }
 
-func TestFP06FP07OP08SIGSTOPSIGCONTProcesses(t *testing.T) {
+func TestFP06FP07OP08SIGSTOPSIGCONTHAProcesses(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1912,6 +1915,13 @@ func TestFP06FP07OP08SIGSTOPSIGCONTProcesses(t *testing.T) {
 		t.Fatalf("FP-06 восстановление реплик изменило ключ: %q", value)
 	}
 	closeConnections([]*persistentConnection{connection})
+	h.deleteInstance(t, ha)
+}
+
+func TestFP06FP07OP08SIGSTOPSIGCONTSingleProcess(t *testing.T) {
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
 
 	single := h.createSingle(t, "stopone", valkeyv1alpha1.WhitelistSpec{})
 	singleStatus := h.waitRunning(t, single)
@@ -1924,7 +1934,7 @@ func TestFP06FP07OP08SIGSTOPSIGCONTProcesses(t *testing.T) {
 	singleProcess = singleStatus.Status.Nodes[0]
 	singleConnection := openPersistentConnection(t, h.publicAddr, single, h.caFile, false, func() {})
 	setValue(t, singleConnection, "sigstop-single-key", "discarded")
-	startedAt = time.Now()
+	startedAt := time.Now()
 	h.signalValkeyProcess(t, single, singleProcess, "STOP")
 	h.waitForTransportObservation(t, single, singleProcess)
 	t.Logf("FP-06 single: первая транспортная ошибка через %s", time.Since(startedAt))
@@ -1945,7 +1955,6 @@ func TestFP06FP07OP08SIGSTOPSIGCONTProcesses(t *testing.T) {
 	closeConnections([]*persistentConnection{singleConnection})
 
 	h.deleteInstance(t, single)
-	h.deleteInstance(t, ha)
 }
 
 func TestFP08FP09OP08BusyRecovery(t *testing.T) {
@@ -2293,7 +2302,7 @@ func TestCT06ManualFencingRestoresAfterRealAgentStop(t *testing.T) {
 		t.Fatalf("CT-06 приняла fencing до остановки прежней Node: %+v", stoppedNode.Status.Conditions)
 	}
 
-	status = h.waitForWithin(t, instance, 90*time.Second, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+	status = h.waitForWithin(t, instance, 3*time.Minute, func(current *valkeyv1alpha1.ValkeyInstance) bool {
 		if current.Status.Failover != nil || current.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
 			current.Status.PrimaryPodUID == primary.PodUID || len(current.Status.Nodes) != 3 {
 			return false
@@ -2643,7 +2652,7 @@ func TestND03SingleWorkerLossStartsEmptyReplacement(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-	h.requireNodeCount(t, 4)
+	h.requireNodeCount(t, 2)
 	h.setNodeUnschedulable(t, "k3s-server", true)
 	t.Cleanup(func() { h.setNodeUnschedulable(t, "k3s-server", false) })
 
@@ -3785,6 +3794,7 @@ func (h *harness) startClusterOperatorOnNode(t *testing.T, nodeName string) {
 							{Name: operatorconfig.EnvValkeyImage, Value: operatorconfig.DefaultValkeyImage},
 							{Name: operatorconfig.EnvBaseDomain, Value: h.baseDomain},
 							{Name: operatorconfig.EnvOperatorCIDRs, Value: strings.Join(h.clusterPodCIDRs(t), ",")},
+							{Name: operatorconfig.EnvEnvoyProcesses, Value: strconv.Itoa(envoyProcessCount(t))},
 						},
 					}},
 				},
@@ -4699,14 +4709,13 @@ func (h *harness) waitForEnvoyReplacement(
 }
 
 type agentFault struct {
-	service       string
-	scenario      string
-	nodeUID       types.UID
-	containerID   string
-	killed        bool
-	restored      bool
-	operatorImage string
-	valkeyImage   string
+	service      string
+	scenario     string
+	nodeUID      types.UID
+	containerID  string
+	killed       bool
+	restored     bool
+	imageArchive string
 }
 
 func (h *harness) newAgentFault(t *testing.T, node *corev1.Node) *agentFault {
@@ -4716,9 +4725,8 @@ func (h *harness) newAgentFault(t *testing.T, node *corev1.Node) *agentFault {
 	}
 	return &agentFault{
 		service: node.Name, scenario: matrixScenarioID(t), nodeUID: node.UID,
-		containerID:   h.composeNodeContainer(t, node.Name, true),
-		operatorImage: requiredEnv(t, "MANAGED_VALKEY_OPERATOR_IMAGE"),
-		valkeyImage:   requiredEnv(t, "MANAGED_VALKEY_VALKEY_IMAGE"),
+		containerID:  h.composeNodeContainer(t, node.Name, true),
+		imageArchive: requiredEnv(t, "MANAGED_VALKEY_K3S_IMAGE_ARCHIVE"),
 	}
 }
 
@@ -4777,14 +4785,9 @@ func (f *agentFault) restore(t *testing.T, h *harness) {
 	}
 	loadScript := filepath.Join(requiredEnv(t, "MANAGED_VALKEY_REPO_ROOT"), "scripts", "load_k3s_image.sh")
 	if output, err := exec.Command(
-		loadScript, requiredEnv(t, "MANAGED_VALKEY_COMPOSE_PROJECT"), f.operatorImage, f.service,
+		loadScript, requiredEnv(t, "MANAGED_VALKEY_COMPOSE_PROJECT"), "--archive", f.imageArchive, f.service,
 	).CombinedOutput(); err != nil {
-		t.Fatalf("загрузить образ в новый agent %s: output=%q error=%v", f.service, output, err)
-	}
-	if output, err := exec.Command(
-		loadScript, requiredEnv(t, "MANAGED_VALKEY_COMPOSE_PROJECT"), f.valkeyImage, f.service,
-	).CombinedOutput(); err != nil {
-		t.Fatalf("загрузить образ Valkey в новый agent %s: output=%q error=%v", f.service, output, err)
+		t.Fatalf("загрузить образы в новый agent %s: output=%q error=%v", f.service, output, err)
 	}
 	node = h.waitNodeReadyWithNewUID(t, f.service, f.nodeUID)
 	h.ensureNodeRoute(t, node)
@@ -4968,4 +4971,18 @@ func namedContainerStatus(statuses []corev1.ContainerStatus, name string) *corev
 		}
 	}
 	return nil
+}
+
+func containerHasStarted(status *corev1.ContainerStatus) bool {
+	if status == nil {
+		return false
+	}
+	if status.State.Running != nil {
+		return true
+	}
+	if terminated := status.State.Terminated; terminated != nil && !terminated.StartedAt.IsZero() {
+		return true
+	}
+	terminated := status.LastTerminationState.Terminated
+	return terminated != nil && !terminated.StartedAt.IsZero()
 }

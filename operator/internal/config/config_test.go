@@ -31,6 +31,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.BaseDomain != config.DefaultBaseDomain {
 		t.Errorf("базовый домен %q, ожидался %q", cfg.BaseDomain, config.DefaultBaseDomain)
 	}
+	if cfg.EnvoyProcesses != config.DefaultEnvoyProcesses {
+		t.Errorf("процессов Envoy %d, ожидалось %d", cfg.EnvoyProcesses, config.DefaultEnvoyProcesses)
+	}
 
 	if cfg.Logging.ServiceName != config.ServiceName {
 		t.Errorf("service.name %q, ожидался %q", cfg.Logging.ServiceName, config.ServiceName)

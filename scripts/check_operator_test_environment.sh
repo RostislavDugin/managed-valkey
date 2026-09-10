@@ -3,9 +3,14 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 expected_nodes=${1:?задайте ожидаемое число нод}
+expected_envoy_replicas=${2:-${MANAGED_VALKEY_ENVOY_REPLICAS:-2}}
 
-if [[ "$expected_nodes" != 3 && "$expected_nodes" != 4 ]]; then
-    echo "ожидаемое число нод должно быть 3 или 4" >&2
+if [[ ! "$expected_nodes" =~ ^[1-4]$ ]]; then
+    echo "ожидаемое число нод должно быть от 1 до 4" >&2
+    exit 1
+fi
+if [[ "$expected_envoy_replicas" != 1 && "$expected_envoy_replicas" != 2 ]]; then
+    echo "ожидаемое число реплик Envoy должно быть 1 или 2" >&2
     exit 1
 fi
 
@@ -45,6 +50,21 @@ fi
 KUBECONFIG="$ADMIN_KUBECONFIG" kubectl wait \
     --for=condition=Ready node --all --timeout=60s >/dev/null
 
+mapfile -t envoy_nodes < <(
+    KUBECONFIG="$ADMIN_KUBECONFIG" kubectl -n envoy-gateway-system get pods \
+        -l gateway.envoyproxy.io/owning-gateway-name=valkey \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'
+)
+if ((${#envoy_nodes[@]} != expected_envoy_replicas)); then
+    echo "ожидалось реплик Envoy: $expected_envoy_replicas, получено: ${#envoy_nodes[@]}" >&2
+    exit 1
+fi
+if ((expected_envoy_replicas == 2)) && [[ "${envoy_nodes[0]}" == "${envoy_nodes[1]}" ]]; then
+    echo "две реплики Envoy размещены на одной ноде ${envoy_nodes[0]}" >&2
+    exit 1
+fi
+
 python3 - \
     "$K3S_DOCKER_SUBNET" \
     "$K3S_DOCKER_GATEWAY" \
@@ -67,4 +87,4 @@ if any(address not in network for address in addresses):
     raise SystemExit("адрес тестового стенда находится вне подсети Compose")
 PY
 
-echo "CT-13 CT-14: стенд оператора на $expected_nodes нодах проверен"
+echo "CT-13 CT-14: стенд оператора проверен: ноды=$expected_nodes, Envoy=$expected_envoy_replicas"

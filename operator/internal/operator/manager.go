@@ -114,6 +114,13 @@ func NewManager(
 	if baseDomain == "" {
 		baseDomain = config.DefaultBaseDomain
 	}
+	envoyProcesses := cfg.EnvoyProcesses
+	if envoyProcesses == 0 {
+		envoyProcesses = config.DefaultEnvoyProcesses
+	}
+	if envoyProcesses < 1 || envoyProcesses > config.DefaultEnvoyProcesses {
+		return nil, fmt.Errorf("число процессов Envoy должно быть от 1 до %d", config.DefaultEnvoyProcesses)
+	}
 
 	reconciler := &ValkeyInstanceReconciler{
 		Client:               mgr.GetClient(),
@@ -130,6 +137,7 @@ func NewManager(
 		ObservationStartedAt: time.Now().UTC(),
 		RESTConfig:           restConfig,
 		EnvoyCache:           NewEnvoySnapshotCache(),
+		EnvoyProcesses:       envoyProcesses,
 	}
 
 	if err := reconciler.SetupWithManager(mgr); err != nil {

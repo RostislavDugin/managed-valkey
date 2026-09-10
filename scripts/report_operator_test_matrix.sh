@@ -1,148 +1,260 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root=$(git rev-parse --show-toplevel)
 results_dir=${1:?задайте каталог результатов тестов}
+mode=${2:-full}
+catalog=${3:-$repo_root/scripts/operator_test_scenarios.tsv}
 
-if [[ ! -d "$results_dir" ]]; then
-    echo "каталог результатов тестов не найден: $results_dir" >&2
-    exit 1
-fi
+python3 - "$results_dir" "$mode" "$catalog" <<'PY'
+import csv
+import pathlib
+import re
+import sys
 
-shopt -s nullglob
-unit_logs=("$results_dir"/unit.log)
-envtest_logs=("$results_dir"/envtest.log)
-k3s_logs=("$results_dir"/k3s-*.log)
-network_logs=("$results_dir"/network-faults.log)
-environment_logs=("$results_dir"/environment-*.log)
-all_logs=("$results_dir"/*.log)
+results_dir = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+catalog_path = pathlib.Path(sys.argv[3])
+matrix_sources = {}
+for prefix, last in (("HA", 8), ("FP", 12), ("ND", 9), ("NT", 6), ("OP", 8), ("RZ", 11), ("PW", 10), ("DL", 4)):
+    matrix_sources.update({f"{prefix}-{number:02d}": "k3s" for number in range(1, last + 1)})
+matrix_sources.update({f"CT-{number:02d}": "unit+envtest" for number in (1, 2, 6, 7)})
+matrix_sources.update({f"CT-{number:02d}": "envtest" for number in (3, 4, 5, 8)})
+matrix_sources.update({f"CT-{number:02d}": "k3s" for number in (9, 10, 11)})
+matrix_sources.update({"CT-12": "network", "CT-13": "environment", "CT-14": "environment+k3s"})
 
-if ((${#all_logs[@]} == 0)); then
-    echo "в $results_dir нет журналов тестов" >&2
-    exit 1
-fi
 
-if rg --no-filename '^[[:space:]]*--- SKIP:' "${all_logs[@]}"; then
-    echo "обязательный набор содержит пропущенные тесты" >&2
-    exit 1
-fi
+def ids_from_go_log(path):
+    if not path.is_file():
+        return set()
+    result = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.match(r"\s*--- PASS: (Test\S+)", line)
+        if not match:
+            continue
+        result.update(
+            f"{prefix}-{number}"
+            for prefix, number in re.findall(r"(HA|FP|ND|NT|OP|RZ|PW|DL|CT)-?([0-9]{2})", match.group(1))
+        )
+    return result
 
-collect_go_ids() {
-    if (($# == 0)); then
-        return
-    fi
-    {
-        rg --no-filename '^--- PASS: Test' "$@" 2>/dev/null || true
-    } | rg -o '(HA|FP|ND|NT|OP|RZ|PW|DL|CT)-?[0-9]{2}' | \
-        sed -E 's/^([A-Z]+)([0-9]{2})$/\1-\2/' | sort -u
+
+def passed_tests_from_go_log(path):
+    result = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.match(r"\s*--- PASS: (Test[A-Za-z0-9_]+)(?:\s|$)", line)
+        if match:
+            result.add(match.group(1))
+    return result
+
+
+def ids_from_marker_log(path):
+    if not path.is_file():
+        return set()
+    result = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if re.match(r"^CT-[0-9]{2}(?:\s+CT-[0-9]{2})*:", line):
+            result.update(re.findall(r"CT-[0-9]{2}", line))
+    return result
+
+
+def log_has_failure(path):
+    if not path.is_file():
+        return True
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return bool(re.search(r"^\s*--- (?:FAIL|SKIP):", text, re.MULTILINE))
+
+
+def go_log_status(path):
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"^\s*--- FAIL:", text, re.MULTILINE):
+        return "fail"
+    if re.search(r"^\s*--- SKIP:", text, re.MULTILINE):
+        return "skip"
+    return "pass"
+
+
+if mode not in {"full", "ci"}:
+    print(f"неизвестный режим отчёта: {mode}", file=sys.stderr)
+    raise SystemExit(1)
+if not results_dir.is_dir():
+    print(f"каталог результатов тестов не найден: {results_dir}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"OPERATOR TEST MODE {mode}")
+
+unit_log = results_dir / "unit.log"
+envtest_log = results_dir / "envtest.log"
+failed = 0
+for name, path in (("unit", unit_log), ("envtest", envtest_log)):
+    status_path = results_dir / f"{name}.status"
+    if not path.is_file() or not status_path.is_file():
+        print(f"RESULT {name} MISSING", file=sys.stderr)
+        failed += 1
+    elif path.stat().st_size == 0:
+        print(f"RESULT {name} INVALID", file=sys.stderr)
+        failed += 1
+    elif (status := status_path.read_text(encoding="utf-8").strip()) not in {"pass", "fail"}:
+        print(f"RESULT {name} INVALID status={status or 'empty'}", file=sys.stderr)
+        failed += 1
+    elif status != "pass":
+        print(f"RESULT {name} FAIL status={status}", file=sys.stderr)
+        failed += 1
+    elif log_has_failure(path):
+        print(f"RESULT {name} FAIL", file=sys.stderr)
+        failed += 1
+    else:
+        print(f"RESULT {name} PASS")
+
+durations_path = results_dir / "durations.tsv"
+if durations_path.is_file():
+    stage_durations = []
+    for line in durations_path.read_text(encoding="utf-8").splitlines():
+        fields = line.split("\t")
+        if len(fields) != 3:
+            continue
+        try:
+            duration = float(fields[2])
+        except ValueError:
+            continue
+        stage_durations.append((duration, fields[0]))
+    if stage_durations:
+        print("Длительности этапов:")
+        for duration, name in sorted(stage_durations, reverse=True):
+            print(f"{name}\t{duration:g}s")
+
+if mode == "ci":
+    print("MATRIX SCOPE unit/envtest only")
+    raise SystemExit(failed != 0)
+
+if not catalog_path.is_file():
+    print(f"каталог сценариев не найден: {catalog_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+with catalog_path.open(newline="", encoding="utf-8") as source:
+    catalog = list(csv.DictReader(source, delimiter="\t"))
+
+expected = {row["scenario"] for row in catalog}
+scenario_root = results_dir / "scenarios"
+actual = {path.name for path in scenario_root.iterdir() if path.is_dir()} if scenario_root.is_dir() else set()
+for scenario in sorted(actual - expected):
+    print(f"RESULT {scenario} UNKNOWN", file=sys.stderr)
+    failed += 1
+
+k3s_ids = set()
+scenario_marker_ids = set()
+durations = []
+for row in catalog:
+    scenario = row["scenario"]
+    expected_test = row["test_pattern"][1:-1]
+    attempts_root = scenario_root / scenario / "attempts"
+    attempts = sorted(
+        (path for path in attempts_root.iterdir() if path.is_dir() and path.name.isdigit()),
+        key=lambda path: int(path.name),
+    ) if attempts_root.is_dir() else []
+    if not attempts:
+        print(f"RESULT {scenario} MISSING", file=sys.stderr)
+        failed += 1
+        continue
+
+    statuses = []
+    logs = []
+    scenario_duration = 0.0
+    incomplete = False
+    for attempt in attempts:
+        status_path = attempt / "status"
+        log_path = attempt / "log"
+        duration_path = attempt / "duration"
+        if not status_path.is_file() or not log_path.is_file() or not duration_path.is_file():
+            incomplete = True
+            continue
+        status = status_path.read_text(encoding="utf-8").strip()
+        log_status = go_log_status(log_path)
+        if status == "pass" and log_status != "pass":
+            status = log_status
+        statuses.append(status)
+        logs.append(log_path)
+        try:
+            duration = float(duration_path.read_text(encoding="utf-8").strip())
+            if duration < 0:
+                raise ValueError
+            scenario_duration += duration
+        except ValueError:
+            incomplete = True
+
+    durations.append((scenario_duration, scenario))
+    if incomplete or len(statuses) != len(attempts):
+        print(f"RESULT {scenario} INVALID duration={scenario_duration:g}s", file=sys.stderr)
+        failed += 1
+        continue
+    if any(status == "fail" for status in statuses):
+        detail = " original-failure-preserved" if statuses[-1] == "pass" else ""
+        print(f"RESULT {scenario} FAIL duration={scenario_duration:g}s{detail}", file=sys.stderr)
+        failed += 1
+        continue
+    if any(status == "skip" for status in statuses):
+        print(f"RESULT {scenario} SKIP duration={scenario_duration:g}s", file=sys.stderr)
+        failed += 1
+        continue
+    if any(status != "pass" for status in statuses):
+        print(f"RESULT {scenario} INVALID duration={scenario_duration:g}s", file=sys.stderr)
+        failed += 1
+        continue
+    passed_tests = set()
+    for log_path in logs:
+        passed_tests.update(passed_tests_from_go_log(log_path))
+    if expected_test not in passed_tests:
+        print(f"RESULT {scenario} INVALID: нет PASS для {expected_test}", file=sys.stderr)
+        failed += 1
+        continue
+
+    print(f"RESULT {scenario} PASS duration={scenario_duration:g}s")
+    for log_path in logs:
+        k3s_ids.update(ids_from_go_log(log_path))
+        scenario_marker_ids.update(ids_from_marker_log(log_path))
+
+seen = {
+    "unit": ids_from_go_log(unit_log),
+    "envtest": ids_from_go_log(envtest_log),
+    "k3s": k3s_ids,
+    "network": set(),
 }
+network_log = results_dir / "network-faults.log"
+network_status_path = results_dir / "network-faults.status"
+if not network_status_path.is_file() or not network_log.is_file():
+    print("RESULT network-faults MISSING", file=sys.stderr)
+    failed += 1
+else:
+    network_status = network_status_path.read_text(encoding="utf-8").strip()
+    network_ids = ids_from_marker_log(network_log)
+    if network_status != "pass":
+        print(f"RESULT network-faults FAIL status={network_status or 'empty'}", file=sys.stderr)
+        failed += 1
+    elif "CT-12" not in network_ids:
+        print("RESULT network-faults INVALID: нет маркера CT-12", file=sys.stderr)
+        failed += 1
+    else:
+        print("RESULT network-faults PASS")
+        seen["network"].add("CT-12")
+seen["environment"] = set()
+for path in results_dir.glob("environment-*.log"):
+    seen["environment"].update(ids_from_marker_log(path))
+seen["environment"].update(matrix_id for matrix_id in scenario_marker_ids if matrix_id in {"CT-13", "CT-14"})
 
-collect_marker_ids() {
-    if (($# == 0)); then
-        return
-    fi
-    {
-        rg --no-filename '^CT-[0-9]{2}([[:space:]]+CT-[0-9]{2})*:' "$@" 2>/dev/null || true
-    } | rg -o 'CT-[0-9]{2}' | sort -u
-}
+passed_matrix = 0
+for matrix_id, source in matrix_sources.items():
+    sources = source.split("+")
+    if all(matrix_id in seen[item] for item in sources):
+        print(f"MATRIX {matrix_id:<5} PASS ({source})")
+        passed_matrix += 1
+    else:
+        print(f"MATRIX {matrix_id:<5} FAIL: нет успешного результата в {source}", file=sys.stderr)
+        failed += 1
 
-mapfile -t unit_ids < <(collect_go_ids "${unit_logs[@]}")
-mapfile -t envtest_ids < <(collect_go_ids "${envtest_logs[@]}")
-mapfile -t k3s_ids < <(collect_go_ids "${k3s_logs[@]}")
-mapfile -t network_ids < <(collect_marker_ids "${network_logs[@]}")
-mapfile -t environment_ids < <(collect_marker_ids "${environment_logs[@]}")
+print(f"MATRIX TOTAL {passed_matrix}/{len(matrix_sources)} PASS")
+print("Самые долгие сценарии:")
+for duration, scenario in sorted(durations, reverse=True)[:15]:
+    print(f"{scenario}\t{duration:g}s")
 
-declare -A unit_seen=()
-declare -A envtest_seen=()
-declare -A k3s_seen=()
-declare -A network_seen=()
-declare -A environment_seen=()
-
-for id in "${unit_ids[@]}"; do unit_seen["$id"]=1; done
-for id in "${envtest_ids[@]}"; do envtest_seen["$id"]=1; done
-for id in "${k3s_ids[@]}"; do k3s_seen["$id"]=1; done
-for id in "${network_ids[@]}"; do network_seen["$id"]=1; done
-for id in "${environment_ids[@]}"; do environment_seen["$id"]=1; done
-
-passed=0
-failed=0
-
-report_id() {
-    local id=$1
-    local source=$2
-    local found=0
-
-    case "$source" in
-        unit) [[ -v unit_seen["$id"] ]] && found=1 ;;
-        envtest) [[ -v envtest_seen["$id"] ]] && found=1 ;;
-        unit+envtest)
-            [[ -v unit_seen["$id"] && -v envtest_seen["$id"] ]] && found=1
-            ;;
-        environment+k3s)
-            [[ -v environment_seen["$id"] && -v k3s_seen["$id"] ]] && found=1
-            ;;
-        k3s) [[ -v k3s_seen["$id"] ]] && found=1 ;;
-        network) [[ -v network_seen["$id"] ]] && found=1 ;;
-        environment) [[ -v environment_seen["$id"] ]] && found=1 ;;
-        *) echo "неизвестный источник матрицы: $source" >&2; exit 1 ;;
-    esac
-
-    if ((found == 1)); then
-        printf 'MATRIX %-5s PASS (%s)\n' "$id" "$source"
-        ((passed += 1))
-    else
-        printf 'MATRIX %-5s FAIL: нет успешного результата в %s\n' "$id" "$source" >&2
-        ((failed += 1))
-    fi
-}
-
-report_range() {
-    local prefix=$1
-    local last=$2
-    local source=$3
-    local number id
-
-    for ((number = 1; number <= last; number++)); do
-        printf -v id '%s-%02d' "$prefix" "$number"
-        report_id "$id" "$source"
-    done
-}
-
-report_range HA 8 k3s
-report_range FP 12 k3s
-report_range ND 9 k3s
-report_range NT 6 k3s
-report_range OP 8 k3s
-report_range RZ 11 k3s
-report_range PW 10 k3s
-report_range DL 4 k3s
-for number in 1 2 6 7; do
-    printf -v id 'CT-%02d' "$number"
-    report_id "$id" unit+envtest
-done
-for number in 3 4 5 8; do
-    printf -v id 'CT-%02d' "$number"
-    report_id "$id" envtest
-done
-for number in 9 10 11; do
-    printf -v id 'CT-%02d' "$number"
-    report_id "$id" k3s
-done
-report_id CT-12 network
-report_id CT-13 environment
-report_id CT-14 environment+k3s
-
-printf 'MATRIX TOTAL %d/82 PASS\n' "$passed"
-
-printf '%s\n' 'Самые долгие Go-тесты:'
-{
-    sed -n -E 's/^[[:space:]]*--- PASS: (Test[^ ]+) \(([0-9.]+)s\)$/\2\t\1/p' \
-        "${unit_logs[@]}" "${envtest_logs[@]}" "${k3s_logs[@]}" 2>/dev/null || true
-} | sort -nr | sed -n '1,15p'
-
-if [[ -s "$results_dir/durations.tsv" ]]; then
-    printf '%s\n' 'Длительности этапов:'
-    sort -t $'\t' -k3,3nr "$results_dir/durations.tsv" |
-        awk -F $'\t' '{ printf "%s\t%ss\n", $1, $3 }'
-fi
-
-((failed == 0))
+raise SystemExit(failed != 0)
+PY

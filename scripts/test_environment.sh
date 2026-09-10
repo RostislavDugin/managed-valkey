@@ -4,7 +4,9 @@ set -Eeuo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 compose_file="$repo_root/docker-compose.dev.yml"
 test_compose_file="$repo_root/docker-compose.test.yml"
-state_root="$repo_root/tmp/k3s"
+state_root=${MV_TEST_STATE_ROOT:-$repo_root/tmp/k3s}
+bootstrap_lock_fd=""
+resource_reservation_owner=""
 
 log() {
     echo "test-env: $*" >&2
@@ -75,6 +77,39 @@ validate_suite() {
     api | operator | integration | e2e) ;;
     *) fail "неизвестное окружение $1" ;;
     esac
+}
+
+validate_cluster_profile() {
+    if [[ ! "$MANAGED_VALKEY_K3S_NODES" =~ ^[1-4]$ ]]; then
+        fail "MANAGED_VALKEY_K3S_NODES должно быть от 1 до 4"
+    fi
+    if [[ "$BOOTSTRAP_PROFILE" == api ]]; then
+        ((MANAGED_VALKEY_K3S_NODES == 1)) || fail "профиль api поддерживает одну ноду"
+        ((MANAGED_VALKEY_ENVOY_REPLICAS == 0)) || fail "профиль api не разворачивает Envoy"
+        return
+    fi
+    if [[ ! "$MANAGED_VALKEY_ENVOY_REPLICAS" =~ ^[12]$ ]]; then
+        fail "MANAGED_VALKEY_ENVOY_REPLICAS должно быть 1 или 2"
+    fi
+    if ((MANAGED_VALKEY_ENVOY_REPLICAS > MANAGED_VALKEY_K3S_NODES)); then
+        fail "реплики Envoy нельзя разнести по $MANAGED_VALKEY_K3S_NODES нодам"
+    fi
+}
+
+configure_cluster_profile() {
+    local suite=$1
+
+    if [[ "$suite" == api ]]; then
+        BOOTSTRAP_PROFILE=api
+        MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-1}
+        MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-0}
+    else
+        BOOTSTRAP_PROFILE=full
+        MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-3}
+        MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-2}
+    fi
+    K3S_EXPECTED_NODES=$MANAGED_VALKEY_K3S_NODES
+    validate_cluster_profile
 }
 
 new_run_id() {
@@ -233,14 +268,6 @@ allocate_environment() {
     MANAGED_VALKEY_CLIENT_PRE_READY="172.28.${slot}.104"
     MANAGED_VALKEY_CA_FILE="$state_dir/ca.crt"
     validate_environment_addresses
-    if [[ "$suite" == api ]]; then
-        BOOTSTRAP_PROFILE=api
-        K3S_EXPECTED_NODES=1
-    else
-        BOOTSTRAP_PROFILE=full
-        K3S_EXPECTED_NODES=3
-    fi
-
     umask 077
     : >"$environment_file"
     write_value MV_SUITE "$suite"
@@ -260,6 +287,8 @@ allocate_environment() {
     write_value K3S_API_BINDING "$K3S_API_BINDING"
     write_value K3S_PUBLIC_BINDING "$K3S_PUBLIC_BINDING"
     write_value K3S_EXPECTED_NODES "$K3S_EXPECTED_NODES"
+    write_value MANAGED_VALKEY_K3S_NODES "$MANAGED_VALKEY_K3S_NODES"
+    write_value MANAGED_VALKEY_ENVOY_REPLICAS "$MANAGED_VALKEY_ENVOY_REPLICAS"
     write_value BOOTSTRAP_PROFILE "$BOOTSTRAP_PROFILE"
     write_value ADMIN_KUBECONFIG "$ADMIN_KUBECONFIG"
     write_value API_KUBECONFIG "$API_KUBECONFIG"
@@ -322,13 +351,11 @@ prepare_postgres() {
 }
 
 prepare_cluster() {
-    local api_address public_address public_node=k3s-server services=(k3s-server)
+    local api_address index public_address public_node=k3s-server services=(k3s-server)
 
-    if ((K3S_EXPECTED_NODES == 3)); then
-        services+=(k3s-agent-1 k3s-agent-2)
-    elif ((K3S_EXPECTED_NODES == 4)); then
-        services+=(k3s-agent-1 k3s-agent-2 k3s-agent-3)
-    fi
+    for ((index = 1; index < K3S_EXPECTED_NODES; index++)); do
+        services+=("k3s-agent-$index")
+    done
     compose up -d --wait "${services[@]}"
 
     api_address=$(compose port k3s-server 6443)
@@ -341,6 +368,7 @@ prepare_cluster() {
     export ADMIN_KUBECONFIG API_KUBECONFIG OPERATOR_KUBECONFIG OPERATOR_ENV ROUTES_FILE
     export NETWORK_FAULTS_FILE FAULT_EVENTS_FILE
     export BOOTSTRAP_PROFILE K3S_EXPECTED_NODES KUBERNETES_SERVER
+    export MANAGED_VALKEY_ENVOY_REPLICAS
     export MANAGED_VALKEY_COMPOSE_PROJECT MANAGED_VALKEY_DOCKER_NETWORK
     export MANAGED_VALKEY_CA_FILE VALKEY_BASE_DOMAIN
     "$repo_root/scripts/k3s_bootstrap.sh"
@@ -364,6 +392,61 @@ prepare_cluster() {
     write_value MANAGED_VALKEY_DOCKER_PORT "$MANAGED_VALKEY_DOCKER_PORT"
 }
 
+acquire_bootstrap_slot() {
+    local candidate_fd index max_parallel=${MV_TEST_MAX_PARALLEL_BOOTSTRAPS:-6}
+
+    [[ "$max_parallel" =~ ^[1-9][0-9]*$ ]] || fail "MV_TEST_MAX_PARALLEL_BOOTSTRAPS должно быть положительным числом"
+    mkdir -p "$state_root/bootstrap-slots"
+    while true; do
+        for ((index = 0; index < max_parallel; index++)); do
+            exec {candidate_fd}>"$state_root/bootstrap-slots/$index.lock"
+            if flock -n "$candidate_fd"; then
+                bootstrap_lock_fd=$candidate_fd
+                return
+            fi
+            exec {candidate_fd}>&-
+        done
+        sleep 1
+    done
+}
+
+release_bootstrap_slot() {
+    [[ -n "$bootstrap_lock_fd" ]] || return 0
+    flock -u "$bootstrap_lock_fd"
+    exec {bootstrap_lock_fd}>&-
+}
+
+reserve_environment_resources() {
+    local suite=$1 run_id=$2 memory_mib owner_pid=$$ owner_start
+
+    [[ "${MV_TEST_RESOURCE_RESERVED:-0}" != 1 ]] || return 0
+    memory_mib=${MV_TEST_MEMORY_MIB:-}
+    if [[ -z "$memory_mib" ]]; then
+        if [[ "$suite" == api ]]; then
+            memory_mib=3072
+        else
+            memory_mib=3072
+        fi
+    fi
+    [[ "$memory_mib" =~ ^[1-9][0-9]*$ ]] || fail "MV_TEST_MEMORY_MIB должно быть положительным числом"
+    resource_reservation_owner="environment-${suite}-${run_id}"
+    owner_start=$("$repo_root/scripts/test_resources.sh" start-ticks "$owner_pid")
+    "$repo_root/scripts/test_resources.sh" reserve \
+        "$resource_reservation_owner" "$suite" "$memory_mib" "$owner_pid" "$owner_start"
+}
+
+release_environment_resources() {
+    [[ -n "$resource_reservation_owner" ]] || return 0
+    "$repo_root/scripts/test_resources.sh" release "$resource_reservation_owner"
+    resource_reservation_owner=""
+}
+
+register_environment_owner() {
+    printf '%s\n' "$$" >"$state_dir/owner.pid"
+    "$repo_root/scripts/test_resources.sh" start-ticks "$$" >"$state_dir/owner.start-ticks"
+    tr -d '\n' </proc/sys/kernel/random/boot_id >"$state_dir/owner.boot-id"
+}
+
 prepare() {
     local suite=$1 run_id=$2
 
@@ -371,34 +454,45 @@ prepare() {
         local status=$1
 
         trap - ERR INT TERM
-        collect_diagnostics "$state_dir" || true
-        cleanup "$state_dir" || true
+        release_bootstrap_slot || true
+        if [[ -n "${state_dir:-}" && -f "$state_dir/environment.env" && -f "$state_dir/status" ]]; then
+            collect_diagnostics "$state_dir" || true
+            cleanup "$state_dir" || true
+        elif [[ -n "${state_dir:-}" && -d "$state_dir" ]]; then
+            rm -f -- "$state_dir/environment.env" "$state_dir/status" \
+                "$state_dir/owner.pid" "$state_dir/owner.start-ticks" "$state_dir/owner.boot-id"
+            rmdir -- "$state_dir" 2>/dev/null || true
+        fi
         exit "$status"
     }
 
     validate_suite "$suite"
     validate_run_id "$run_id"
+    configure_cluster_profile "$suite"
     require_command docker flock ip kubectl openssl python3 rg
     "$repo_root/scripts/k3s_host_prerequisites.sh"
     load_local_env
     mkdir -p "$state_root"
+    trap 'handle_prepare_failure $?' ERR
+    trap 'handle_prepare_failure 130' INT
+    trap 'handle_prepare_failure 143' TERM
     allocate_environment "$suite" "$run_id"
+    register_environment_owner
 
     set -a
     source "$environment_file"
     set +a
-    trap 'handle_prepare_failure $?' ERR
-    trap 'handle_prepare_failure 130' INT
-    trap 'handle_prepare_failure 143' TERM
     if [[ "$suite" == api || "$suite" == integration || "$suite" == e2e ]]; then
         prepare_postgres >&2
         set -a
         source "$environment_file"
         set +a
     fi
+    acquire_bootstrap_slot
     prepare_cluster >&2
+    release_bootstrap_slot
     printf 'ready\n' >"$state_dir/status"
-    trap - ERR INT TERM
+    trap - ERR
     log "$suite готов: $state_dir"
     printf '%s\n' "$state_dir"
 }
@@ -460,13 +554,21 @@ expand_operator_cluster() {
         fail "gateway сети изменился до добавления agent"
 
     K3S_EXPECTED_NODES=4
+    MANAGED_VALKEY_K3S_NODES=4
     export K3S_EXPECTED_NODES
+    export MANAGED_VALKEY_K3S_NODES
     replace_value K3S_EXPECTED_NODES "$K3S_EXPECTED_NODES"
+    replace_value MANAGED_VALKEY_K3S_NODES "$MANAGED_VALKEY_K3S_NODES"
     compose up -d --wait k3s-agent-3
-    "$repo_root/scripts/load_k3s_image.sh" \
-        "$MANAGED_VALKEY_COMPOSE_PROJECT" "$operator_image" k3s-agent-3
-    "$repo_root/scripts/load_k3s_image.sh" \
-        "$MANAGED_VALKEY_COMPOSE_PROJECT" "$valkey_image" k3s-agent-3
+    if [[ -n "${MANAGED_VALKEY_K3S_IMAGE_ARCHIVE:-}" ]]; then
+        "$repo_root/scripts/load_k3s_image.sh" \
+            "$MANAGED_VALKEY_COMPOSE_PROJECT" --archive "$MANAGED_VALKEY_K3S_IMAGE_ARCHIVE" k3s-agent-3
+    else
+        "$repo_root/scripts/load_k3s_image.sh" \
+            "$MANAGED_VALKEY_COMPOSE_PROJECT" "$operator_image" k3s-agent-3
+        "$repo_root/scripts/load_k3s_image.sh" \
+            "$MANAGED_VALKEY_COMPOSE_PROJECT" "$valkey_image" k3s-agent-3
+    fi
     wait_operator_node_ready k3s-agent-3
     configure_operator_node_route k3s-agent-3
 
@@ -558,16 +660,17 @@ collect_diagnostics() {
 }
 
 cleanup_routes() {
-    local destination gateway current
+    local destination gateway current cleanup_status=0
 
     [[ -f "$ROUTES_FILE" ]] || return 0
     while IFS=$'\t' read -r destination gateway; do
         [[ -n "$destination" && -n "$gateway" ]] || continue
         current=$(ip route show exact "$destination" 2>/dev/null || true)
         if [[ "$current" == *"via $gateway"* ]]; then
-            sudo ip route del "$destination" via "$gateway"
+            sudo ip route del "$destination" via "$gateway" || cleanup_status=1
         fi
     done <"$ROUTES_FILE"
+    return "$cleanup_status"
 }
 
 remove_test_clients() {
@@ -589,6 +692,92 @@ drop_test_database() {
     docker compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
         psql --username "$POSTGRES_USER" --dbname postgres \
         --command "DROP DATABASE IF EXISTS \"$TEST_DATABASE_NAME\" WITH (FORCE)"
+}
+
+report_remaining_compose_resources() {
+    local kind=$1 id actual_project name
+    local -a ids=()
+
+    case "$kind" in
+    container)
+        mapfile -t ids < <(docker ps -aq \
+            --filter "label=com.docker.compose.project=$MANAGED_VALKEY_COMPOSE_PROJECT" 2>/dev/null || true)
+        ;;
+    network)
+        mapfile -t ids < <(docker network ls -q \
+            --filter "label=com.docker.compose.project=$MANAGED_VALKEY_COMPOSE_PROJECT" 2>/dev/null || true)
+        ;;
+    volume)
+        mapfile -t ids < <(docker volume ls -q \
+            --filter "label=com.docker.compose.project=$MANAGED_VALKEY_COMPOSE_PROJECT" 2>/dev/null || true)
+        ;;
+    esac
+    for id in "${ids[@]}"; do
+        [[ -n "$id" ]] || continue
+        case "$kind" in
+        container)
+            actual_project=$(docker inspect "$id" \
+                --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+            name=$(docker inspect "$id" --format '{{.Name}}' 2>/dev/null || true)
+            ;;
+        network)
+            actual_project=$(docker network inspect "$id" \
+                --format '{{index .Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+            name=$(docker network inspect "$id" --format '{{.Name}}' 2>/dev/null || true)
+            ;;
+        volume)
+            actual_project=$(docker volume inspect "$id" \
+                --format '{{index .Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+            name=$(docker volume inspect "$id" --format '{{.Name}}' 2>/dev/null || true)
+            ;;
+        esac
+        [[ "$actual_project" == "$MANAGED_VALKEY_COMPOSE_PROJECT" ]] || continue
+        log "остаток $kind: id=$id name=${name:-unknown}"
+        remaining_resources=$((remaining_resources + 1))
+    done
+}
+
+report_remaining_routes() {
+    local destination gateway current
+
+    [[ -f "$ROUTES_FILE" ]] || return 0
+    while IFS=$'\t' read -r destination gateway; do
+        [[ -n "$destination" && -n "$gateway" ]] || continue
+        current=$(ip route show exact "$destination" 2>/dev/null || true)
+        if [[ "$current" == *"via $gateway"* ]]; then
+            log "остаток route: destination=$destination gateway=$gateway"
+            remaining_resources=$((remaining_resources + 1))
+        fi
+    done <"$ROUTES_FILE"
+}
+
+report_remaining_processes() {
+    local target=$1 pid command start_ticks process_boot actual_start current_boot
+
+    [[ -f "$target/processes.tsv" ]] || return 0
+    current_boot=$(tr -d '\n' </proc/sys/kernel/random/boot_id)
+    while IFS=$'\t' read -r pid command start_ticks process_boot; do
+        [[ "$pid" =~ ^[1-9][0-9]*$ && "$start_ticks" =~ ^[0-9]+$ ]] || continue
+        [[ "$process_boot" == "$current_boot" ]] || continue
+        actual_start=$("$repo_root/scripts/test_resources.sh" start-ticks "$pid" 2>/dev/null || true)
+        [[ "$actual_start" == "$start_ticks" ]] || continue
+        log "остаток process: pid=$pid command=${command:-unknown}"
+        remaining_resources=$((remaining_resources + 1))
+    done <"$target/processes.tsv"
+}
+
+report_remaining_resources() {
+    local target=$1
+
+    remaining_resources=0
+    report_remaining_compose_resources container
+    report_remaining_compose_resources network
+    report_remaining_compose_resources volume
+    report_remaining_routes
+    report_remaining_processes "$target"
+    if ((remaining_resources == 0)); then
+        log "проверка не нашла оставшихся ресурсов запуска: $target"
+    fi
 }
 
 cleanup() {
@@ -620,18 +809,24 @@ cleanup() {
     else
         printf 'cleanup-failed\n' >"$target/status"
         log "не удалось полностью очистить $target"
+        report_remaining_resources "$target" || true
     fi
     return "$cleanup_status"
 }
 
 run_in_environment() {
-    local suite=$1 run_id=$2 state command_status=0 cleanup_status=0 child_pid=0 signal_status=0
+    local suite=$1 run_id=$2 state command_status=0 cleanup_status=0 child_pid=0 child_start
+    local signal_status=0 group_status=0 process_boot
     shift 2
     [[ "${1:-}" == -- ]] || fail "после окружения ожидается --"
     shift
     (($# > 0)) || fail "команда тестов не задана"
 
+    require_command ps setsid
+    reserve_environment_resources "$suite" "$run_id"
+    trap 'release_environment_resources' EXIT
     prepare "$suite" "$run_id"
+    trap - ERR
     state="$state_root/$suite/$run_id"
     set -a
     source "$state/environment.env"
@@ -645,20 +840,58 @@ run_in_environment() {
             kill -TERM -- "-$child_pid" 2>/dev/null || true
         fi
     }
+
+    process_group_active() {
+        ps -eo pgid=,stat= | awk -v group="$child_pid" '
+            $1 == group && $2 !~ /^Z/ { active = 1 }
+            END { exit !active }
+        '
+    }
+
+    wait_for_child_group() {
+        local grace_seconds=${MV_TEST_CANCEL_GRACE_SECONDS:-30} deadline killed=0
+
+        [[ "$grace_seconds" =~ ^[0-9]+$ ]] || fail "MV_TEST_CANCEL_GRACE_SECONDS должно быть целым неотрицательным числом"
+        deadline=$((SECONDS + grace_seconds))
+        while process_group_active; do
+            if ((SECONDS >= deadline && killed == 0)); then
+                kill -KILL -- "-$child_pid" 2>/dev/null || true
+                killed=1
+            fi
+            sleep 0.1
+        done
+        wait "$child_pid" 2>/dev/null || true
+        ((killed == 0))
+    }
+
     trap 'stop_child 130' INT
     trap 'stop_child 143' TERM
 
     setsid "$@" &
     child_pid=$!
-    printf '%s\t%s\n' "$child_pid" "${1##*/}" >>"$state/processes.tsv"
+    if ((signal_status != 0)); then
+        kill -TERM -- "-$child_pid" 2>/dev/null || true
+    fi
+    process_boot=$(tr -d '\n' </proc/sys/kernel/random/boot_id)
+    if child_start=$("$repo_root/scripts/test_resources.sh" start-ticks "$child_pid"); then
+        printf '%s\t%s\t%s\t%s\n' \
+            "$child_pid" "${1##*/}" "$child_start" "$process_boot" >>"$state/processes.tsv"
+    else
+        printf '%s\t%s\n' "$child_pid" "${1##*/}" >>"$state/processes.tsv"
+    fi
     wait "$child_pid" || command_status=$?
+    wait_for_child_group || group_status=$?
+    ((group_status == 0)) || command_status=$group_status
     ((signal_status == 0)) || command_status=$signal_status
-    trap - INT TERM
 
     if ((command_status != 0)); then
         collect_diagnostics "$state" || true
     fi
     cleanup "$state" || cleanup_status=$?
+    release_environment_resources
+    trap - EXIT
+    ((signal_status == 0)) || command_status=$signal_status
+    trap - INT TERM
     log "журнал окружения: $state"
 
     if ((command_status != 0)); then
@@ -683,6 +916,7 @@ prepare)
     suite=$2
     run_id=${3:-${MANAGED_VALKEY_RUN_ID:-$(new_run_id "$suite")}}
     prepare "$suite" "$run_id"
+    trap - INT TERM
     ;;
 expand-operator)
     (($# == 4)) || usage

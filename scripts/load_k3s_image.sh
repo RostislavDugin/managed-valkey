@@ -2,18 +2,49 @@
 set -euo pipefail
 
 (($# >= 3)) || {
-    echo "usage: $0 <compose-project> <image> <node> [node...]" >&2
+    echo "usage: $0 <compose-project> <image>|--archive <path> <node> [node...]" >&2
     exit 2
 }
 
 project=$1
-image=$2
+source_kind=image
+source_value=$2
 shift 2
+if [[ "$source_value" == --archive ]]; then
+    (($# >= 2)) || {
+        echo "load-k3s-image: после --archive нужны путь и нода" >&2
+        exit 2
+    }
+    source_kind=archive
+    source_value=$1
+    shift
+fi
 
-docker image inspect "$image" >/dev/null
-archive=$(mktemp)
-trap 'rm -f "$archive"' EXIT
-docker save --output "$archive" "$image"
+wait_for_containerd() {
+    local container=$1 node=$2
+
+    for _ in {1..60}; do
+        if docker exec "$container" ctr --namespace k8s.io images list >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "load-k3s-image: containerd не готов в $project/$node" >&2
+    return 1
+}
+
+archive=$source_value
+if [[ "$source_kind" == image ]]; then
+    docker image inspect "$source_value" >/dev/null
+    archive=$(mktemp)
+    trap 'rm -f "$archive"' EXIT
+    docker save --output "$archive" "$source_value"
+else
+    [[ -r "$archive" ]] || {
+        echo "load-k3s-image: архив не читается: $archive" >&2
+        exit 1
+    }
+fi
 
 for node in "$@"; do
     mapfile -t containers < <(docker ps -q \
@@ -31,5 +62,6 @@ for node in "$@"; do
         echo "load-k3s-image: контейнер $container не принадлежит работающему $project/$node" >&2
         exit 1
     fi
+    wait_for_containerd "$container" "$node"
     docker exec -i "$container" ctr --namespace k8s.io images import - <"$archive" >/dev/null
 done

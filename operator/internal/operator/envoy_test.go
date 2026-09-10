@@ -104,6 +104,25 @@ func TestVerifyEnvoyRejectsOneResponseAndCompositionChange(t *testing.T) {
 	expected := testNetworkPrerequisites(now)
 	snapshot := testEnvoySnapshot(t, expected, false)
 
+	t.Run("configured single process", func(t *testing.T) {
+		k8s := testEnvoyClient()
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: envoyNamespace, Name: "envoy-1"}}
+		if err := k8s.Delete(context.Background(), pod); err != nil {
+			t.Fatalf("удалить второй Pod Envoy: %v", err)
+		}
+		reconciler := &ValkeyInstanceReconciler{
+			Client: k8s, SystemNamespace: "valkey-system", EnvoyProcesses: 1,
+			Clock: clocktesting.NewFakeClock(now),
+			ReadEnvoy: func(context.Context, corev1.Pod) (EnvoyAdminSnapshot, error) {
+				return snapshot, nil
+			},
+		}
+		result := reconciler.verifyEnvoy(context.Background(), expected)
+		if result.status != valkeyv1alpha1.NetworkVerificationVerified || len(result.processes) != 1 {
+			t.Fatalf("один настроенный процесс Envoy не подтверждён: %+v", result)
+		}
+	})
+
 	t.Run("one response", func(t *testing.T) {
 		k8s := testEnvoyClient()
 		reconciler := &ValkeyInstanceReconciler{

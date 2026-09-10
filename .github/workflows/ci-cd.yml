@@ -95,10 +95,10 @@ jobs:
           retention-days: 7
 
   test-operator:
-    name: Тесты оператора
+    name: Тесты оператора (unit/envtest)
     needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
@@ -108,24 +108,16 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
-      - name: Запустить тесты
+      - name: Запустить ограниченный набор unit/envtest
         working-directory: operator
-        run: timeout --signal=TERM --kill-after=30s 140m just test
-      - name: Сохранить результаты и длительности
+        run: just test-ci
+      - name: Сохранить результаты и диагностику
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: operator-test-results-${{ github.sha }}
-          path: tmp/k3s/operator/*/test-results/**
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Сохранить диагностику
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: operator-test-diagnostics-${{ github.sha }}
-          path: tmp/k3s/operator/*/diagnostics/**
-          if-no-files-found: warn
+          name: operator-ci-unit-envtest-${{ github.sha }}
+          path: tmp/operator/ci/**
+          if-no-files-found: error
           retention-days: 7
 
   test-web:

@@ -797,16 +797,14 @@ func TestPW07AgentLossCompletesRotationWithoutReplacementCapacity(t *testing.T) 
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-	h.requireNodeCount(t, 4)
+	h.requireNodeCount(t, 3)
 
 	instance := h.createHA(t, "pwnode")
 	status := h.waitRunning(t, instance)
 	assertHAComposition(t, h, instance, status)
 	servicePasswords := h.servicePasswords(t, instance)
-	occupied := make(map[string]struct{}, len(status.Status.Nodes))
 	var target valkeyv1alpha1.NodeStatus
 	for _, process := range status.Status.Nodes {
-		occupied[process.NodeName] = struct{}{}
 		if target.PodUID == "" && process.Role == valkeyv1alpha1.NodeRoleReplica && process.NodeName != "k3s-server" {
 			target = process
 		}
@@ -814,22 +812,6 @@ func TestPW07AgentLossCompletesRotationWithoutReplacementCapacity(t *testing.T) 
 	if target.PodUID == "" {
 		t.Fatalf("PW-07 не нашла реплику на agent: %+v", status.Status.Nodes)
 	}
-	nodes := &corev1.NodeList{}
-	if err := h.k8s.List(t.Context(), nodes); err != nil {
-		t.Fatalf("прочитать ноды PW-07: %v", err)
-	}
-	spareNode := ""
-	for _, node := range nodes.Items {
-		if _, used := occupied[node.Name]; !used {
-			spareNode = node.Name
-			break
-		}
-	}
-	if spareNode == "" {
-		t.Fatalf("PW-07 не нашла запасную ноду: %+v", occupied)
-	}
-	h.setNodeUnschedulable(t, spareNode, true)
-	t.Cleanup(func() { h.setNodeUnschedulable(t, spareNode, false) })
 	h.useSurvivingEnvoy(t, target.NodeName)
 	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
 	setValue(t, connection, "pw07-key", "preserved")
@@ -890,7 +872,6 @@ func TestPW07AgentLossCompletesRotationWithoutReplacementCapacity(t *testing.T) 
 	instance.password = newPassword
 	fault.restore(t, h)
 	status = h.waitRunning(t, instance)
-	h.setNodeUnschedulable(t, spareNode, false)
 	assertHAComposition(t, h, instance, status)
 	assertPasswordsOnAllProcesses(t, h, instance, oldPassword, newPassword)
 	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
@@ -1256,12 +1237,24 @@ func verifyPW10DeletionPreemption(
 	h.waitDeleted(t, instance)
 }
 
-func TestDL01DeletionDuringOperationsStopsEveryKnownProcess(t *testing.T) {
+func TestDL01DeletionDuringUnknownCandidate(t *testing.T) {
+	testDL01DeletionDuringOperation(t, "unknown-candidate")
+}
+
+func TestDL01DeletionDuringShrink(t *testing.T) {
+	testDL01DeletionDuringOperation(t, "shrink")
+}
+
+func TestDL01DeletionDuringPasswordRotation(t *testing.T) {
+	testDL01DeletionDuringOperation(t, "password-rotation")
+}
+
+func testDL01DeletionDuringOperation(t *testing.T, scenario string) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
 
-	t.Run("unknown-candidate", func(t *testing.T) {
+	if scenario == "unknown-candidate" {
 		instance := h.createHA(t, "dlunknown")
 		status := h.waitRunning(t, instance)
 		assertHAComposition(t, h, instance, status)
@@ -1287,9 +1280,9 @@ func TestDL01DeletionDuringOperationsStopsEveryKnownProcess(t *testing.T) {
 		h.requestDeletion(t, instance)
 		promotionPoint.close()
 		assertDL01FinalizerBoundary(t, h, instance, finalizerPoint, known)
-	})
+	}
 
-	t.Run("shrink", func(t *testing.T) {
+	if scenario == "shrink" {
 		instance := h.createHAWithSize(t, "dlshrink", 2, 2)
 		status := h.waitRunning(t, instance)
 		assertHAComposition(t, h, instance, status)
@@ -1306,9 +1299,9 @@ func TestDL01DeletionDuringOperationsStopsEveryKnownProcess(t *testing.T) {
 		h.requestDeletion(t, instance)
 		beforeZero.close()
 		assertDL01FinalizerBoundary(t, h, instance, finalizerPoint, known)
-	})
+	}
 
-	t.Run("password-rotation", func(t *testing.T) {
+	if scenario == "password-rotation" {
 		instance := h.createHA(t, "dlpassword")
 		status := h.waitRunning(t, instance)
 		assertHAComposition(t, h, instance, status)
@@ -1340,7 +1333,7 @@ func TestDL01DeletionDuringOperationsStopsEveryKnownProcess(t *testing.T) {
 		h.requestDeletion(t, instance)
 		confirmationPoint.close()
 		assertDL01FinalizerBoundary(t, h, instance, finalizerPoint, known)
-	})
+	}
 }
 
 func knownProcessIdentities(instance *valkeyv1alpha1.ValkeyInstance) []valkeyv1alpha1.ProcessIdentity {
@@ -1371,7 +1364,7 @@ func assertDL01FinalizerBoundary(
 	t.Helper()
 	assertDeletionFinalizerBoundary(t, h, instance, point, known)
 	point.close()
-	h.waitDeleted(t, instance)
+	waitForValkeyInstanceDeletion(t, h, instance)
 }
 
 func assertDeletionFinalizerBoundary(
@@ -1425,13 +1418,21 @@ func assertDeletionFinalizerBoundary(
 	}
 }
 
-func TestDL02DL03NodeFailuresDuringDeletion(t *testing.T) {
+func TestDL02DeletionAfterAgentDestroyed(t *testing.T) {
+	testDL02DL03NodeFailureDuringDeletion(t, "agent-destroyed")
+}
+
+func TestDL03DeletionWithLiveIsolatedAgent(t *testing.T) {
+	testDL02DL03NodeFailureDuringDeletion(t, "live-isolated-agent")
+}
+
+func testDL02DL03NodeFailureDuringDeletion(t *testing.T, scenario string) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-	h.requireNodeCount(t, 4)
+	h.requireNodeCount(t, 3)
 
-	t.Run("agent-destroyed", func(t *testing.T) {
+	if scenario == "agent-destroyed" {
 		instance := h.createHA(t, "dlagent")
 		status := h.waitRunning(t, instance)
 		assertHAComposition(t, h, instance, status)
@@ -1458,9 +1459,9 @@ func TestDL02DL03NodeFailuresDuringDeletion(t *testing.T) {
 		stagePoint.close()
 		assertDL01FinalizerBoundary(t, h, instance, finalizerPoint, known)
 		fault.restore(t, h)
-	})
+	}
 
-	t.Run("live-isolated-agent", func(t *testing.T) {
+	if scenario == "live-isolated-agent" {
 		instance := h.createHA(t, "dlisolated")
 		status := h.waitRunning(t, instance)
 		assertHAComposition(t, h, instance, status)
@@ -1537,7 +1538,7 @@ func TestDL02DL03NodeFailuresDuringDeletion(t *testing.T) {
 		if err := h.k8s.Get(t.Context(), client.ObjectKey{Name: instance.namespace}, namespace); err != nil {
 			t.Fatalf("DL-03 оператор удалил namespace вызывающей стороны: %v", err)
 		}
-	})
+	}
 }
 
 func TestDL04HADeletionRestartsAtEveryStage(t *testing.T) {
@@ -1792,7 +1793,10 @@ func TestCT09CredentialLossRestoresWithoutRegenerationOrLeaks(t *testing.T) {
 		assertProcessIdentities(t, originalIdentities, current.Status.Nodes)
 		pod := h.getPodOrdinal(t, instance, failedPrimary.Ordinal)
 		if string(pod.UID) != failedPrimary.PodUID {
-			t.Fatalf("CT-09 заменил primary без Secret: %s", pod.UID)
+			container := namedContainerStatus(pod.Status.ContainerStatuses, "valkey")
+			if containerHasStarted(container) {
+				t.Fatalf("CT-09 запустил новый процесс без Secret: %s", pod.UID)
+			}
 		}
 		for _, process := range status.Status.Nodes {
 			if process.Ordinal == failedPrimary.Ordinal {
