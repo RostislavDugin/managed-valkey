@@ -79,6 +79,13 @@ write_script "$mock_bin/sudo" \
     '[[ "$1" == ip && "$2" == route && "$3" == del ]]' \
     '[[ "$4" != 10.64.0.0/16 ]] || exit 12' \
     ': >"$MV_SECOND_ROUTE_REMOVED"'
+write_script "$mock_bin/kubectl" \
+    'case "$*" in' \
+    '*"get nodes,pods,services,statefulsets,deployments,endpointslices,valkeyinstances.valkey.h3llo-demo.com"*) printf '\''kind: List\n'\'' ;;' \
+    '*"get events"*) printf '\''kind: EventList\n'\'' ;;' \
+    '*"logs -n valkey-system"*) printf '\''operator pod log\n'\'' ;;' \
+    '*) exit 2 ;;' \
+    'esac'
 
 cleanup_state=$temporary/cleanup-state
 cleanup_project=managed-valkey-api-cleanup-routes
@@ -144,17 +151,77 @@ if (MV_TEST_K3S_ENABLED=0; configure_environment_mode operator) 2>"$temporary/mo
 fi
 rg -q 'окружение без k3s поддерживает только профиль api' "$temporary/mode.err"
 
+(
+    unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
+    configure_cluster_profile api
+    [[ "$BOOTSTRAP_PROFILE" == api ]]
+    [[ "$MANAGED_VALKEY_K3S_NODES" == 1 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 0 ]]
+)
+(
+    unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
+    configure_cluster_profile operator
+    [[ "$BOOTSTRAP_PROFILE" == full ]]
+    [[ "$MANAGED_VALKEY_K3S_NODES" == 3 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 2 ]]
+)
+(
+    unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
+    configure_cluster_profile integration
+    [[ "$BOOTSTRAP_PROFILE" == full ]]
+    [[ "$MANAGED_VALKEY_K3S_NODES" == 1 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 1 ]]
+)
+(
+    unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
+    configure_cluster_profile e2e
+    [[ "$BOOTSTRAP_PROFILE" == full ]]
+    [[ "$MANAGED_VALKEY_K3S_NODES" == 3 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 2 ]]
+)
+
+[[ "$(MV_TEST_K3S_ENABLED=0 default_memory_mib_for_suite api)" == 512 ]]
+[[ "$(default_memory_mib_for_suite api)" == 3072 ]]
+[[ "$(default_memory_mib_for_suite operator)" == 3072 ]]
+[[ "$(default_memory_mib_for_suite integration)" == 8192 ]]
+[[ "$(default_memory_mib_for_suite e2e)" == 3072 ]]
+
+diagnostic_state=$temporary/integration-diagnostics
+mkdir -p "$diagnostic_state/diagnostics"
+: >"$diagnostic_state/admin.kubeconfig"
+printf 'external operator log\n' >"$diagnostic_state/diagnostics/operator.log"
+printf '%s\n' \
+    'MV_SUITE=integration' \
+    'MV_RUN_ID=integration-diagnostics' \
+    "DIAGNOSTICS_DIR=$(printf '%q' "$diagnostic_state/diagnostics")" \
+    "ADMIN_KUBECONFIG=$(printf '%q' "$diagnostic_state/admin.kubeconfig")" \
+    'MANAGED_VALKEY_COMPOSE_PROJECT=integration-diagnostics' \
+    >"$diagnostic_state/environment.env"
+PATH="$mock_bin:$PATH" collect_diagnostics "$diagnostic_state"
+rg -q '^external operator log$' "$diagnostic_state/diagnostics/operator.log"
+rg -q '^operator pod log$' "$diagnostic_state/diagnostics/operator-kubernetes.log"
+
 reserve_environment_resources() { :; }
 release_environment_resources() { :; }
 prepare() {
     local suite=$1 run_id=$2 test_state="$state_root/$suite/$run_id"
 
-    mkdir -p "$test_state"
-    printf 'MV_SUITE=%q\nMV_RUN_ID=%q\nMV_STATE_DIR=%q\n' \
-        "$suite" "$run_id" "$test_state" >"$test_state/environment.env"
+    mkdir -p "$test_state/diagnostics"
+    printf 'MV_SUITE=%q\nMV_RUN_ID=%q\nMV_STATE_DIR=%q\nDIAGNOSTICS_DIR=%q\n' \
+        "$suite" "$run_id" "$test_state" "$test_state/diagnostics" >"$test_state/environment.env"
 }
 collect_diagnostics() { :; }
 cleanup() { :; }
+slow_success=$temporary/slow-success
+write_script "$slow_success" 'sleep 1'
+if ! MV_INTEGRATION_TARGET_SECONDS=0 run_in_environment integration target-overrun -- "$slow_success" \
+    >"$temporary/duration.out" 2>"$temporary/duration.err"; then
+    echo "успешный integration-запуск стал ошибкой из-за длительности" >&2
+    exit 1
+fi
+rg -q '^full[[:space:]][1-9][0-9]*$' \
+    "$state_root/integration/target-overrun/diagnostics/durations.tsv"
+rg -q 'target_seconds=0 target_exceeded=true' "$temporary/duration.err"
 stubborn=$temporary/stubborn
 write_script "$stubborn" \
     'sleep 0.2' \

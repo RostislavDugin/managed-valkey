@@ -113,6 +113,10 @@ configure_cluster_profile() {
         BOOTSTRAP_PROFILE=api
         MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-1}
         MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-0}
+    elif [[ "$suite" == integration ]]; then
+        BOOTSTRAP_PROFILE=full
+        MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-1}
+        MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-1}
     else
         BOOTSTRAP_PROFILE=full
         MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-3}
@@ -120,6 +124,18 @@ configure_cluster_profile() {
     fi
     K3S_EXPECTED_NODES=$MANAGED_VALKEY_K3S_NODES
     validate_cluster_profile
+}
+
+default_memory_mib_for_suite() {
+    local suite=$1
+
+    if [[ "$suite" == api && "${MV_TEST_K3S_ENABLED:-1}" == 0 ]]; then
+        printf '512\n'
+    elif [[ "$suite" == integration ]]; then
+        printf '8192\n'
+    else
+        printf '3072\n'
+    fi
 }
 
 new_run_id() {
@@ -433,11 +449,7 @@ reserve_environment_resources() {
     [[ "${MV_TEST_RESOURCE_RESERVED:-0}" != 1 ]] || return 0
     memory_mib=${MV_TEST_MEMORY_MIB:-}
     if [[ -z "$memory_mib" ]]; then
-        if [[ "$suite" == api && "${MV_TEST_K3S_ENABLED:-1}" == 0 ]]; then
-            memory_mib=512
-        else
-            memory_mib=3072
-        fi
+        memory_mib=$(default_memory_mib_for_suite "$suite")
     fi
     [[ "$memory_mib" =~ ^[1-9][0-9]*$ ]] || fail "MV_TEST_MEMORY_MIB должно быть положительным числом"
     resource_reservation_owner="environment-${suite}-${run_id}"
@@ -450,6 +462,20 @@ release_environment_resources() {
     [[ -n "$resource_reservation_owner" ]] || return 0
     "$repo_root/scripts/test_resources.sh" release "$resource_reservation_owner"
     resource_reservation_owner=""
+}
+
+report_integration_duration() {
+    local started_seconds=$1 target_seconds=${MV_INTEGRATION_TARGET_SECONDS:-300}
+    local elapsed_seconds exceeded=false
+
+    [[ "$target_seconds" =~ ^[0-9]+$ ]] || fail "MV_INTEGRATION_TARGET_SECONDS должно быть целым неотрицательным числом"
+    elapsed_seconds=$((SECONDS - started_seconds))
+    if ((elapsed_seconds > target_seconds)); then
+        exceeded=true
+    fi
+    mkdir -p "$DIAGNOSTICS_DIR"
+    printf 'full\t%d\n' "$elapsed_seconds" >>"$DIAGNOSTICS_DIR/durations.tsv"
+    log "integration duration: total_seconds=$elapsed_seconds target_seconds=$target_seconds target_exceeded=$exceeded"
 }
 
 register_environment_owner() {
@@ -621,19 +647,23 @@ refresh_operator_public_address() {
 }
 
 collect_diagnostics() {
-    local target=$1 diagnostic_kubeconfig kubernetes_status=0
+    local target=$1 diagnostic_kubeconfig kubernetes_status=0 operator_log
 
     [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
     set -a
     source "$target/environment.env"
     set +a
+    operator_log="$DIAGNOSTICS_DIR/operator.log"
+    if [[ "$MV_SUITE" == integration ]]; then
+        operator_log="$DIAGNOSTICS_DIR/operator-kubernetes.log"
+    fi
     mkdir -p "$DIAGNOSTICS_DIR"
     chmod 0700 "$DIAGNOSTICS_DIR"
     rm -f \
         "$DIAGNOSTICS_DIR/compose-ps.txt" \
         "$DIAGNOSTICS_DIR/k3s.log" \
         "$DIAGNOSTICS_DIR/kubernetes-unavailable.txt" \
-        "$DIAGNOSTICS_DIR/operator.log" \
+        "$operator_log" \
         "$DIAGNOSTICS_DIR/resources.yaml" \
         "$DIAGNOSTICS_DIR/events.yaml" \
         "$DIAGNOSTICS_DIR/metadata.tsv"
@@ -663,7 +693,7 @@ collect_diagnostics() {
                 kubectl --request-timeout=3s logs -n valkey-system \
                 -l 'app.kubernetes.io/name in (managed-valkey-operator,operator-integration)' \
                 --all-containers --prefix --tail=500 \
-                >"$DIAGNOSTICS_DIR/operator.log" 2>/dev/null || true
+                >"$operator_log" 2>/dev/null || true
         else
             rm -f "$DIAGNOSTICS_DIR/resources.yaml"
             printf 'Kubernetes API недоступен; снимок не сохранён; status=%d\n' "$kubernetes_status" \
@@ -833,7 +863,7 @@ cleanup() {
 
 run_in_environment() {
     local suite=$1 run_id=$2 state command_status=0 cleanup_status=0 child_pid=0 child_start
-    local signal_status=0 group_status=0 process_boot
+    local signal_status=0 group_status=0 process_boot run_started_seconds=$SECONDS
     shift 2
     [[ "${1:-}" == -- ]] || fail "после окружения ожидается --"
     shift
@@ -906,6 +936,9 @@ run_in_environment() {
     fi
     cleanup "$state" || cleanup_status=$?
     release_environment_resources
+    if [[ "$suite" == integration ]]; then
+        report_integration_duration "$run_started_seconds" || cleanup_status=$?
+    fi
     trap - EXIT
     ((signal_status == 0)) || command_status=$signal_status
     trap - INT TERM

@@ -17,20 +17,26 @@ operator_recipes=$(just --justfile "$repo_root/operator/Justfile" --summary)
 [[ " $operator_recipes " != *' test-ci '* ]]
 root_recipes=$(just --justfile "$repo_root/Justfile" --summary)
 [[ " $root_recipes " == *' test-e2e-prod '* ]]
+[[ " $root_recipes " == *' test-integrations '* ]]
 [[ " $root_recipes " != *' test-prod '* ]]
+integration_command=$(just --justfile "$repo_root/Justfile" --dry-run test-integrations 2>&1)
+[[ "$integration_command" == *'tests/integrations/Justfile test'* ]]
+integration_recipe=$(just --justfile "$repo_root/tests/integrations/Justfile" --dry-run test 2>&1)
+[[ "$integration_recipe" == *'scripts/check_integration_test_catalog.sh'* ]]
+[[ "$integration_recipe" == *'scripts/test_environment.sh exec integration'* ]]
 
 create_commands() {
     local command_dir=$1 suite
 
     mkdir -p "$command_dir"
-    for suite in api operator web; do
+    for suite in api operator web integration; do
         printf '%s\n' \
             '#!/usr/bin/env bash' \
             'set -euo pipefail' \
             'printf '\''%s\n'\'' "$1" >"$MV_CAPTURE_DIR/'"$suite"'"' \
             'touch "$MV_CAPTURE_DIR/'"$suite"'.started"' \
             'for _ in $(seq 1 100); do' \
-            '    [[ $(find "$MV_CAPTURE_DIR" -name '\''*.started'\'' | wc -l) == 3 ]] && exit 0' \
+            '    [[ $(find "$MV_CAPTURE_DIR" -name '\''*.started'\'' | wc -l) == "$MV_EXPECTED_SUITE_COUNT" ]] && exit 0' \
             '    sleep 0.05' \
             'done' \
             'exit 1' \
@@ -54,7 +60,10 @@ run_mode() {
 
     mkdir -p "$capture"
     create_commands "$command_dir"
+    expected_suite_count=3
+    [[ "$mode" != test-full ]] || expected_suite_count=4
     MV_CAPTURE_DIR="$capture" \
+        MV_EXPECTED_SUITE_COUNT="$expected_suite_count" \
         MANAGED_VALKEY_ROOT_RUN_ID="$run_id" \
         MANAGED_VALKEY_TEST_COMMAND_DIR="$command_dir" \
         timeout 10s "$repo_root/scripts/run_all_tests.sh" "$mode" >"$output"
@@ -63,9 +72,11 @@ run_mode() {
     done
     ! rg -q 'e2e' "$output"
     if [[ "$mode" == test-full ]]; then
-        rg -q 'integration: ещё не реализован' "$output"
+        [[ "$(<"$capture/integration")" == "$mode" ]]
+        rg -q 'integration: пройден' "$output"
     else
-        ! rg -q 'integration' "$output"
+        [[ ! -e "$capture/integration" ]]
+        ! rg -q '^integration:' "$output"
     fi
     rm -rf -- "$run_dir"
 }

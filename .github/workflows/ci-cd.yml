@@ -146,6 +146,46 @@ jobs:
       - name: Запустить тесты
         run: just test
 
+  test-integrations:
+    name: Интеграция API и оператора
+    needs: [lint-api, lint-operator, lint-web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
+        with:
+          just-version: 1.43.0
+      - name: Запустить общую интеграцию
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+        run: just test-integrations
+      - name: Проверить диагностику
+        id: check-integration-artifacts
+        if: failure()
+        run: |
+          scanner_args=()
+          for secret_values in tmp/k3s/integration/*/integration-secret-values; do
+            if [[ -f "$secret_values" ]]; then
+              scanner_args+=(--secret-values-file "$secret_values")
+            fi
+          done
+          scripts/check_test_artifacts.sh \
+            "${scanner_args[@]}" \
+            tmp/k3s/integration/*/diagnostics
+      - name: Сохранить диагностику
+        if: failure() && steps.check-integration-artifacts.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-test-diagnostics-${{ github.sha }}
+          path: tmp/k3s/integration/*/diagnostics/**
+          if-no-files-found: warn
+          retention-days: 7
+
   test-e2e:
     name: Сквозной тест регистрации
     needs: [lint-api, lint-operator, lint-web]
@@ -186,7 +226,7 @@ jobs:
       - name: Проверить диагностику на пароль
         id: check-e2e-artifacts
         if: failure()
-        run: scripts/check_e2e_artifacts.sh tmp/playwright/e2e tmp/k3s/e2e
+        run: scripts/check_test_artifacts.sh tmp/playwright/e2e tmp/k3s/e2e
       - name: Сохранить диагностику
         if: failure() && steps.check-e2e-artifacts.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -200,7 +240,7 @@ jobs:
 
   build-api:
     name: Сборка API и миграций
-    needs: [test-api, test-operator, test-web, test-e2e]
+    needs: [test-api, test-operator, test-web, test-integrations, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -239,7 +279,7 @@ jobs:
 
   build-web:
     name: Сборка Caddy и клиентского приложения
-    needs: [test-api, test-operator, test-web, test-e2e]
+    needs: [test-api, test-operator, test-web, test-integrations, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

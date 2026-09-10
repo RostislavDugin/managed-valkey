@@ -18,6 +18,9 @@ test:
 test-full:
     scripts/run_all_tests.sh test-full
 
+test-integrations:
+    just --justfile tests/integrations/Justfile test
+
 test-e2e:
     just --justfile tests/e2e/Justfile test
 

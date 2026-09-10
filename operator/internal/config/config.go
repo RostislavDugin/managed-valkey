@@ -14,7 +14,7 @@ import (
 
 const (
 	ServiceName             = "operator"
-	ProbeAddr               = ":8081"
+	DefaultProbeAddr        = ":8081"
 	LeaderElection          = true
 	MaxConcurrentReconciles = 4
 	PrimaryFailureThreshold = 3
@@ -23,6 +23,7 @@ const (
 	EnvValkeyImage          = "VALKEY_IMAGE"
 	EnvBaseDomain           = "VALKEY_BASE_DOMAIN"
 	EnvOperatorCIDRs        = "VALKEY_OPERATOR_CIDRS"
+	EnvProbeAddr            = "OPERATOR_PROBE_ADDR"
 	DefaultSystemNamespace  = "valkey-system"
 	DefaultValkeyImage      = "valkey/valkey:8.1.9"
 	DefaultBaseDomain       = "valkey.localhost"
@@ -37,6 +38,7 @@ type Config struct {
 	BaseDomain      string
 	OperatorCIDRs   []string
 	EnvoyProcesses  int
+	ProbeAddr       string
 	Logging         logging.Config
 }
 
@@ -56,6 +58,7 @@ func Load() (Config, error) {
 		BaseDomain:      stringOrDefault(EnvBaseDomain, DefaultBaseDomain),
 		OperatorCIDRs:   operatorCIDRs,
 		EnvoyProcesses:  envoyProcesses,
+		ProbeAddr:       stringOrDefault(EnvProbeAddr, DefaultProbeAddr),
 		Logging:         logging.ConfigFromEnv(ServiceName),
 	}, nil
 }

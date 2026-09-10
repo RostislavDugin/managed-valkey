@@ -17,8 +17,7 @@ else
     run_dir="$repo_root/tmp/test-runs/$run_id"
 fi
 suites=(api operator web)
-future_suites=()
-[[ "$recipe" != test-full ]] || future_suites=(integration)
+[[ "$recipe" != test-full ]] || suites+=(integration)
 declare -A pids statuses
 interrupted=0
 command_dir=${MANAGED_VALKEY_TEST_COMMAND_DIR:-}
@@ -27,7 +26,11 @@ mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
 
 suite_justfile() {
-    printf '%s/%s/Justfile\n' "$repo_root" "$1"
+    if [[ "$1" == integration ]]; then
+        printf '%s/tests/integrations/Justfile\n' "$repo_root"
+    else
+        printf '%s/%s/Justfile\n' "$repo_root" "$1"
+    fi
 }
 
 stop_suites() {
@@ -88,9 +91,6 @@ for suite in "${suites[@]}"; do
         echo "  $suite: ошибка $status, $run_dir/$suite.log"
         ((result != 0)) || result=$status
     fi
-done
-for suite in "${future_suites[@]}"; do
-    echo "  $suite: ещё не реализован"
 done
 echo "  журналы: $run_dir"
 

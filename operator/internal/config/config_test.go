@@ -12,6 +12,7 @@ func Test_Load_WhenEnvironmentIsEmpty_UsesDefaults(t *testing.T) {
 		config.EnvValkeyImage,
 		config.EnvBaseDomain,
 		config.EnvOperatorCIDRs,
+		config.EnvProbeAddr,
 	} {
 		t.Setenv(name, "")
 	}
@@ -34,9 +35,24 @@ func Test_Load_WhenEnvironmentIsEmpty_UsesDefaults(t *testing.T) {
 	if cfg.EnvoyProcesses != config.DefaultEnvoyProcesses {
 		t.Errorf("процессов Envoy %d, ожидалось %d", cfg.EnvoyProcesses, config.DefaultEnvoyProcesses)
 	}
+	if cfg.ProbeAddr != config.DefaultProbeAddr {
+		t.Errorf("адрес health probe %q, ожидался %q", cfg.ProbeAddr, config.DefaultProbeAddr)
+	}
 
 	if cfg.Logging.ServiceName != config.ServiceName {
 		t.Errorf("service.name %q, ожидался %q", cfg.Logging.ServiceName, config.ServiceName)
+	}
+}
+
+func Test_Load_WithProbeAddr_UsesConfiguredLoopbackAddress(t *testing.T) {
+	t.Setenv(config.EnvProbeAddr, "127.0.0.1:0")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузка конфигурации: %v", err)
+	}
+	if cfg.ProbeAddr != "127.0.0.1:0" {
+		t.Errorf("адрес health probe %q, ожидался тестовый loopback-адрес", cfg.ProbeAddr)
 	}
 }
 

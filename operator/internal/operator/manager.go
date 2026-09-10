@@ -72,6 +72,10 @@ func NewManager(
 	if systemNamespace == "" {
 		systemNamespace = config.DefaultSystemNamespace
 	}
+	probeAddr := cfg.ProbeAddr
+	if probeAddr == "" {
+		probeAddr = config.DefaultProbeAddr
+	}
 
 	managerOptions := ctrl.Options{
 		Scheme: NewScheme(),
@@ -88,7 +92,7 @@ func NewManager(
 		// добавит изменение с поведением оператора.
 		Metrics: metricsserver.Options{BindAddress: "0"},
 
-		HealthProbeBindAddress:  config.ProbeAddr,
+		HealthProbeBindAddress:  probeAddr,
 		LeaderElection:          config.LeaderElection,
 		LeaderElectionID:        config.LeaderElectionID,
 		LeaderElectionNamespace: systemNamespace,
