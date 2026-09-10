@@ -52,6 +52,27 @@ type instance struct {
 	IsUpdating             bool       `json:"is_updating"`
 }
 
+type metricPoint struct {
+	UsedMemoryBytes  *float64 `json:"used_memory_bytes"`
+	CPUMillicores    *float64 `json:"cpu_millicores"`
+	ConnectedClients *float64 `json:"connected_clients"`
+	OpsPerSec        *float64 `json:"ops_per_sec"`
+	KeyspaceHits     *int64   `json:"keyspace_hits"`
+	KeyspaceMisses   *int64   `json:"keyspace_misses"`
+	EvictedKeys      *int64   `json:"evicted_keys"`
+}
+
+type metricNode struct {
+	Ordinal int           `json:"ordinal"`
+	Name    string        `json:"name"`
+	Role    string        `json:"role"`
+	Points  []metricPoint `json:"points"`
+}
+
+type valkeyMetrics struct {
+	Nodes []metricNode `json:"nodes"`
+}
+
 type credentials struct {
 	Host                   string `json:"host"`
 	Port                   int    `json:"port"`
@@ -190,6 +211,22 @@ func (client *apiClient) Credentials(ctx context.Context, token, instanceID stri
 		ctx,
 		http.MethodGet,
 		"/v1/managed/valkey/instances/"+instanceID+"/credentials",
+		token,
+		nil,
+		false,
+		&response,
+		http.StatusOK,
+	)
+
+	return response, err
+}
+
+func (client *apiClient) Metrics(ctx context.Context, token, instanceID string) (valkeyMetrics, error) {
+	var response valkeyMetrics
+	err := client.request(
+		ctx,
+		http.MethodGet,
+		"/v1/managed/valkey/instances/"+instanceID+"/metrics?range=5m",
 		token,
 		nil,
 		false,
@@ -360,6 +397,15 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 					`{"host":"cache.example","port":31379,"username":"app","password_version":1,"applied_password_version":1}`,
 				),
 			)
+		case http.MethodGet + " /v1/managed/valkey/instances/" + instanceID + "/metrics":
+			if request.URL.RawQuery != "range=5m" {
+				t.Errorf("неверное окно метрик: %q", request.URL.RawQuery)
+			}
+			_, _ = writer.Write(
+				[]byte(
+					`{"nodes":[{"ordinal":0,"name":"cache-aaaaaa-0","role":"primary","points":[{"used_memory_bytes":1024,"cpu_millicores":5,"connected_clients":1,"ops_per_sec":2,"keyspace_hits":3,"keyspace_misses":4,"evicted_keys":0}]}]}`,
+				),
+			)
 		case http.MethodPost + " /v1/managed/valkey/instances/" + instanceID + "/resize":
 			assertRequestJSON(t, request, "ram_gb", float64(2))
 			writer.WriteHeader(http.StatusAccepted)
@@ -399,6 +445,12 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 	}
 	if _, err := client.Credentials(ctx, token, instanceID); err != nil {
 		t.Fatalf("чтение реквизитов: %v", err)
+	}
+	metrics, err := client.Metrics(ctx, token, instanceID)
+	if err != nil || len(metrics.Nodes) != 1 || len(metrics.Nodes[0].Points) != 1 ||
+		metrics.Nodes[0].Ordinal != 0 || metrics.Nodes[0].Role != "primary" ||
+		metrics.Nodes[0].Points[0].CPUMillicores == nil {
+		t.Fatalf("чтение метрик: metrics=%+v error=%v", metrics, err)
 	}
 	if _, err := client.Resize(ctx, token, instanceID, 1, 2); err != nil {
 		t.Fatalf("изменение ресурсов: %v", err)

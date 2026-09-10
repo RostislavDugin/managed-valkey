@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
@@ -229,12 +230,16 @@ func (harness *scenarioHarness) waitForReady(
 			}
 			pod = podObject
 			observation := fmt.Sprintf(
-				"namespace=%s cr_phase=%s observed_generation=%d pod_uid=%s pod_phase=%s",
+				"namespace=%s namespace_metadata=%t cr_phase=%s cr_metadata=%t "+
+					"observed_generation=%d pod_uid=%s pod_phase=%s pod_metadata=%t",
 				namespaceObject.Name,
+				ownerMetadataMatches(namespaceObject, owner, created),
 				resourceObject.Status.Phase,
+				ownerMetadataMatches(resourceObject, owner, created),
 				resourceObject.Status.ObservedGeneration,
 				podObject.UID,
 				podObject.Status.Phase,
+				podOwnerMetadataMatches(podObject, owner, created),
 			)
 			ready := kubernetesReady(
 				namespaceObject,
@@ -275,8 +280,9 @@ func kubernetesReady(
 	expectedPasswordVersion int,
 	previousPodUID string,
 ) bool {
-	if namespace.Labels[valkeyv1alpha1.UserIDLabelKey] != owner.ID ||
-		namespace.Labels[valkeyv1alpha1.InstanceIDLabelKey] != created.ID ||
+	if !ownerMetadataMatches(namespace, owner, created) ||
+		!ownerMetadataMatches(resourceObject, owner, created) ||
+		!podOwnerMetadataMatches(pod, owner, created) ||
 		resourceObject.Spec.InstanceID != created.ID || resourceObject.Spec.Slug != created.Slug ||
 		resourceObject.Spec.VCPU != int32(expectedVCPU) || resourceObject.Spec.RAMGB != int32(expectedRAMGB) ||
 		resourceObject.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
@@ -298,6 +304,17 @@ func kubernetesReady(
 	return requests.Cpu().Cmp(*expectedCPU) == 0 && requests.Memory().Cmp(*expectedMemory) == 0
 }
 
+func ownerMetadataMatches(object metav1.Object, owner account, created instance) bool {
+	return object.GetLabels()[valkeyv1alpha1.InstanceIDLabelKey] == created.ID &&
+		object.GetLabels()[valkeyv1alpha1.UserIDLabelKey] == owner.ID &&
+		object.GetAnnotations()[valkeyv1alpha1.UserEmailAnnotationKey] == owner.Email
+}
+
+func podOwnerMetadataMatches(pod *corev1.Pod, owner account, created instance) bool {
+	return ownerMetadataMatches(pod, owner, created) &&
+		pod.Labels[valkeyv1alpha1.RoleLabelKey] == string(valkeyv1alpha1.NodeRolePrimary)
+}
+
 func podIsReady(pod *corev1.Pod) bool {
 	for _, condition := range pod.Status.Conditions {
 		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
@@ -306,6 +323,64 @@ func podIsReady(pod *corev1.Pod) bool {
 	}
 
 	return false
+}
+
+func (harness *scenarioHarness) waitForMetrics(owner account, created instance) metricPoint {
+	harness.t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), conditionTimeout)
+	defer cancel()
+	var point metricPoint
+	last, err := waitForCondition(
+		ctx,
+		harness.processes,
+		pollInterval,
+		func(ctx context.Context) (string, bool, error) {
+			metrics, metricsErr := harness.api.Metrics(ctx, owner.Token, created.ID)
+			if metricsErr != nil {
+				return fmt.Sprintf("метрики через HTTP пока недоступны: %v", metricsErr), false, nil
+			}
+			encoded, _ := json.Marshal(metrics)
+			current, found := currentMetricPoint(metrics, created)
+			if found {
+				point = current
+			}
+
+			return string(encoded), found, nil
+		},
+	)
+	if err != nil {
+		harness.saveLastObservation("metrics", last)
+		harness.t.Fatalf("API не вернул полную точку метрик: %v; последнее наблюдение: %s", err, last)
+	}
+
+	return point
+}
+
+func currentMetricPoint(metrics valkeyMetrics, created instance) (metricPoint, bool) {
+	for _, node := range metrics.Nodes {
+		if node.Ordinal != 0 || node.Name != created.Slug+"-0" ||
+			node.Role != string(valkeyv1alpha1.NodeRolePrimary) {
+			continue
+		}
+		for _, point := range node.Points {
+			if metricPointComplete(point) {
+				return point, true
+			}
+		}
+	}
+
+	return metricPoint{}, false
+}
+
+func metricPointComplete(point metricPoint) bool {
+	return point.UsedMemoryBytes != nil && *point.UsedMemoryBytes >= 0 &&
+		point.CPUMillicores != nil && *point.CPUMillicores >= 0 &&
+		point.ConnectedClients != nil && *point.ConnectedClients >= 0 &&
+		point.OpsPerSec != nil && *point.OpsPerSec >= 0 &&
+		point.KeyspaceHits != nil && *point.KeyspaceHits >= 0 &&
+		point.KeyspaceMisses != nil && *point.KeyspaceMisses >= 0 &&
+		point.EvictedKeys != nil && *point.EvictedKeys >= 0
 }
 
 func (harness *scenarioHarness) connect(hostname, password string) *valkeyConnection {
@@ -431,6 +506,7 @@ func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t
 	namespace := "valkey-" + created.Slug
 	harness.cleanupInstance(owner, created.ID, namespace)
 	current, _ := harness.waitForReady(owner, created, 1, 1, 1, "")
+	harness.waitForMetrics(owner, created)
 	connection := harness.connect(current.Host, password)
 	defer func() { _ = connection.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), conditionTimeout)
@@ -528,6 +604,183 @@ func Test_DeleteSingleValkey_WithRealApiAndOperator_RemovesKubernetesResourcesAn
 	if err := harness.waitForDeletion(ctx, owner, created.ID, namespace); err != nil {
 		t.Fatalf("дождаться удаления: %v", err)
 	}
+}
+
+func Test_KubernetesReady_WithCompleteOwnerMetadata_ReturnsTrue(t *testing.T) {
+	namespace, resourceObject, pod, owner, created := readyKubernetesObjects()
+	if !kubernetesReady(namespace, resourceObject, pod, owner, created, 1, 1, 1, "") {
+		t.Fatal("полный набор метаданных не признан готовым")
+	}
+}
+
+func Test_KubernetesReady_WithIncompleteOwnerMetadata_ReturnsFalse(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*corev1.Namespace, *valkeyv1alpha1.ValkeyInstance, *corev1.Pod)
+	}{
+		{
+			name: "у Namespace нет адреса электронной почты",
+			change: func(namespace *corev1.Namespace, _ *valkeyv1alpha1.ValkeyInstance, _ *corev1.Pod) {
+				delete(namespace.Annotations, valkeyv1alpha1.UserEmailAnnotationKey)
+			},
+		},
+		{
+			name: "у ValkeyInstance нет идентификатора экземпляра",
+			change: func(_ *corev1.Namespace, resourceObject *valkeyv1alpha1.ValkeyInstance, _ *corev1.Pod) {
+				delete(resourceObject.Labels, valkeyv1alpha1.InstanceIDLabelKey)
+			},
+		},
+		{
+			name: "у Pod нет идентификатора пользователя",
+			change: func(_ *corev1.Namespace, _ *valkeyv1alpha1.ValkeyInstance, pod *corev1.Pod) {
+				delete(pod.Labels, valkeyv1alpha1.UserIDLabelKey)
+			},
+		},
+		{
+			name: "у Pod нет подтверждённой роли",
+			change: func(_ *corev1.Namespace, _ *valkeyv1alpha1.ValkeyInstance, pod *corev1.Pod) {
+				delete(pod.Labels, valkeyv1alpha1.RoleLabelKey)
+			},
+		},
+		{
+			name: "у Pod нет адреса электронной почты",
+			change: func(_ *corev1.Namespace, _ *valkeyv1alpha1.ValkeyInstance, pod *corev1.Pod) {
+				delete(pod.Annotations, valkeyv1alpha1.UserEmailAnnotationKey)
+			},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			namespace, resourceObject, pod, owner, created := readyKubernetesObjects()
+			testCase.change(namespace, resourceObject, pod)
+			if kubernetesReady(namespace, resourceObject, pod, owner, created, 1, 1, 1, "") {
+				t.Fatal("неполный набор метаданных признан готовым")
+			}
+		})
+	}
+}
+
+func Test_CurrentMetricPoint_WithEmptyAndCompleteIntervals_ReturnsOnlyCompletePoint(t *testing.T) {
+	created := instance{Slug: "cache-a1b2c3"}
+	complete := completeMetricPoint()
+	withoutCPU := completeMetricPoint()
+	withoutCPU.CPUMillicores = nil
+	negative := completeMetricPoint()
+	negative.EvictedKeys = metricInt64(-1)
+	tests := []struct {
+		name    string
+		metrics valkeyMetrics
+		found   bool
+	}{
+		{
+			name: "пустой ряд",
+			metrics: valkeyMetrics{Nodes: []metricNode{{
+				Ordinal: 0, Name: created.Slug + "-0", Role: "primary", Points: []metricPoint{{}},
+			}}},
+		},
+		{
+			name: "заполненная точка после пустого интервала",
+			metrics: valkeyMetrics{Nodes: []metricNode{{
+				Ordinal: 0, Name: created.Slug + "-0", Role: "primary", Points: []metricPoint{{}, complete},
+			}}},
+			found: true,
+		},
+		{
+			name: "точка без загрузки CPU",
+			metrics: valkeyMetrics{Nodes: []metricNode{{
+				Ordinal: 0, Name: created.Slug + "-0", Role: "primary", Points: []metricPoint{withoutCPU},
+			}}},
+		},
+		{
+			name: "точка с отрицательным показателем",
+			metrics: valkeyMetrics{Nodes: []metricNode{{
+				Ordinal: 0, Name: created.Slug + "-0", Role: "primary", Points: []metricPoint{negative},
+			}}},
+		},
+		{
+			name: "точка другого ряда",
+			metrics: valkeyMetrics{Nodes: []metricNode{{
+				Ordinal: 0, Name: created.Slug + "-0", Role: "replica", Points: []metricPoint{complete},
+			}}},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			point, found := currentMetricPoint(testCase.metrics, created)
+			if found != testCase.found {
+				t.Fatalf("поиск точки: found=%t point=%+v", found, point)
+			}
+		})
+	}
+}
+
+func completeMetricPoint() metricPoint {
+	return metricPoint{
+		UsedMemoryBytes:  metricFloat64(1024),
+		CPUMillicores:    metricFloat64(5),
+		ConnectedClients: metricFloat64(1),
+		OpsPerSec:        metricFloat64(2),
+		KeyspaceHits:     metricInt64(3),
+		KeyspaceMisses:   metricInt64(4),
+		EvictedKeys:      metricInt64(0),
+	}
+}
+
+func metricFloat64(value float64) *float64 {
+	return &value
+}
+
+func metricInt64(value int64) *int64 {
+	return &value
+}
+
+func readyKubernetesObjects() (
+	*corev1.Namespace,
+	*valkeyv1alpha1.ValkeyInstance,
+	*corev1.Pod,
+	account,
+	instance,
+) {
+	owner := account{ID: "01991ad0-1234-7000-8000-000000000010", Email: "owner@example.com"}
+	created := instance{ID: "01991ad0-1234-7000-8000-000000000020", Slug: "cache-a1b2c3"}
+	metadata := metav1.ObjectMeta{
+		Labels: map[string]string{
+			valkeyv1alpha1.InstanceIDLabelKey: created.ID,
+			valkeyv1alpha1.UserIDLabelKey:     owner.ID,
+		},
+		Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: owner.Email},
+	}
+	namespace := &corev1.Namespace{ObjectMeta: *metadata.DeepCopy()}
+	resourceObject := &valkeyv1alpha1.ValkeyInstance{
+		ObjectMeta: *metadata.DeepCopy(),
+		Spec: valkeyv1alpha1.ValkeyInstanceSpec{
+			InstanceID: created.ID, Slug: created.Slug, VCPU: 1, RAMGB: 1, DesiredGeneration: 1,
+		},
+		Status: valkeyv1alpha1.ValkeyInstanceStatus{
+			Phase:                  valkeyv1alpha1.InstancePhaseRunning,
+			ObservedGeneration:     1,
+			AppliedPasswordVersion: 1,
+			Applied:                &valkeyv1alpha1.AppliedConfiguration{VCPU: 1, RAMGB: 1},
+		},
+	}
+	podMetadata := *metadata.DeepCopy()
+	podMetadata.Labels[valkeyv1alpha1.RoleLabelKey] = string(valkeyv1alpha1.NodeRolePrimary)
+	pod := &corev1.Pod{
+		ObjectMeta: podMetadata,
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi"),
+			}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue,
+			}},
+		},
+	}
+
+	return namespace, resourceObject, pod, owner, created
 }
 
 type deletedNamespaceReader struct {
