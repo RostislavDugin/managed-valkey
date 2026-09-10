@@ -223,10 +223,13 @@ type operatorProcess struct {
 }
 
 type testInstance struct {
-	slug      string
-	namespace string
-	password  string
-	hostname  string
+	slug       string
+	namespace  string
+	instanceID string
+	userID     string
+	userEmail  string
+	password   string
+	hostname   string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -372,6 +375,7 @@ func (h *harness) createSingle(
 	namespace := "valkey-" + slug
 	instanceID := mustUUIDv7(t)
 	userID := mustUUIDv7(t)
+	userEmail := suffix + "@example.com"
 	password := "test-" + mustUUIDv7(t)
 	digest := sha256.Sum256([]byte(password))
 	secret := &corev1.Secret{
@@ -384,9 +388,11 @@ func (h *harness) createSingle(
 	namespaceObject := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: namespace,
 		Labels: map[string]string{
-			instanceLabel: slug,
-			userIDLabel:   userID,
+			instanceLabel:                     slug,
+			valkeyv1alpha1.InstanceIDLabelKey: instanceID,
+			userIDLabel:                       userID,
 		},
+		Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: userEmail},
 	}}
 	if err := h.k8s.Create(t.Context(), namespaceObject); err != nil {
 		t.Fatalf("создать namespace %s: %v", namespace, err)
@@ -395,7 +401,15 @@ func (h *harness) createSingle(
 		t.Fatalf("создать Secret %s: %v", slug, err)
 	}
 	resource := &valkeyv1alpha1.ValkeyInstance{
-		ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: slug, Namespace: namespace,
+			Labels: map[string]string{
+				instanceLabel:                     slug,
+				valkeyv1alpha1.InstanceIDLabelKey: instanceID,
+				userIDLabel:                       userID,
+			},
+			Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: userEmail},
+		},
 		Spec: valkeyv1alpha1.ValkeyInstanceSpec{
 			InstanceID: instanceID, Slug: slug, Mode: valkeyv1alpha1.ValkeyModeSingle,
 			VCPU: 1, RAMGB: 1, PublicPort: 41379, Whitelist: &whitelist,
@@ -406,7 +420,8 @@ func (h *harness) createSingle(
 		t.Fatalf("создать ValkeyInstance %s: %v", slug, err)
 	}
 	result := &testInstance{
-		slug: slug, namespace: namespace, password: password,
+		slug: slug, namespace: namespace, instanceID: instanceID, userID: userID, userEmail: userEmail,
+		password: password,
 		hostname: slug + "." + h.baseDomain,
 	}
 	h.created = append(h.created, result)

@@ -85,15 +85,62 @@ func Test_HA01HA04HA07FP04PW01RZ02RZ03_RunHALifecycle_WithFailuresAndMutations_P
 		}
 	}
 
+	oldPrimaryOrdinal := *status.Status.PrimaryOrdinal
 	oldPrimaryUID := types.UID(status.Status.PrimaryPodUID)
 	startedAt := time.Now()
-	h.deletePod(t, instance, *status.Status.PrimaryOrdinal)
+	h.deletePod(t, instance, oldPrimaryOrdinal)
+	replacementPod := h.waitForReplacementOrdinal(t, instance, oldPrimaryOrdinal, oldPrimaryUID)
 	status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		replacement, found := nodeStatusAtOrdinal(current.Status.Nodes, oldPrimaryOrdinal)
+		if !found || replacement.PodUID != string(replacementPod.UID) {
+			return false
+		}
+		pod := &corev1.Pod{}
+		if err := h.k8s.Get(t.Context(), client.ObjectKey{
+			Name: replacementPod.Name, Namespace: replacementPod.Namespace,
+		}, pod); err != nil {
+			return false
+		}
+		role := pod.Labels["role"]
+		fullRole := pod.Labels[valkeyv1alpha1.RoleLabelKey]
+		if role != fullRole {
+			t.Fatalf("FP-04 замена прежнего primary получила разные метки роли: %v", pod.Labels)
+		}
+		if role != "" && role != string(valkeyv1alpha1.NodeRoleReplica) {
+			t.Fatalf("FP-04 замена прежнего primary получила неизвестную роль: %v", pod.Labels)
+		}
+		admittedReplica := false
+		if current.Status.PrimaryOrdinal != nil {
+			primary, primaryFound := nodeStatusAtOrdinal(current.Status.Nodes, *current.Status.PrimaryOrdinal)
+			primaryPod := &corev1.Pod{}
+			primaryPodFound := primaryFound && h.k8s.Get(t.Context(), client.ObjectKey{
+				Name:      instance.slug + "-" + strconv.FormatInt(int64(primary.Ordinal), 10),
+				Namespace: instance.namespace,
+			}, primaryPod) == nil
+			admittedReplica = primaryPodFound && primary.Role == valkeyv1alpha1.NodeRolePrimary &&
+				replacement.Role == valkeyv1alpha1.NodeRoleReplica && replacement.Readiness &&
+				replacement.AppEnabled &&
+				replacement.AppPasswordVersion == current.Status.AcceptedConfiguration.PasswordVersion &&
+				replacement.Replication != nil && replacement.Replication.LinkUp &&
+				!replacement.Replication.SyncInProgress && replacement.Replication.SyncedAt != nil &&
+				replacement.Replication.UpstreamHost == primaryPod.Status.PodIP &&
+				replacement.Replication.UpstreamPort == 6379
+		}
+		if role == string(valkeyv1alpha1.NodeRoleReplica) && !admittedReplica {
+			t.Fatalf(
+				"FP-04 замена прежнего primary получила replica до синхронизации и допуска: process=%+v labels=%v",
+				replacement,
+				pod.Labels,
+			)
+		}
+
 		return current.Status.Initialized && current.Status.Phase == valkeyv1alpha1.InstancePhaseRunning &&
 			current.Status.PrimaryPodUID != "" && current.Status.PrimaryPodUID != string(oldPrimaryUID) &&
-			current.Status.Failover == nil
-	}, "нового primary после удаления Pod")
+			current.Status.Failover == nil && admittedReplica &&
+			role == string(valkeyv1alpha1.NodeRoleReplica)
+	}, "нового primary и допуска синхронизированной замены прежнего primary")
 	t.Logf("FP-04 DELETE primary: %s", time.Since(startedAt))
+	assertHAComposition(t, h, instance, status)
 	closeConnections([]*persistentConnection{primary})
 	primary = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
 	if value := getValue(t, primary, "ha-key"); value != "before-failures" {
@@ -356,14 +403,19 @@ func (h *harness) createHAWithSizeAndWhitelist(
 		t.Fatalf("неверный префикс slug %q", prefix)
 	}
 	namespace := "valkey-" + slug
+	instanceID := mustUUIDv7(t)
+	userID := mustUUIDv7(t)
+	userEmail := prefix + "@example.com"
 	password := "test-" + mustUUIDv7(t)
 	digest := sha256.Sum256([]byte(password))
 	namespaceObject := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: namespace,
 		Labels: map[string]string{
-			instanceLabel: slug,
-			userIDLabel:   mustUUIDv7(t),
+			instanceLabel:                     slug,
+			valkeyv1alpha1.InstanceIDLabelKey: instanceID,
+			userIDLabel:                       userID,
 		},
+		Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: userEmail},
 	}}
 	if err := h.k8s.Create(t.Context(), namespaceObject); err != nil {
 		t.Fatalf("создать namespace HA: %v", err)
@@ -379,9 +431,17 @@ func (h *harness) createHAWithSizeAndWhitelist(
 		t.Fatalf("создать Secret HA: %v", err)
 	}
 	resource := &valkeyv1alpha1.ValkeyInstance{
-		ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: slug, Namespace: namespace,
+			Labels: map[string]string{
+				instanceLabel:                     slug,
+				valkeyv1alpha1.InstanceIDLabelKey: instanceID,
+				userIDLabel:                       userID,
+			},
+			Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: userEmail},
+		},
 		Spec: valkeyv1alpha1.ValkeyInstanceSpec{
-			InstanceID: mustUUIDv7(t), Slug: slug, Mode: valkeyv1alpha1.ValkeyModeHA,
+			InstanceID: instanceID, Slug: slug, Mode: valkeyv1alpha1.ValkeyModeHA,
 			VCPU: vcpu, RAMGB: ram, PublicPort: 41379, Whitelist: &whitelist,
 			PasswordVersion: 1, DesiredGeneration: 1,
 		},
@@ -390,7 +450,8 @@ func (h *harness) createHAWithSizeAndWhitelist(
 		t.Fatalf("создать ValkeyInstance HA: %v", err)
 	}
 	result := &testInstance{
-		slug: slug, namespace: namespace, password: password,
+		slug: slug, namespace: namespace, instanceID: instanceID, userID: userID, userEmail: userEmail,
+		password: password,
 		hostname: slug + "." + h.baseDomain,
 	}
 	h.created = append(h.created, result)
@@ -426,14 +487,50 @@ func assertHAComposition(
 				t.Fatalf("реплика ordinal %d не подтверждена у текущего primary: %+v", process.Ordinal, process)
 			}
 		}
-		pod := h.getPodOrdinal(t, instance, process.Ordinal)
-		if string(pod.UID) != process.PodUID {
-			t.Fatalf("status ordinal %d относится к прежнему Pod", process.Ordinal)
-		}
+		waitForPodMetadata(t, h, instance, process)
 	}
 	if len(nodes) != 3 || primaries != 1 || replicas != 2 {
 		t.Fatalf("неверное размещение или роли HA: nodes=%v status=%+v", nodes, status.Status.Nodes)
 	}
+}
+
+func waitForPodMetadata(
+	t *testing.T,
+	h *harness,
+	instance *testInstance,
+	process valkeyv1alpha1.NodeStatus,
+) *corev1.Pod {
+	t.Helper()
+	pod := &corev1.Pod{}
+	err := wait.PollUntilContextTimeout(
+		t.Context(), 250*time.Millisecond, 30*time.Second, true,
+		func(ctx context.Context) (bool, error) {
+			if err := h.k8s.Get(ctx, client.ObjectKey{
+				Name:      instance.slug + "-" + strconv.FormatInt(int64(process.Ordinal), 10),
+				Namespace: instance.namespace,
+			}, pod); err != nil {
+				return false, err
+			}
+			return string(pod.UID) == process.PodUID &&
+				pod.Labels["role"] == string(process.Role) &&
+				pod.Labels[valkeyv1alpha1.RoleLabelKey] == string(process.Role) &&
+				pod.Labels[valkeyv1alpha1.InstanceIDLabelKey] == instance.instanceID &&
+				pod.Labels[valkeyv1alpha1.UserIDLabelKey] == instance.userID &&
+				pod.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] == instance.userEmail, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(
+			"дождаться метаданных ordinal %d: %v; uid=%s labels=%v annotations=%v",
+			process.Ordinal,
+			err,
+			pod.UID,
+			pod.Labels,
+			pod.Annotations,
+		)
+	}
+
+	return pod.DeepCopy()
 }
 
 func assertInitialProcessesFenced(

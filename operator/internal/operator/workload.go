@@ -195,7 +195,8 @@ func desiredStatefulSet(
 	image string,
 ) *appsv1.StatefulSet {
 	accepted := instance.Status.AcceptedConfiguration
-	labels := workloadLabels(accepted.Slug)
+	selectorLabels := workloadLabels(accepted.Slug)
+	labels := workloadResourceLabels(instance)
 	defaultMode := int32(0o555)
 	terminationGracePeriod := int64(30)
 	resources := corev1.ResourceRequirements{
@@ -243,7 +244,7 @@ func desiredStatefulSet(
 		replicas = 3
 		affinity = &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+				LabelSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
 				TopologyKey:   corev1.LabelHostname,
 			}},
 		}}
@@ -255,11 +256,12 @@ func desiredStatefulSet(
 			ServiceName:         accepted.Slug + "-hl",
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
-			Selector:            &metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+			Selector:            &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels:     maps.Clone(labels),
-					Finalizers: []string{processFinalizer},
+					Labels:      maps.Clone(labels),
+					Annotations: workloadAnnotations(instance),
+					Finalizers:  []string{processFinalizer},
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyAlways,
@@ -290,6 +292,7 @@ func desiredStatefulSet(
 	statefulSet.Name = accepted.Slug
 	statefulSet.Namespace = instance.Namespace
 	statefulSet.Labels = maps.Clone(labels)
+	statefulSet.Annotations = workloadAnnotations(instance)
 	statefulSet.OwnerReferences = []metav1.OwnerReference{
 		*metav1.NewControllerRef(instance, valkeyv1alpha1.GroupVersion.WithKind("ValkeyInstance")),
 	}
@@ -298,32 +301,37 @@ func desiredStatefulSet(
 }
 
 func desiredPodDisruptionBudget(instance *valkeyv1alpha1.ValkeyInstance) *policyv1.PodDisruptionBudget {
-	labels := workloadLabels(instance.Status.AcceptedConfiguration.Slug)
+	selectorLabels := workloadLabels(instance.Status.AcceptedConfiguration.Slug)
 
 	return &policyv1.PodDisruptionBudget{
-		ObjectMeta: ownedObjectMeta(instance, instance.Status.AcceptedConfiguration.Slug, labels),
+		ObjectMeta: ownedObjectMeta(
+			instance,
+			instance.Status.AcceptedConfiguration.Slug,
+			workloadResourceLabels(instance),
+		),
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
-			Selector:     &metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+			Selector:     &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
 		},
 	}
 }
 
 func desiredServices(instance *valkeyv1alpha1.ValkeyInstance) []*corev1.Service {
 	accepted := instance.Status.AcceptedConfiguration
-	labels := workloadLabels(accepted.Slug)
+	selectorLabels := workloadLabels(accepted.Slug)
+	labels := workloadResourceLabels(instance)
 	headless := &corev1.Service{
 		ObjectMeta: ownedObjectMeta(instance, accepted.Slug+"-hl", labels),
 		Spec: corev1.ServiceSpec{
 			ClusterIP:                corev1.ClusterIPNone,
 			PublishNotReadyAddresses: true,
-			Selector:                 maps.Clone(labels),
+			Selector:                 maps.Clone(selectorLabels),
 			Ports: []corev1.ServicePort{{
 				Name: "valkey", Port: valkeyPort, TargetPort: intstr.FromString("valkey"), Protocol: corev1.ProtocolTCP,
 			}},
 		},
 	}
-	primarySelector := maps.Clone(labels)
+	primarySelector := maps.Clone(selectorLabels)
 	primarySelector[applicationRoleLabel] = string(valkeyv1alpha1.NodeRolePrimary)
 	primary := &corev1.Service{
 		ObjectMeta: ownedObjectMeta(instance, accepted.Slug+"-primary", labels),
@@ -335,7 +343,7 @@ func desiredServices(instance *valkeyv1alpha1.ValkeyInstance) []*corev1.Service 
 		},
 	}
 	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-		replicaSelector := maps.Clone(labels)
+		replicaSelector := maps.Clone(selectorLabels)
 		replicaSelector[applicationRoleLabel] = string(valkeyv1alpha1.NodeRoleReplica)
 		replicas := &corev1.Service{
 			ObjectMeta: ownedObjectMeta(instance, accepted.Slug+"-replicas", labels),
@@ -360,7 +368,8 @@ func desiredNetworkPolicy(
 	operatorCIDRs []string,
 ) *networkingv1.NetworkPolicy {
 	accepted := instance.Status.AcceptedConfiguration
-	labels := workloadLabels(accepted.Slug)
+	selectorLabels := workloadLabels(accepted.Slug)
+	labels := workloadResourceLabels(instance)
 	namespaceNameLabel := "kubernetes.io/metadata.name"
 	tcp := corev1.ProtocolTCP
 	udp := corev1.ProtocolUDP
@@ -370,7 +379,7 @@ func desiredNetworkPolicy(
 	ingressPeers := []networkingv1.NetworkPolicyPeer{
 		{NamespaceSelector: namespaceSelector(namespaceNameLabel, envoyNamespace)},
 		{NamespaceSelector: namespaceSelector(namespaceNameLabel, systemNamespace)},
-		{PodSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(labels)}},
+		{PodSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)}},
 	}
 	for _, cidr := range operatorCIDRs {
 		ingressPeers = append(ingressPeers, networkingv1.NetworkPolicyPeer{
@@ -381,7 +390,7 @@ func desiredNetworkPolicy(
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: ownedObjectMeta(instance, accepted.Slug, labels),
 		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+			PodSelector: metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
 			PolicyTypes: []networkingv1.PolicyType{
 				networkingv1.PolicyTypeIngress,
 				networkingv1.PolicyTypeEgress,
@@ -393,7 +402,7 @@ func desiredNetworkPolicy(
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{
 					To: []networkingv1.NetworkPolicyPeer{
-						{PodSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(labels)}},
+						{PodSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)}},
 					},
 					Ports: []networkingv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
 				},
@@ -430,18 +439,17 @@ func (r *ValkeyInstanceReconciler) ensureStatefulSet(
 	}
 
 	before := current.DeepCopy()
-	if maps.Equal(current.Labels, desired.Labels) &&
+	if managedMetadataMatches(current, desired) &&
 		reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) &&
 		apiequality.Semantic.DeepDerivative(desired.Spec, current.Spec) {
 		return false, nil
 	}
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec.Replicas = new(*desired.Spec.Replicas)
 	current.Spec.ServiceName = desired.Spec.ServiceName
 	current.Spec.PodManagementPolicy = desired.Spec.PodManagementPolicy
 	current.Spec.UpdateStrategy = desired.Spec.UpdateStrategy
-	current.Spec.Selector = desired.Spec.Selector.DeepCopy()
 	current.Spec.Template = *desired.Spec.Template.DeepCopy()
 	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
 		return false, fmt.Errorf("обновить StatefulSet: %w", err)
@@ -465,7 +473,7 @@ func (r *ValkeyInstanceReconciler) ensureService(ctx context.Context, desired *c
 	}
 
 	before := current.DeepCopy()
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec.Selector = maps.Clone(desired.Spec.Selector)
 	current.Spec.Ports = slices.Clone(desired.Spec.Ports)
@@ -500,7 +508,7 @@ func (r *ValkeyInstanceReconciler) ensureNetworkPolicy(
 	}
 
 	before := current.DeepCopy()
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec = *desired.Spec.DeepCopy()
 	if reflect.DeepEqual(before, current) {
@@ -530,7 +538,7 @@ func (r *ValkeyInstanceReconciler) ensurePodDisruptionBudget(
 	}
 
 	before := current.DeepCopy()
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec = *desired.Spec.DeepCopy()
 	if reflect.DeepEqual(before, current) {
@@ -550,15 +558,69 @@ func workloadLabels(slug string) map[string]string {
 	}
 }
 
+func workloadResourceLabels(instance *valkeyv1alpha1.ValkeyInstance) map[string]string {
+	labels := workloadLabels(instance.Status.AcceptedConfiguration.Slug)
+	if instanceID := instance.Status.AcceptedConfiguration.InstanceID; instanceID != "" {
+		labels[valkeyv1alpha1.InstanceIDLabelKey] = instanceID
+	}
+	if userID := instance.Labels[valkeyv1alpha1.UserIDLabelKey]; userID != "" {
+		labels[valkeyv1alpha1.UserIDLabelKey] = userID
+	}
+
+	return labels
+}
+
+func workloadAnnotations(instance *valkeyv1alpha1.ValkeyInstance) map[string]string {
+	email := instance.Annotations[valkeyv1alpha1.UserEmailAnnotationKey]
+	if email == "" {
+		return nil
+	}
+
+	return map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: email}
+}
+
+func mergeManagedMetadata(current, desired metav1.Object) {
+	labels := maps.Clone(current.GetLabels())
+	if labels == nil {
+		labels = make(map[string]string, len(desired.GetLabels()))
+	}
+	maps.Copy(labels, desired.GetLabels())
+	current.SetLabels(labels)
+
+	if email := desired.GetAnnotations()[valkeyv1alpha1.UserEmailAnnotationKey]; email != "" {
+		annotations := maps.Clone(current.GetAnnotations())
+		if annotations == nil {
+			annotations = make(map[string]string, 1)
+		}
+		annotations[valkeyv1alpha1.UserEmailAnnotationKey] = email
+		current.SetAnnotations(annotations)
+	}
+}
+
+func managedMetadataMatches(current, desired metav1.Object) bool {
+	for key, value := range desired.GetLabels() {
+		if current.GetLabels()[key] != value {
+			return false
+		}
+	}
+	if email := desired.GetAnnotations()[valkeyv1alpha1.UserEmailAnnotationKey]; email != "" &&
+		current.GetAnnotations()[valkeyv1alpha1.UserEmailAnnotationKey] != email {
+		return false
+	}
+
+	return true
+}
+
 func ownedObjectMeta(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	name string,
 	labels map[string]string,
 ) metav1.ObjectMeta {
 	return metav1.ObjectMeta{
-		Name:      name,
-		Namespace: instance.Namespace,
-		Labels:    maps.Clone(labels),
+		Name:        name,
+		Namespace:   instance.Namespace,
+		Labels:      maps.Clone(labels),
+		Annotations: workloadAnnotations(instance),
 		OwnerReferences: []metav1.OwnerReference{
 			*metav1.NewControllerRef(instance, valkeyv1alpha1.GroupVersion.WithKind("ValkeyInstance")),
 		},

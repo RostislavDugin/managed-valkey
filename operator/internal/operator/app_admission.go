@@ -34,7 +34,7 @@ type AppAccessUpdater func(
 	bool,
 ) (operatorvalkey.ProcessState, error)
 
-func (r *ValkeyInstanceReconciler) reconcilePrimaryLabel(
+func (r *ValkeyInstanceReconciler) reconcilePodMetadata(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
@@ -51,29 +51,64 @@ func (r *ValkeyInstanceReconciler) reconcilePrimaryLabel(
 
 			return ctrl.Result{}, fmt.Errorf("прочитать Pod для primary Service: %w", err)
 		}
-		desiredRole := currentProcessRoleLabel(instance, pod, ordinal)
-		if pod.Labels[applicationRoleLabel] == desiredRole {
+		before := pod.DeepCopy()
+		if !setPodMetadata(instance, pod, ordinal) {
 			continue
 		}
-
-		before := pod.DeepCopy()
-		pod.Labels = maps.Clone(pod.Labels)
-		if desiredRole != "" {
-			if pod.Labels == nil {
-				pod.Labels = make(map[string]string, 1)
-			}
-			pod.Labels[applicationRoleLabel] = desiredRole
-		} else {
-			delete(pod.Labels, applicationRoleLabel)
-		}
 		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("обновить роль Pod: %w", err)
+			return ctrl.Result{}, fmt.Errorf("обновить метаданные Pod: %w", err)
 		}
 
 		return requeueIf(true), nil
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func setPodMetadata(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	pod *corev1.Pod,
+	ordinal int32,
+) bool {
+	changed := false
+	labels := maps.Clone(pod.Labels)
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	for key, value := range workloadResourceLabels(instance) {
+		if labels[key] != value {
+			labels[key] = value
+			changed = true
+		}
+	}
+	desiredRole := currentProcessRoleLabel(instance, pod, ordinal)
+	for _, key := range []string{applicationRoleLabel, valkeyv1alpha1.RoleLabelKey} {
+		if desiredRole == "" {
+			if _, found := labels[key]; found {
+				delete(labels, key)
+				changed = true
+			}
+		} else if labels[key] != desiredRole {
+			labels[key] = desiredRole
+			changed = true
+		}
+	}
+	if changed {
+		pod.Labels = labels
+	}
+
+	email := instance.Annotations[valkeyv1alpha1.UserEmailAnnotationKey]
+	if email != "" && pod.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] != email {
+		annotations := maps.Clone(pod.Annotations)
+		if annotations == nil {
+			annotations = make(map[string]string, 1)
+		}
+		annotations[valkeyv1alpha1.UserEmailAnnotationKey] = email
+		pod.Annotations = annotations
+		changed = true
+	}
+
+	return changed
 }
 
 func currentProcessRoleLabel(
@@ -95,6 +130,7 @@ func currentProcessRoleLabel(
 		node.Termination != nil || node.Observation != nil || !node.Readiness ||
 		node.Replication == nil || !node.Replication.LinkUp || node.Replication.SyncInProgress ||
 		node.Replication.SyncedAt == nil ||
+		!node.AppEnabled ||
 		node.AppPasswordVersion != instance.Status.AcceptedConfiguration.PasswordVersion ||
 		node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID {
 		return ""
@@ -236,7 +272,8 @@ func (r *ValkeyInstanceReconciler) reconcileReplicaAdmission(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	if instance.Status.AcceptedConfiguration.Mode != valkeyv1alpha1.ValkeyModeHA ||
+	if !instance.Status.Initialized ||
+		instance.Status.AcceptedConfiguration.Mode != valkeyv1alpha1.ValkeyModeHA ||
 		instance.Status.PrimaryOrdinal == nil || instance.Status.CredentialRotation != nil {
 		return ctrl.Result{}, nil
 	}
@@ -251,6 +288,14 @@ func (r *ValkeyInstanceReconciler) reconcileReplicaAdmission(
 	}
 	if err := r.Get(ctx, primaryKey, primaryPod); err != nil {
 		return ctrl.Result{}, fmt.Errorf("прочитать primary для допуска реплик: %w", err)
+	}
+	primary, found := nodeStatusAtOrdinal(instance.Status.Nodes, *instance.Status.PrimaryOrdinal)
+	primaryContainer := valkeyContainerStatus(primaryPod.Status.ContainerStatuses)
+	if !found || primaryContainer == nil || primaryContainer.State.Running == nil ||
+		primary.Role != valkeyv1alpha1.NodeRolePrimary || !primary.Readiness ||
+		primary.PodUID != string(primaryPod.UID) || primary.ContainerID != primaryContainer.ContainerID ||
+		!primaryIdentityMatches(instance, primary) {
+		return ctrl.Result{}, nil
 	}
 	credentials, appHash, err := r.processCredentials(ctx, instance)
 	if err != nil {
@@ -275,8 +320,7 @@ func (r *ValkeyInstanceReconciler) reconcileReplicaAdmission(
 		}
 		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 		if pod.Status.PodIP == "" || container == nil || container.State.Running == nil ||
-			node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID ||
-			pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) {
+			node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID {
 			continue
 		}
 		update := r.UpdateAppAccess

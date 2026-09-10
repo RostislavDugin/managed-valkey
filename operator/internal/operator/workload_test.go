@@ -32,7 +32,7 @@ func Test_DesiredStatefulSet_WithSingleMode_CreatesOnePodWithSecurityAndResource
 	}
 	if statefulSet.Spec.Selector == nil ||
 		!maps.Equal(statefulSet.Spec.Selector.MatchLabels, workloadLabels(instance.Name)) ||
-		!maps.Equal(statefulSet.Spec.Template.Labels, statefulSet.Spec.Selector.MatchLabels) {
+		!selectorMatchesLabels(statefulSet.Spec.Selector.MatchLabels, statefulSet.Spec.Template.Labels) {
 		t.Fatalf("селектор single изменён: selector=%+v labels=%v",
 			statefulSet.Spec.Selector, statefulSet.Spec.Template.Labels)
 	}
@@ -70,6 +70,64 @@ func Test_DesiredStatefulSet_WithSingleMode_CreatesOnePodWithSecurityAndResource
 	}
 	if len(statefulSet.OwnerReferences) != 1 || statefulSet.OwnerReferences[0].UID != instance.UID {
 		t.Fatalf("неверный ownerReference: %v", statefulSet.OwnerReferences)
+	}
+}
+
+func Test_DesiredOperatorResources_WithOwnerMetadata_AddsDescriptionsWithoutChangingSelectors(t *testing.T) {
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.Whitelist = valkeyv1alpha1.WhitelistSpec{
+		IsEnabled: true,
+		CIDRs:     []string{"192.0.2.0/24"},
+	}
+	reconciler := &ValkeyInstanceReconciler{Scheme: NewScheme()}
+	configMap, err := reconciler.desiredConfigMap(instance)
+	if err != nil {
+		t.Fatalf("сформировать ConfigMap: %v", err)
+	}
+	statefulSet := desiredStatefulSet(instance, configMap.Name, "valkey/valkey:8.1.9")
+	services := desiredServices(instance)
+	networkPolicy := desiredNetworkPolicy(instance, "valkey-system", nil)
+	pdb := desiredPodDisruptionBudget(instance)
+	endpoint := networkEndpoints(instance)[0]
+	route := desiredTCPRoute(instance, "valkey-system", endpoint)
+	securityPolicy := desiredSecurityPolicy(instance, endpoint)
+	objects := []metav1.Object{
+		statefulSet,
+		&statefulSet.Spec.Template.ObjectMeta,
+		configMap,
+		networkPolicy,
+		pdb,
+		route,
+		securityPolicy,
+	}
+	for _, service := range services {
+		objects = append(objects, service)
+	}
+	for _, object := range objects {
+		assertOwnerMetadata(t, object, instance)
+	}
+
+	selectorLabels := workloadLabels(instance.Name)
+	if !maps.Equal(statefulSet.Spec.Selector.MatchLabels, selectorLabels) ||
+		!maps.Equal(pdb.Spec.Selector.MatchLabels, selectorLabels) ||
+		!maps.Equal(networkPolicy.Spec.PodSelector.MatchLabels, selectorLabels) {
+		t.Fatalf(
+			"описательные метки попали в селектор: statefulSet=%v pdb=%v networkPolicy=%v",
+			statefulSet.Spec.Selector.MatchLabels,
+			pdb.Spec.Selector.MatchLabels,
+			networkPolicy.Spec.PodSelector.MatchLabels,
+		)
+	}
+	for _, service := range services {
+		for key := range map[string]struct{}{
+			valkeyv1alpha1.InstanceIDLabelKey: {},
+			valkeyv1alpha1.UserIDLabelKey:     {},
+		} {
+			if _, found := service.Spec.Selector[key]; found {
+				t.Fatalf("описательная метка %s попала в селектор Service %s", key, service.Name)
+			}
+		}
 	}
 }
 
@@ -152,12 +210,14 @@ func Test_ReconcileStatefulSet_WhenValkeyImageChanges_PreservesExistingTemplate(
 	}
 }
 
-func Test_ReconcileStatefulSet_WhenServerAddsDefaults_DoesNotPatchRepeatedly(t *testing.T) {
+func Test_EnsureStatefulSet_WithServerDefaultsAndUnknownMetadata_DoesNotPatchRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	desired := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
 	current := desired.DeepCopy()
 	current.Spec.RevisionHistoryLimit = ptr.To[int32](10)
+	current.Labels["example.com/unknown"] = "label"
+	current.Annotations["example.com/unknown"] = "annotation"
 	scheme := NewScheme()
 	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(current).Build()
 	reconciler := &ValkeyInstanceReconciler{Client: k8s, Scheme: scheme}
@@ -211,11 +271,45 @@ func completeAcceptedInstance() *valkeyv1alpha1.ValkeyInstance {
 	return &valkeyv1alpha1.ValkeyInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "cache-a1b2c3", Namespace: "valkey-cache-a1b2c3", UID: "instance-uid",
+			Labels: map[string]string{
+				valkeyv1alpha1.UserIDLabelKey: "01991ad0-1234-7000-8000-000000000010",
+			},
+			Annotations: map[string]string{
+				valkeyv1alpha1.UserEmailAnnotationKey: "owner@example.com",
+			},
 		},
 		Status: valkeyv1alpha1.ValkeyInstanceStatus{
 			AcceptedConfiguration: &valkeyv1alpha1.AcceptedConfiguration{
-				Slug: "cache-a1b2c3", Mode: valkeyv1alpha1.ValkeyModeSingle, VCPU: 2, RAMGB: 4,
+				InstanceID: "01991ad0-1234-7000-8000-000000000001",
+				Slug:       "cache-a1b2c3", Mode: valkeyv1alpha1.ValkeyModeSingle, VCPU: 2, RAMGB: 4,
 			},
 		},
+	}
+}
+
+func selectorMatchesLabels(selector, labels map[string]string) bool {
+	for key, value := range selector {
+		if labels[key] != value {
+			return false
+		}
+	}
+
+	return true
+}
+
+func assertOwnerMetadata(
+	t *testing.T,
+	object metav1.Object,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) {
+	t.Helper()
+	labels := object.GetLabels()
+	if labels[instanceLabelKey] != instance.Name ||
+		labels[valkeyv1alpha1.InstanceIDLabelKey] != instance.Status.AcceptedConfiguration.InstanceID ||
+		labels[valkeyv1alpha1.UserIDLabelKey] != instance.Labels[valkeyv1alpha1.UserIDLabelKey] ||
+		object.GetAnnotations()[valkeyv1alpha1.UserEmailAnnotationKey] !=
+			instance.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] {
+		t.Fatalf("объект %s получил неверные метаданные: labels=%v annotations=%v",
+			object.GetName(), labels, object.GetAnnotations())
 	}
 }

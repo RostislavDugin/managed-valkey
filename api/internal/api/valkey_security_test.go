@@ -45,6 +45,9 @@ func Test_RunValkeyLifecycle_WithActorChangesAndReplays_PreservesAuditHistoryAnd
 
 	initialRecord := loadValkey(t, app, created.ID)
 	initialHash := initialRecord.AppPasswordHash
+	if initialRecord.UserEmail != account.Email {
+		t.Fatalf("снимок email при создании = %q, ожидался %q", initialRecord.UserEmail, account.Email)
+	}
 	makeValkeyReady(t, app, created.ID)
 
 	originalEmail := account.Email
@@ -147,6 +150,9 @@ func Test_RunValkeyLifecycle_WithActorChangesAndReplays_PreservesAuditHistoryAnd
 	assertStatus(t, deleteResponse, http.StatusAccepted)
 	responses = append(responses, deleteResponse)
 	deletedRecord := loadValkey(t, app, created.ID)
+	if deletedRecord.UserEmail != originalEmail {
+		t.Fatalf("мутации изменили снимок email: %q", deletedRecord.UserEmail)
+	}
 
 	deletedAt := time.Now().UTC()
 	if err := app.database.DB().Model(&store.ValkeyInstance{}).Where("id = ?", created.ID).
@@ -243,6 +249,9 @@ func Test_RunValkeyLifecycle_WithActorChangesAndReplays_PreservesAuditHistoryAnd
 	for _, response := range responses {
 		if containsAny(string(response.Body), unsafe...) {
 			t.Fatalf("HTTP-ответ содержит секрет: %s", response.Body)
+		}
+		if containsAny(string(response.Body), "user_email", originalEmail, changedEmail) {
+			t.Fatalf("HTTP-ответ содержит снимок email: %s", response.Body)
 		}
 	}
 	if containsAny(string(encodedAudit), unsafe...) || containsAny(app.logs.String(), unsafe...) {

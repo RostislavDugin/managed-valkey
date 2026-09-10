@@ -515,7 +515,7 @@ func (s *Service) createWithUniqueSlug(
 
 		slug := input.Prefix + "-" + suffix
 		record := store.ValkeyInstance{
-			UserID: actor.ID, Name: input.Name, Slug: slug, Mode: input.Mode,
+			UserID: actor.ID, UserEmail: actor.Email, Name: input.Name, Slug: slug, Mode: input.Mode,
 			VCPU: input.Size.VCPU, RAMGB: input.Size.RAMGB, DesiredGeneration: 1,
 			CreatedAt: now, UpdatedAt: now, ConfigurationRequestedAt: now,
 			AppPasswordHash: digest, PasswordPrefix: input.Password[:4], PasswordVersion: 1,

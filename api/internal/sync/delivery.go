@@ -200,7 +200,8 @@ func (s *Service) createCR(
 		TypeMeta: metav1.TypeMeta{APIVersion: valkeyv1alpha1.GroupVersion.String(), Kind: "ValkeyInstance"},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespaceName(instance.Slug), Name: instance.Slug,
-			Labels: objectLabels(instance), Finalizers: []string{valkeyv1alpha1.InstanceFinalizer},
+			Labels: objectLabels(instance), Annotations: objectAnnotations(instance),
+			Finalizers: []string{valkeyv1alpha1.InstanceFinalizer},
 		},
 		Spec: desiredSpec(instance),
 	}
@@ -230,7 +231,8 @@ func (s *Service) updateCR(
 
 	desired := desiredSpec(instance)
 	finalizerPresent := slices.Contains(resource.Finalizers, valkeyv1alpha1.InstanceFinalizer)
-	if reflect.DeepEqual(resource.Spec, desired) && finalizerPresent {
+	metadataChanged := reconcileObjectAnnotations(resource, instance)
+	if reflect.DeepEqual(resource.Spec, desired) && finalizerPresent && !metadataChanged {
 		return resource, nil
 	}
 

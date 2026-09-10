@@ -3,7 +3,6 @@ package operator
 import (
 	"context"
 	"fmt"
-	"maps"
 	"reflect"
 	"slices"
 
@@ -248,7 +247,7 @@ func desiredTCPRoute(
 	servicePort := valkeyPort
 
 	return &gatewayv1alpha2.TCPRoute{
-		ObjectMeta: ownedObjectMeta(instance, name, workloadLabels(accepted.Slug)),
+		ObjectMeta: ownedObjectMeta(instance, name, workloadResourceLabels(instance)),
 		Spec: gatewayv1alpha2.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
 				Group:       &gatewayGroup,
@@ -289,12 +288,12 @@ func (r *ValkeyInstanceReconciler) ensureTCPRoute(
 	}
 
 	before := current.DeepCopy()
-	if maps.Equal(current.Labels, desired.Labels) &&
+	if managedMetadataMatches(current, desired) &&
 		reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) &&
 		apiequality.Semantic.DeepDerivative(desired.Spec, current.Spec) {
 		return false, nil
 	}
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec = *desired.Spec.DeepCopy()
 	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
@@ -343,7 +342,7 @@ func (r *ValkeyInstanceReconciler) reconcileSecurityPolicy(
 	}
 
 	before := current.DeepCopy()
-	current.Labels = maps.Clone(desired.Labels)
+	mergeManagedMetadata(current, desired)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec = *desired.Spec.DeepCopy()
 	if reflect.DeepEqual(before, current) {
@@ -368,7 +367,7 @@ func desiredSecurityPolicy(
 	targetGroup := gatewayv1.Group(gatewayv1.GroupName)
 	defaultAction := envoyv1alpha1.AuthorizationActionDeny
 	policy := &envoyv1alpha1.SecurityPolicy{
-		ObjectMeta: ownedObjectMeta(instance, accepted.Slug+endpoint.suffix, workloadLabels(accepted.Slug)),
+		ObjectMeta: ownedObjectMeta(instance, accepted.Slug+endpoint.suffix, workloadResourceLabels(instance)),
 		Spec: envoyv1alpha1.SecurityPolicySpec{
 			PolicyTargetReferences: envoyv1alpha1.PolicyTargetReferences{
 				TargetRefs: []gatewayv1.LocalPolicyTargetReferenceWithSectionName{{

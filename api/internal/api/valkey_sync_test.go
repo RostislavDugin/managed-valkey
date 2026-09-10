@@ -8,6 +8,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	stdsync "sync"
@@ -204,7 +205,7 @@ func Test_SynchronizeValkeyState_WithK3s_DeliversSpecAndImportsObservedState(t *
 	resource := waitForValkeyInstance(t, app, created.Slug, func(resource *valkeyv1alpha1.ValkeyInstance) bool {
 		return resource.Spec.DesiredGeneration == 1 && resource.Spec.PasswordVersion == 1
 	})
-	assertDeliveredIdentity(t, app, account.ID, created, resource)
+	assertDeliveredIdentity(t, app, account.ID, account.Email, created, resource)
 	unchangedVersion := resource.ResourceVersion
 	if err := app.syncService.RunDelivery(context.Background()); err != nil {
 		t.Fatalf("повторить доставку совпадающего состояния: %v", err)
@@ -311,6 +312,87 @@ func Test_SynchronizeValkeyState_WithK3s_DeliversSpecAndImportsObservedState(t *
 	waitForKubernetesDeletion(t, app, namespaceName, created.Slug)
 	waitForHTTPNotFound(t, app, account, created.ID)
 	assertImportedRows(t, app, created.ID, 0, 4)
+}
+
+func Test_DeliverValkeyOwnerMetadata_WithExistingObjects_RepairsEmailAndPreservesOtherFields(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	app.startSync(t)
+	created := createValkey(t, app, account, map[string]any{
+		"name": "owner-metadata", "prefix": "owner",
+	})
+	namespaceName := "valkey-" + created.Slug
+	t.Cleanup(func() {
+		app.stopSync()
+		cleanupSyncNamespace(t, app, namespaceName)
+	})
+	resource := waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool {
+		return true
+	})
+	confirmValkeyStatus(t, app, resource)
+	app.stopSync()
+
+	namespace := &corev1.Namespace{}
+	if err := app.adminKubernetes.Get(
+		context.Background(), client.ObjectKey{Name: namespaceName}, namespace,
+	); err != nil {
+		t.Fatalf("прочитать Namespace: %v", err)
+	}
+	delete(namespace.Annotations, valkeyv1alpha1.UserEmailAnnotationKey)
+	namespace.Annotations["other.example.com/value"] = "namespace-kept"
+	if err := app.adminKubernetes.Update(context.Background(), namespace); err != nil {
+		t.Fatalf("подготовить Namespace без email: %v", err)
+	}
+
+	resource = getValkeyInstance(t, app, namespaceName, created.Slug)
+	resource.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] = "wrong@example.com"
+	resource.Annotations["other.example.com/value"] = "resource-kept"
+	resource.Labels["other.example.com/value"] = "resource-kept"
+	resource.Finalizers = append(resource.Finalizers, "other.example.com/finalizer")
+	statusBefore := resource.Status.DeepCopy()
+	if err := app.adminKubernetes.Update(context.Background(), resource); err != nil {
+		t.Fatalf("подготовить неверный email ValkeyInstance: %v", err)
+	}
+
+	if err := app.syncService.RunDelivery(context.Background()); err != nil {
+		t.Fatalf("доставить метаданные владельца: %v", err)
+	}
+	namespace = &corev1.Namespace{}
+	if err := app.adminKubernetes.Get(
+		context.Background(), client.ObjectKey{Name: namespaceName}, namespace,
+	); err != nil {
+		t.Fatalf("перечитать Namespace: %v", err)
+	}
+	resource = getValkeyInstance(t, app, namespaceName, created.Slug)
+	if namespace.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] != account.Email ||
+		namespace.Annotations["other.example.com/value"] != "namespace-kept" {
+		t.Fatalf("Namespace получил неверные аннотации: %v", namespace.Annotations)
+	}
+	if resource.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] != account.Email ||
+		resource.Annotations["other.example.com/value"] != "resource-kept" ||
+		resource.Labels["other.example.com/value"] != "resource-kept" ||
+		!slices.Contains(resource.Finalizers, "other.example.com/finalizer") ||
+		!reflect.DeepEqual(resource.Status, *statusBefore) {
+		t.Fatalf("сверка повредила ValkeyInstance: metadata=%+v status=%+v", resource.ObjectMeta, resource.Status)
+	}
+	namespaceVersion := namespace.ResourceVersion
+	resourceVersion := resource.ResourceVersion
+	if err := app.syncService.RunDelivery(context.Background()); err != nil {
+		t.Fatalf("повторить доставку совпадающих метаданных: %v", err)
+	}
+	if err := app.adminKubernetes.Get(
+		context.Background(), client.ObjectKey{Name: namespaceName}, namespace,
+	); err != nil {
+		t.Fatalf("перечитать совпадающий Namespace: %v", err)
+	}
+	resource = getValkeyInstance(t, app, namespaceName, created.Slug)
+	if namespace.ResourceVersion != namespaceVersion || resource.ResourceVersion != resourceVersion {
+		t.Fatalf(
+			"совпадающие объекты записаны повторно: namespace=%s resource=%s",
+			namespace.ResourceVersion,
+			resource.ResourceVersion,
+		)
+	}
 }
 
 func Test_SynchronizeValkeyMetrics_WithK3s_ImportsValidSnapshotsAndSkipsDuplicates(t *testing.T) {
@@ -912,6 +994,7 @@ func Test_SynchronizeValkeyNamespaces_WithForeignOrOrphanNamespaces_LeavesThemUn
 			valkeyv1alpha1.ManagedByLabelKey: valkeyv1alpha1.ManagedByLabelValue,
 			valkeyv1alpha1.InstanceLabelKey:  "someone-else",
 		},
+		Annotations: map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: "foreign@example.com"},
 	}}
 	if err := app.adminKubernetes.Create(context.Background(), foreign); err != nil {
 		t.Fatalf("создать чужой Namespace: %v", err)
@@ -937,6 +1020,9 @@ func Test_SynchronizeValkeyNamespaces_WithForeignOrOrphanNamespaces_LeavesThemUn
 	}
 	if observed.Labels[valkeyv1alpha1.InstanceLabelKey] != "someone-else" {
 		t.Fatalf("метки чужого Namespace изменены: %v", observed.Labels)
+	}
+	if observed.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] != "foreign@example.com" {
+		t.Fatalf("email чужого Namespace изменён: %v", observed.Annotations)
 	}
 
 	app.stopSync()
@@ -1304,6 +1390,7 @@ func assertDeliveredIdentity(
 	t *testing.T,
 	app *testAPI,
 	userID uuid.UUID,
+	userEmail string,
 	instance valkeydomain.Instance,
 	resource *valkeyv1alpha1.ValkeyInstance,
 ) {
@@ -1311,6 +1398,7 @@ func assertDeliveredIdentity(
 
 	if resource.Namespace != "valkey-"+instance.Slug || resource.Spec.InstanceID != instance.ID.String() ||
 		resource.Labels[valkeyv1alpha1.InstanceIDLabelKey] != instance.ID.String() ||
+		resource.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] != userEmail ||
 		!slices.Contains(resource.Finalizers, valkeyv1alpha1.InstanceFinalizer) {
 		t.Fatalf("ValkeyInstance получил неверную идентичность: %+v", resource.ObjectMeta)
 	}
@@ -1323,7 +1411,9 @@ func assertDeliveredIdentity(
 		t.Fatalf("прочитать Namespace: %v", err)
 	}
 	if namespace.Labels[valkeyv1alpha1.UserIDLabelKey] != userID.String() ||
-		namespace.Labels[valkeyv1alpha1.InstanceIDLabelKey] != instance.ID.String() {
+		namespace.Labels[valkeyv1alpha1.InstanceIDLabelKey] != instance.ID.String() ||
+		namespace.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] !=
+			resource.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] {
 		t.Fatalf("Namespace получил неверные метки: %v", namespace.Labels)
 	}
 	assertSecretVersionPresent(t, app, resource.Namespace, instance.Slug, 1)

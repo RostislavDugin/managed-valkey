@@ -191,12 +191,16 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return result, err
 		}
 
-		result, err = r.reconcilePrimaryLabel(ctx, instance)
+		result, err = r.reconcilePodMetadata(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
 
 		result, err = r.reconcileNetworkResources(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+		result, err = r.reconcileReplicaAdmission(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
@@ -210,10 +214,6 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 
 		result, err = r.reconcileAppAdmission(ctx, instance)
-		if err != nil || !result.IsZero() {
-			return result, err
-		}
-		result, err = r.reconcileReplicaAdmission(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}

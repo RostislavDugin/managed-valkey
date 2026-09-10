@@ -14,6 +14,8 @@ const (
 	InstanceLabelKey              = "valkey.h3llo-demo.com/instance"
 	InstanceIDLabelKey            = "valkey.h3llo-demo.com/instance-id"
 	UserIDLabelKey                = "valkey.h3llo-demo.com/user-id"
+	UserEmailAnnotationKey        = "valkey.h3llo-demo.com/user-email"
+	RoleLabelKey                  = "valkey.h3llo-demo.com/role"
 	ManagedByLabelKey             = "app.kubernetes.io/managed-by"
 	ManagedByLabelValue           = "managed-valkey-api"
 	ConditionTypeRecoveryRequired = "RecoveryRequired"

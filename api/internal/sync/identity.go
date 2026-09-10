@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
@@ -45,6 +46,28 @@ func objectLabels(instance store.ValkeyInstance) map[string]string {
 		valkeyv1alpha1.UserIDLabelKey:     instance.UserID.String(),
 		valkeyv1alpha1.ManagedByLabelKey:  valkeyv1alpha1.ManagedByLabelValue,
 	}
+}
+
+func objectAnnotations(instance store.ValkeyInstance) map[string]string {
+	return map[string]string{valkeyv1alpha1.UserEmailAnnotationKey: instance.UserEmail}
+}
+
+func reconcileObjectAnnotations(object metav1.Object, instance store.ValkeyInstance) bool {
+	desired := objectAnnotations(instance)
+	for key, value := range desired {
+		if object.GetAnnotations()[key] != value {
+			annotations := maps.Clone(object.GetAnnotations())
+			if annotations == nil {
+				annotations = make(map[string]string, len(desired))
+			}
+			maps.Copy(annotations, desired)
+			object.SetAnnotations(annotations)
+
+			return true
+		}
+	}
+
+	return false
 }
 
 func validateLabels(labels map[string]string, instance store.ValkeyInstance) error {
@@ -107,7 +130,7 @@ func (s *Service) ensureNamespace(
 			return nil, requiresRecovery("ранее известный Namespace отсутствует")
 		}
 		namespace = &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-			Name: key.Name, Labels: objectLabels(instance),
+			Name: key.Name, Labels: objectLabels(instance), Annotations: objectAnnotations(instance),
 		}}
 		if err := s.kubernetes.Create(ctx, namespace); err != nil {
 			return nil, fmt.Errorf("создать Namespace: %w", err)
@@ -121,6 +144,12 @@ func (s *Service) ensureNamespace(
 	}
 	if namespace.DeletionTimestamp != nil {
 		return nil, requiresRecovery("Namespace уже удаляется")
+	}
+	before := namespace.DeepCopy()
+	if reconcileObjectAnnotations(namespace, instance) {
+		if err := s.kubernetes.Patch(ctx, namespace, client.MergeFrom(before)); err != nil {
+			return nil, fmt.Errorf("обновить метаданные Namespace: %w", err)
+		}
 	}
 	if err := s.repository.BindValkeyNamespaceUID(ctx, instance.ID, string(namespace.UID)); err != nil {
 		return nil, fmt.Errorf("сохранить UID Namespace: %w", err)

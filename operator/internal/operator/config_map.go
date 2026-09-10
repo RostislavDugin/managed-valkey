@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
@@ -54,6 +54,16 @@ func (r *ValkeyInstanceReconciler) reconcileConfigMap(
 	if current.Immutable == nil || !*current.Immutable || !maps.Equal(current.Data, desired.Data) {
 		return ctrl.Result{}, ErrConfigMapCollision
 	}
+	before := current.DeepCopy()
+	mergeManagedMetadata(current, desired)
+	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
+	if !reflect.DeepEqual(before, current) {
+		if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("обновить метаданные ConfigMap Valkey: %w", err)
+		}
+
+		return requeueIf(true), nil
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -69,13 +79,13 @@ func (r *ValkeyInstanceReconciler) desiredConfigMap(
 	data := configMapData(*accepted)
 	immutable := true
 	configMap := &corev1.ConfigMap{
+		ObjectMeta: ownedObjectMeta(
+			instance,
+			accepted.Slug+"-config-"+configDigest(data),
+			workloadResourceLabels(instance),
+		),
 		Immutable: &immutable,
 		Data:      data,
-	}
-	configMap.Name = accepted.Slug + "-config-" + configDigest(data)
-	configMap.Namespace = instance.Namespace
-	if err := controllerutil.SetControllerReference(instance, configMap, r.Scheme); err != nil {
-		return nil, fmt.Errorf("назначить ownerReference ConfigMap: %w", err)
 	}
 
 	return configMap, nil

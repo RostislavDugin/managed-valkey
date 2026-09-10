@@ -12,6 +12,7 @@ import (
 type ValkeyInstance struct {
 	ID                         uuid.UUID                              `gorm:"column:id;type:uuid;default:uuidv7();primaryKey"`
 	UserID                     uuid.UUID                              `gorm:"column:user_id;type:uuid"`
+	UserEmail                  string                                 `gorm:"column:user_email"`
 	Name                       string                                 `gorm:"column:name"`
 	Slug                       string                                 `gorm:"column:slug"`
 	Mode                       domain.ValkeyInstanceMode              `gorm:"column:mode"`

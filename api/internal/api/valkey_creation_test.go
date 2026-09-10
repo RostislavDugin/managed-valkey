@@ -13,6 +13,47 @@ import (
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
+func Test_CreateValkeyInstance_WithLegacyInsertWithoutUserEmail_UsesOwnerEmailAndRejectsUnknownOwner(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	created := createValkey(t, app, account, map[string]any{"name": "source", "prefix": "source"})
+	legacy := loadValkey(t, app, created.ID)
+	legacy.ID = uuid.Nil
+	legacy.Name = "legacy"
+	legacy.Slug = "legacy-" + uuid.NewString()[:8]
+	legacy.Host = legacy.Slug + ".valkey.localhost"
+	legacy.UserEmail = ""
+
+	if err := app.database.DB().Omit("UserEmail").Create(&legacy).Error; err != nil {
+		t.Fatalf("создать инстанс старым INSERT: %v", err)
+	}
+	stored := loadValkey(t, app, legacy.ID)
+	if stored.UserEmail != account.Email {
+		t.Fatalf("триггер сохранил email %q, ожидался %q", stored.UserEmail, account.Email)
+	}
+
+	unknownOwner := legacy
+	unknownOwner.ID = uuid.Nil
+	unknownOwner.UserID = uuid.New()
+	unknownOwner.Name = "unknown-owner"
+	unknownOwner.Slug = "unknown-" + uuid.NewString()[:8]
+	unknownOwner.Host = unknownOwner.Slug + ".valkey.localhost"
+	if err := app.database.DB().Omit("UserEmail").Create(&unknownOwner).Error; err == nil {
+		t.Fatal("старый INSERT создал инстанс для неизвестного пользователя")
+	}
+	var count int64
+	if err := app.database.DB().
+		Model(&store.ValkeyInstance{}).
+		Where("id = ?", unknownOwner.ID).
+		Count(&count).
+		Error; err != nil {
+		t.Fatalf("проверить отсутствие инстанса: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("для неизвестного пользователя создано строк: %d", count)
+	}
+}
+
 type sequenceSlugGenerator struct {
 	mu     sync.Mutex
 	values []string

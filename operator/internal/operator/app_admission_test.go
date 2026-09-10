@@ -209,27 +209,37 @@ func Test_CT04_ReconcileAppAdmission_WithPendingMutations_DoesNotConfirmGenerati
 	}
 }
 
-func Test_ReconcilePrimaryLabel_WithCurrentAndStaleProcessIdentity_LabelsOnlyCurrentProcess(t *testing.T) {
+func Test_ReconcilePodMetadata_WithCurrentAndStaleProcessIdentity_SetsOwnerMetadataAndKeepsRoleLabelsOnlyForCurrentProcess(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, pod, _, _ := processObservationObjects()
 	pod.Labels = workloadLabels(instance.Name)
+	pod.Labels["other.example.com/value"] = "kept"
+	pod.Annotations = map[string]string{"other.example.com/value": "kept"}
 	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{testObservedNode(pod)}
 	k8s := fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(instance, pod).Build()
 	reconciler := &ValkeyInstanceReconciler{Client: k8s}
 
-	result, err := reconciler.reconcilePrimaryLabel(ctx, instance)
+	result, err := reconciler.reconcilePodMetadata(ctx, instance)
 	if err != nil || result.IsZero() {
 		t.Fatalf("назначить primary: result=%+v error=%v", result, err)
 	}
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
 		t.Fatalf("прочитать Pod с ролью: %v", err)
 	}
-	if pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRolePrimary) {
-		t.Fatal("текущий процесс не получил роль primary")
+	if pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRolePrimary) ||
+		pod.Labels[valkeyv1alpha1.RoleLabelKey] != string(valkeyv1alpha1.NodeRolePrimary) ||
+		pod.Labels[valkeyv1alpha1.InstanceIDLabelKey] != instance.Status.AcceptedConfiguration.InstanceID ||
+		pod.Labels[valkeyv1alpha1.UserIDLabelKey] != instance.Labels[valkeyv1alpha1.UserIDLabelKey] ||
+		pod.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] !=
+			instance.Annotations[valkeyv1alpha1.UserEmailAnnotationKey] ||
+		pod.Labels["other.example.com/value"] != "kept" || pod.Annotations["other.example.com/value"] != "kept" {
+		t.Fatalf("текущий процесс получил неверные метаданные: labels=%v annotations=%v", pod.Labels, pod.Annotations)
 	}
 
 	instance.Status.Nodes[0].ContainerID = "containerd://old"
-	result, err = reconciler.reconcilePrimaryLabel(ctx, instance)
+	result, err = reconciler.reconcilePodMetadata(ctx, instance)
 	if err != nil || result.IsZero() {
 		t.Fatalf("снять устаревшую роль: result=%+v error=%v", result, err)
 	}
@@ -237,7 +247,10 @@ func Test_ReconcilePrimaryLabel_WithCurrentAndStaleProcessIdentity_LabelsOnlyCur
 		t.Fatalf("прочитать Pod без роли: %v", err)
 	}
 	if _, exists := pod.Labels[applicationRoleLabel]; exists {
-		t.Fatal("роль primary осталась у процесса без сохранённой идентичности")
+		t.Fatal("непрефиксная роль осталась у процесса без сохранённой идентичности")
+	}
+	if _, exists := pod.Labels[valkeyv1alpha1.RoleLabelKey]; exists {
+		t.Fatal("префиксная роль осталась у процесса без сохранённой идентичности")
 	}
 }
 
@@ -305,6 +318,7 @@ func Test_CurrentProcessRoleLabel_WithHAReplica_ReturnsReplicaOnlyForCurrentSync
 	syncedAt := metav1.Now()
 	replica := testObservedNode(pod)
 	replica.Role = valkeyv1alpha1.NodeRoleReplica
+	replica.AppEnabled = true
 	replica.AppPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
 	replica.Replication = &valkeyv1alpha1.ReplicationStatus{
 		LinkUp: true, SyncedAt: &syncedAt, UpstreamHost: "10.42.0.20", UpstreamPort: valkeyPort,
@@ -312,6 +326,11 @@ func Test_CurrentProcessRoleLabel_WithHAReplica_ReturnsReplicaOnlyForCurrentSync
 	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{replica}
 	if role := currentProcessRoleLabel(instance, pod, 0); role != string(valkeyv1alpha1.NodeRoleReplica) {
 		t.Fatalf("синхронизированная реплика получила метку %q", role)
+	}
+	if !setPodMetadata(instance, pod, 0) ||
+		pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) ||
+		pod.Labels[valkeyv1alpha1.RoleLabelKey] != string(valkeyv1alpha1.NodeRoleReplica) {
+		t.Fatalf("допущенная реплика получила несогласованные метки: %v", pod.Labels)
 	}
 
 	checks := []struct {
@@ -336,6 +355,12 @@ func Test_CurrentProcessRoleLabel_WithHAReplica_ReturnsReplicaOnlyForCurrentSync
 				node.Replication.SyncedAt = nil
 			},
 		},
+		{
+			name: "до допуска приложения не назначает реплике роль",
+			mutate: func(node *valkeyv1alpha1.NodeStatus) {
+				node.AppEnabled = false
+			},
+		},
 		{name: "при устаревшем пароле не назначает реплике роль", mutate: func(node *valkeyv1alpha1.NodeStatus) {
 			node.AppPasswordVersion = 0
 		}},
@@ -352,15 +377,34 @@ func Test_CurrentProcessRoleLabel_WithHAReplica_ReturnsReplicaOnlyForCurrentSync
 	}
 }
 
-func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUpstreamBeforeLabeling(t *testing.T) {
+func Test_SetPodMetadata_WithoutOwnerEmail_DoesNotCreateEmptyAnnotation(t *testing.T) {
+	instance, pod, _, _ := processObservationObjects()
+	delete(instance.Annotations, valkeyv1alpha1.UserEmailAnnotationKey)
+	pod.Annotations = map[string]string{"other.example.com/value": "kept"}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{testObservedNode(pod)}
+
+	if !setPodMetadata(instance, pod, 0) {
+		t.Fatal("описательные метки Pod не добавлены")
+	}
+	if _, found := pod.Annotations[valkeyv1alpha1.UserEmailAnnotationKey]; found {
+		t.Fatalf("оператор записал пустую email-аннотацию: %v", pod.Annotations)
+	}
+	if pod.Annotations["other.example.com/value"] != "kept" {
+		t.Fatalf("посторонняя аннотация потеряна: %v", pod.Annotations)
+	}
+}
+
+func Test_HA01_ReconcileReplicaAdmission_WithInitializedHAAndDisabledPrimaryApp_EnablesSynchronizedReplicaBeforeAssigningRoleMetadata(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, primaryPod, _, secret := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.Initialized = true
 	primary := testObservedNode(primaryPod)
-	primary.AppEnabled = true
-	primary.AppPasswordVersion = 1
+	primary.AppEnabled = false
+	primary.AppPasswordVersion = 0
 	primaryOrdinal := int32(0)
 	instance.Status.PrimaryOrdinal = &primaryOrdinal
 	instance.Status.PrimaryPodUID = primary.PodUID
@@ -374,7 +418,7 @@ func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUp
 	replicaPod.UID = "pod-2"
 	replicaPod.Status.PodIP = "10.42.0.11"
 	replicaPod.Status.ContainerStatuses[0].ContainerID = "containerd://2"
-	replicaPod.Labels = map[string]string{applicationRoleLabel: string(valkeyv1alpha1.NodeRoleReplica)}
+	replicaPod.Labels = workloadLabels(instance.Name)
 	syncedAt := metav1.Now()
 	replica := valkeyv1alpha1.NodeStatus{
 		Ordinal: 1, PodUID: string(replicaPod.UID),
@@ -387,6 +431,9 @@ func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUp
 		},
 	}
 	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{primary, replica}
+	if !setPodMetadata(instance, primaryPod, primary.Ordinal) {
+		t.Fatal("не удалось подготовить метаданные primary")
+	}
 	k8s := fake.NewClientBuilder().
 		WithScheme(NewScheme()).
 		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
@@ -415,11 +462,17 @@ func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUp
 			}, nil
 		},
 	}
+	instance.Status.Initialized = false
+	result, err := reconciler.reconcileReplicaAdmission(ctx, instance)
+	if err != nil || !result.IsZero() || updates != 0 {
+		t.Fatalf("реплика допущена до инициализации HA: result=%+v updates=%d error=%v", result, updates, err)
+	}
+	instance.Status.Initialized = true
 	instance.Status.CredentialRotation = &valkeyv1alpha1.CredentialRotationStatus{
 		TargetVersion: 2, PreviousVersion: 1,
 		Stage: valkeyv1alpha1.CredentialRotationStageUpdatingReplicas,
 	}
-	result, err := reconciler.reconcileReplicaAdmission(ctx, instance)
+	result, err = reconciler.reconcileReplicaAdmission(ctx, instance)
 	if err != nil || !result.IsZero() || updates != 0 {
 		t.Fatalf("реплика допущена посреди ротации: result=%+v updates=%d error=%v", result, updates, err)
 	}
@@ -436,6 +489,17 @@ func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUp
 	node, found := nodeStatusAtOrdinal(observed.Status.Nodes, 1)
 	if !found || !node.AppEnabled || node.AppPasswordVersion != 1 {
 		t.Fatalf("допуск реплики не сохранён: %+v", observed.Status.Nodes)
+	}
+	result, err = reconciler.reconcilePodMetadata(ctx, observed)
+	if err != nil || result.IsZero() {
+		t.Fatalf("назначить роль допущенной реплике: result=%+v error=%v", result, err)
+	}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(replicaPod), replicaPod); err != nil {
+		t.Fatalf("прочитать Pod допущенной реплики: %v", err)
+	}
+	if replicaPod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) ||
+		replicaPod.Labels[valkeyv1alpha1.RoleLabelKey] != string(valkeyv1alpha1.NodeRoleReplica) {
+		t.Fatalf("допущенная реплика получила неверные метки роли: %v", replicaPod.Labels)
 	}
 }
 
