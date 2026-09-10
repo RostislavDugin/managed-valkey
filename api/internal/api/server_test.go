@@ -15,7 +15,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
 
-func TestServeFinishesStartedRequestAndStopsAccepting(t *testing.T) {
+func Test_ShutdownHttpServer_WithActiveRequest_FinishesRequestAndStopsAcceptingConnections(t *testing.T) {
 	router := gin.New()
 
 	requestStarted := make(chan struct{})

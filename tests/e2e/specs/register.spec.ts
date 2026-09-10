@@ -14,7 +14,7 @@ function accountPassword() {
   return password;
 }
 
-test("@prod новый пользователь регистрируется", async ({ page }) => {
+test("новый пользователь регистрируется через форму и попадает в авторизованную консоль", { tag: "@prod" }, async ({ page }) => {
   const email = registrationEmail();
   const password = accountPassword();
 

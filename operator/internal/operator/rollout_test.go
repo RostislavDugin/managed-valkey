@@ -14,7 +14,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestRZ09PreparingRolloutKeepsAppliedTemplate(t *testing.T) {
+func Test_RZ09_ReconcileRolloutPreparing_WhenWorkloadStillUsesAppliedSize_KeepsAppliedTemplate(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.VCPU = 4
 	instance.Status.AcceptedConfiguration.RAMGB = 8
@@ -46,7 +46,7 @@ func TestRZ09PreparingRolloutKeepsAppliedTemplate(t *testing.T) {
 	}
 }
 
-func TestRZ03FullStopScalesDownOnlyAfterAccessClosed(t *testing.T) {
+func Test_RZ03_ReconcileFullStop_WhenClientAccessIsOpen_ScalesDownOnlyAfterAccessCloses(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.RAMGB = 2
@@ -71,7 +71,7 @@ func TestRZ03FullStopScalesDownOnlyAfterAccessClosed(t *testing.T) {
 	}
 }
 
-func TestRZ03FullStopClearsFailureFailover(t *testing.T) {
+func Test_RZ03_ReconcileFullStop_WhenFailureFailoverExists_ClearsFailoverBeforeScalingDown(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.RAMGB = 2
@@ -107,7 +107,7 @@ func TestRZ03FullStopClearsFailureFailover(t *testing.T) {
 	}
 }
 
-func TestRZ05FullStopPreparingDoesNotSuppressFailover(t *testing.T) {
+func Test_RZ05_ReconcileFullStopPreparing_WhenPrimaryFails_DoesNotSuppressFailover(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.RAMGB = 2
@@ -136,7 +136,9 @@ func TestRZ05FullStopPreparingDoesNotSuppressFailover(t *testing.T) {
 	}
 }
 
-func TestRZ05PW10FullStopRecoveryStagesFailOverToSynchronizedReplica(t *testing.T) {
+func Test_RZ05PW10_ReconcileFullStopRecovery_WhenStageIsStartingOrVerifying_FailsOverToSynchronizedReplica(
+	t *testing.T,
+) {
 	for _, stage := range []valkeyv1alpha1.RolloutStage{
 		valkeyv1alpha1.RolloutStageStarting,
 		valkeyv1alpha1.RolloutStageVerifying,
@@ -204,7 +206,7 @@ func assertFullStopFailoverCandidate(t *testing.T, stage valkeyv1alpha1.RolloutS
 	}
 }
 
-func TestRZ02HAGrowthUsesRollingTemplate(t *testing.T) {
+func Test_RZ02_ReconcileHAGrowth_WhenResourcesIncrease_UsesRollingTemplate(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.RAMGB = 8
@@ -227,7 +229,7 @@ func TestRZ02HAGrowthUsesRollingTemplate(t *testing.T) {
 	}
 }
 
-func TestRZ05TargetReplicaAdmissionIsNotBlockedByRollout(t *testing.T) {
+func Test_RZ05_ReconcileReplicaAdmission_WhenRolloutIsActive_DoesNotBlockTargetReplica(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -281,7 +283,7 @@ func TestRZ05TargetReplicaAdmissionIsNotBlockedByRollout(t *testing.T) {
 	}
 }
 
-func TestRZ11RolloutDeletionCheckUsesFreshInstance(t *testing.T) {
+func Test_RZ11_ReconcileRolloutDeletion_WhenStatusChangesConcurrently_UsesFreshInstance(t *testing.T) {
 	current := completeAcceptedInstance()
 	current.Finalizers = []string{instanceFinalizer}
 	now := metav1.Now()
@@ -297,7 +299,7 @@ func TestRZ11RolloutDeletionCheckUsesFreshInstance(t *testing.T) {
 	}
 }
 
-func TestRZ07PodReadErrorStopsReplacement(t *testing.T) {
+func Test_RZ07_ReconcileRolloutReplacement_WhenPodReadFails_StopsReplacement(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA

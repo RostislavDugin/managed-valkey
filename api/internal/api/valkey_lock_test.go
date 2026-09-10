@@ -16,7 +16,7 @@ import (
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func TestValkeyAdvisoryLockDoesNotBlockGETAndTimesOutMutation(t *testing.T) {
+func Test_AccessValkey_WhenAdvisoryLockIsHeld_AllowsReadAndTimesOutMutation(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{"name": "locked-cache"})
@@ -60,7 +60,7 @@ func TestValkeyAdvisoryLockDoesNotBlockGETAndTimesOutMutation(t *testing.T) {
 	)
 }
 
-func TestCancelWaitingValkeyMutationReleasesTransaction(t *testing.T) {
+func Test_CreateValkey_WhenLockWaitIsCanceled_ReleasesTransactionForRetry(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	holder := holdValkeyLock(t, app)
@@ -118,7 +118,7 @@ func TestCancelWaitingValkeyMutationReleasesTransaction(t *testing.T) {
 	assertStatus(t, retry, http.StatusAccepted)
 }
 
-func TestWaitingMutationRereadsStateAndUsesTimeAfterLock(t *testing.T) {
+func Test_MutateValkey_AfterWaitingForLock_RereadsStateAndUsesPostLockTime(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{"name": "reread-cache"})

@@ -18,7 +18,9 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestAppAdmissionWaitsForCurrentPrimaryEndpoint(t *testing.T) {
+func Test_ReconcileAppAdmission_WithoutCurrentPrimaryEndpoint_WaitsThenConfirmsAppliedConfigurationAfterEndpointAppears(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, pod, _, secret := processObservationObjects()
 	pod.Labels = workloadLabels(instance.Name)
@@ -98,7 +100,7 @@ func TestAppAdmissionWaitsForCurrentPrimaryEndpoint(t *testing.T) {
 	}
 }
 
-func TestAppAdmissionRechecksStateAfterLostEnableResponse(t *testing.T) {
+func Test_ReconcileAppAdmission_WhenEnableResponseIsLost_RechecksACLStateBeforeConfirmingReadiness(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, secret := processObservationObjects()
 	pod.Labels = workloadLabels(instance.Name)
@@ -148,7 +150,7 @@ func TestAppAdmissionRechecksStateAfterLostEnableResponse(t *testing.T) {
 	}
 }
 
-func TestCT04AppAdmissionDoesNotConfirmPendingMutations(t *testing.T) {
+func Test_CT04_ReconcileAppAdmission_WithPendingMutations_DoesNotConfirmGeneration(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, secret := processObservationObjects()
 	pod.Labels = workloadLabels(instance.Name)
@@ -207,7 +209,7 @@ func TestCT04AppAdmissionDoesNotConfirmPendingMutations(t *testing.T) {
 	}
 }
 
-func TestPrimaryLabelRequiresSavedCurrentProcess(t *testing.T) {
+func Test_ReconcilePrimaryLabel_WithCurrentAndStaleProcessIdentity_LabelsOnlyCurrentProcess(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, _ := processObservationObjects()
 	pod.Labels = workloadLabels(instance.Name)
@@ -239,7 +241,7 @@ func TestPrimaryLabelRequiresSavedCurrentProcess(t *testing.T) {
 	}
 }
 
-func TestProcessDisablesEarlyAppAccess(t *testing.T) {
+func Test_ReconcileProcess_WhenAppIsEnabledBeforeAdmission_DisablesAppAccess(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -284,7 +286,7 @@ func TestProcessDisablesEarlyAppAccess(t *testing.T) {
 	}
 }
 
-func TestEndpointSliceRequestsPrimaryInstance(t *testing.T) {
+func Test_EndpointSliceInstanceRequests_WithPrimaryServiceLabel_ReturnsInstanceRequest(t *testing.T) {
 	endpointSlice := &discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "valkey-cache-a1b2c3",
 		Labels:    map[string]string{discoveryv1.LabelServiceName: "cache-a1b2c3-primary"},
@@ -296,7 +298,7 @@ func TestEndpointSliceRequestsPrimaryInstance(t *testing.T) {
 	}
 }
 
-func TestHAReplicaLabelRequiresCurrentSynchronizedProcess(t *testing.T) {
+func Test_CurrentProcessRoleLabel_WithHAReplica_ReturnsReplicaOnlyForCurrentSynchronizedProcess(t *testing.T) {
 	instance, pod, _, _ := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -316,16 +318,25 @@ func TestHAReplicaLabelRequiresCurrentSynchronizedProcess(t *testing.T) {
 		name   string
 		mutate func(*valkeyv1alpha1.NodeStatus)
 	}{
-		{name: "sync in progress", mutate: func(node *valkeyv1alpha1.NodeStatus) {
-			node.Replication.SyncInProgress = true
-		}},
-		{name: "link down", mutate: func(node *valkeyv1alpha1.NodeStatus) {
-			node.Replication.LinkUp = false
-		}},
-		{name: "no synchronization proof", mutate: func(node *valkeyv1alpha1.NodeStatus) {
-			node.Replication.SyncedAt = nil
-		}},
-		{name: "old password", mutate: func(node *valkeyv1alpha1.NodeStatus) {
+		{
+			name: "при незавершённой синхронизации не назначает реплике роль",
+			mutate: func(node *valkeyv1alpha1.NodeStatus) {
+				node.Replication.SyncInProgress = true
+			},
+		},
+		{
+			name: "при разорванной связи с primary не назначает реплике роль",
+			mutate: func(node *valkeyv1alpha1.NodeStatus) {
+				node.Replication.LinkUp = false
+			},
+		},
+		{
+			name: "без подтверждения синхронизации не назначает реплике роль",
+			mutate: func(node *valkeyv1alpha1.NodeStatus) {
+				node.Replication.SyncedAt = nil
+			},
+		},
+		{name: "при устаревшем пароле не назначает реплике роль", mutate: func(node *valkeyv1alpha1.NodeStatus) {
 			node.AppPasswordVersion = 0
 		}},
 	}
@@ -341,7 +352,7 @@ func TestHAReplicaLabelRequiresCurrentSynchronizedProcess(t *testing.T) {
 	}
 }
 
-func TestHA01ReplicaAdmissionChecksRoleACLAndUpstream(t *testing.T) {
+func Test_HA01_ReconcileReplicaAdmission_WithCurrentReplica_RequiresRoleACLAndUpstreamBeforeLabeling(t *testing.T) {
 	ctx := context.Background()
 	instance, primaryPod, _, secret := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA

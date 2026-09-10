@@ -8,7 +8,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
-func TestLoadEnvoyProcesses(t *testing.T) {
+func Test_LoadEnvoyProcesses_WithIntegrationOverride_AcceptsOneAndRejectsInvalidValues(t *testing.T) {
 	t.Setenv(config.EnvEnvoyProcesses, "1")
 	cfg, err := config.Load()
 	if err != nil {

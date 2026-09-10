@@ -15,7 +15,9 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestCT06ManualFencingRequiresExactExpectedIdentityAndStoppedNode(t *testing.T) {
+func Test_CT06_ReconcileManualFencing_WithExpectedIdentityAndNodeState_AcceptsOnlyExactIdentityOnStoppedNode(
+	t *testing.T,
+) {
 	tests := []struct {
 		name      string
 		identity  func(valkeyv1alpha1.ProcessIdentity) valkeyv1alpha1.ProcessIdentity
@@ -24,15 +26,36 @@ func TestCT06ManualFencingRequiresExactExpectedIdentityAndStoppedNode(t *testing
 		wantEvent string
 	}{
 		{
-			name: "exact stopped", identity: sameTestIdentity, nodeReady: corev1.ConditionFalse,
-			wantProof: true, wantEvent: "ManualFencingAccepted",
+			name:      "при точной идентичности и остановленной ноде принимает ручное fencing",
+			identity:  sameTestIdentity,
+			nodeReady: corev1.ConditionFalse,
+			wantProof: true,
+			wantEvent: "ManualFencingAccepted",
 		},
-		{name: "stale pod", identity: differentTestPod, nodeReady: corev1.ConditionFalse},
-		{name: "stale container", identity: differentTestContainer, nodeReady: corev1.ConditionFalse},
-		{name: "stale run", identity: differentTestRun, nodeReady: corev1.ConditionFalse},
-		{name: "stale node", identity: differentTestNode, nodeReady: corev1.ConditionFalse},
 		{
-			name: "node still ready", identity: sameTestIdentity, nodeReady: corev1.ConditionTrue,
+			name:      "при устаревшем Pod не принимает ручное fencing",
+			identity:  differentTestPod,
+			nodeReady: corev1.ConditionFalse,
+		},
+		{
+			name:      "при устаревшем контейнере не принимает ручное fencing",
+			identity:  differentTestContainer,
+			nodeReady: corev1.ConditionFalse,
+		},
+		{
+			name:      "при устаревшем run ID не принимает ручное fencing",
+			identity:  differentTestRun,
+			nodeReady: corev1.ConditionFalse,
+		},
+		{
+			name:      "при устаревшей ноде не принимает ручное fencing",
+			identity:  differentTestNode,
+			nodeReady: corev1.ConditionFalse,
+		},
+		{
+			name:      "при доступной ноде оставляет ручное fencing в ожидании",
+			identity:  sameTestIdentity,
+			nodeReady: corev1.ConditionTrue,
 			wantEvent: "ManualFencingPending",
 		},
 	}

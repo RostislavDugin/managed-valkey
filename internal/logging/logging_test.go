@@ -15,7 +15,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 )
 
-func TestNewWithWriterAddsServiceAndEnv(t *testing.T) {
+func Test_CreateLogger_WithProductionWriter_AddsServiceAndEnvironmentAttributes(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, shutdown := logging.NewWithWriter(&out, logging.Config{
@@ -39,7 +39,7 @@ func TestNewWithWriterAddsServiceAndEnv(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterUsesTextOnDev(t *testing.T) {
+func Test_CreateLogger_WithDevelopmentEnvironment_UsesTextFormat(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, _ := logging.NewWithWriter(&out, logging.Config{
@@ -59,7 +59,7 @@ func TestNewWithWriterUsesTextOnDev(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterWritesTimeInUTC(t *testing.T) {
+func Test_CreateLogger_WithProductionWriter_WritesTimestampInUtc(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, _ := logging.NewWithWriter(&out, logging.Config{
@@ -85,7 +85,7 @@ func TestNewWithWriterWritesTimeInUTC(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterAppliesLevel(t *testing.T) {
+func Test_CreateLogger_WithConfiguredLevel_FiltersLocalRecords(t *testing.T) {
 	cases := []struct {
 		level     string
 		wantDebug bool
@@ -121,7 +121,7 @@ func TestNewWithWriterAppliesLevel(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterAppliesLevelToOTLP(t *testing.T) {
+func Test_CreateLogger_WithOtlpExporter_AppliesConfiguredLevel(t *testing.T) {
 	var requests atomic.Int32
 
 	receiver := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -150,7 +150,7 @@ func TestNewWithWriterAppliesLevelToOTLP(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterReportsUnknownLevel(t *testing.T) {
+func Test_CreateLogger_WithUnknownLevel_ReportsConfigurationWarning(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, _ := logging.NewWithWriter(&out, logging.Config{
@@ -165,7 +165,7 @@ func TestNewWithWriterReportsUnknownLevel(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterWorksWithoutOTLPURL(t *testing.T) {
+func Test_CreateLogger_WithoutOtlpUrl_WritesLocallyWithoutExportError(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, shutdown := logging.NewWithWriter(&out, logging.Config{
@@ -183,7 +183,7 @@ func TestNewWithWriterWorksWithoutOTLPURL(t *testing.T) {
 	}
 }
 
-func TestNewWithWriterKeepsWorkingWhenExportFails(t *testing.T) {
+func Test_CreateLogger_WhenOtlpExportFails_KeepsLocalRecord(t *testing.T) {
 	var out bytes.Buffer
 
 	logger, shutdown := logging.NewWithWriter(&out, logging.Config{
@@ -205,7 +205,7 @@ func TestNewWithWriterKeepsWorkingWhenExportFails(t *testing.T) {
 	}
 }
 
-func TestConfigFromEnv(t *testing.T) {
+func Test_LoadLoggingConfig_WithEnvironmentVariables_ReturnsConfiguredValues(t *testing.T) {
 	t.Setenv(logging.EnvAppEnv, logging.EnvironmentProd)
 	t.Setenv(logging.EnvLogLevel, "debug")
 	t.Setenv(logging.EnvOTLPURL, "http://victorialogs:9428/insert/opentelemetry/v1/logs")
@@ -224,7 +224,7 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 }
 
-func TestConfigFromEnvDefaultsToDev(t *testing.T) {
+func Test_LoadLoggingConfig_WithoutEnvironment_UsesDevelopmentDefault(t *testing.T) {
 	t.Setenv(logging.EnvAppEnv, "")
 	t.Setenv(logging.EnvLogLevel, "")
 	t.Setenv(logging.EnvOTLPURL, "")

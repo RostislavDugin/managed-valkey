@@ -31,7 +31,7 @@ func (r *pageReader) ListAudit(
 	return r.items, nil
 }
 
-func TestParsePageRequest(t *testing.T) {
+func Test_ParseAuditPageRequest_WithValidLimits_ReturnsExpectedPageSize(t *testing.T) {
 	minimum := "1"
 	maximum := "200"
 
@@ -56,14 +56,14 @@ func TestParsePageRequest(t *testing.T) {
 	}
 
 	for _, value := range []string{"", "0", "201", "1.5", "abc"} {
-		t.Run("неверный лимит "+value, func(t *testing.T) {
+		t.Run("недопустимый лимит "+value+" возвращает ошибку поля limit", func(t *testing.T) {
 			_, err := ParsePageRequest(&value, nil)
 			assertValidationError(t, err, "limit")
 		})
 	}
 }
 
-func TestPageCursorPreservesPosition(t *testing.T) {
+func Test_CreateAndParseAuditPageCursor_WithEqualTimestamps_PreservesPosition(t *testing.T) {
 	createdAt := time.Date(2026, time.September, 9, 10, 11, 12, 345678000, time.UTC)
 	firstID := uuid.MustParse("01993000-0000-7000-8000-000000000002")
 	reader := &pageReader{items: []LogEntry{
@@ -97,7 +97,7 @@ func TestPageCursorPreservesPosition(t *testing.T) {
 	}
 }
 
-func TestParsePageRequestRejectsInvalidCursor(t *testing.T) {
+func Test_ParseAuditPageRequest_WithInvalidCursor_ReturnsValidationError(t *testing.T) {
 	for _, value := range []string{
 		"",
 		"broken",
@@ -105,7 +105,7 @@ func TestParsePageRequestRejectsInvalidCursor(t *testing.T) {
 		"eyJjcmVhdGVkX2F0IjpudWxsLCJpZCI6bnVsbH0",
 		"eyJjcmVhdGVkX2F0IjoiMjAyNi0wOS0wOVQxMDoxMToxMi4zNDU2NzhaIiwiaWQiOiIwMTk5MzAwMC0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJleHRyYSI6dHJ1ZX0",
 	} {
-		t.Run(value, func(t *testing.T) {
+		t.Run("недопустимый курсор "+value+" возвращает ошибку поля before", func(t *testing.T) {
 			_, err := ParsePageRequest(nil, &value)
 			assertValidationError(t, err, "before")
 		})

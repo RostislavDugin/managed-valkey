@@ -21,40 +21,46 @@ type concurrentRequest struct {
 	headers map[string]string
 }
 
-func TestConcurrentCreatesRespectClusterAndPersonalQuota(t *testing.T) {
-	t.Run("два владельца и общий остаток", func(t *testing.T) {
-		first := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 1, clusterRAMGB: 1})
-		second := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 1, clusterRAMGB: 1})
-		firstOwner := first.registerAccount(t, "")
-		secondOwner := first.registerAccount(t, "")
+func Test_CreateValkeys_WithConcurrentRequestsAtResourceLimits_RespectsClusterAndPersonalQuotas(t *testing.T) {
+	t.Run(
+		"конкурентное создание двумя владельцами принимает один запрос в пределах общего остатка",
+		func(t *testing.T) {
+			first := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 1, clusterRAMGB: 1})
+			second := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 1, clusterRAMGB: 1})
+			firstOwner := first.registerAccount(t, "")
+			secondOwner := first.registerAccount(t, "")
 
-		responses := runConcurrentRequests(t,
-			createRequest(first, firstOwner, "cluster-first", uuid.NewString()),
-			createRequest(second, secondOwner, "cluster-second", uuid.NewString()),
-		)
-		assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
-		assertOneErrorCode(t, responses, apierr.CodeNotEnoughResources)
-		assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).
-			Where("user_id IN ?", []uuid.UUID{firstOwner.ID, secondOwner.ID}), 1)
-	})
+			responses := runConcurrentRequests(t,
+				createRequest(first, firstOwner, "cluster-first", uuid.NewString()),
+				createRequest(second, secondOwner, "cluster-second", uuid.NewString()),
+			)
+			assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
+			assertOneErrorCode(t, responses, apierr.CodeNotEnoughResources)
+			assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).
+				Where("user_id IN ?", []uuid.UUID{firstOwner.ID, secondOwner.ID}), 1)
+		},
+	)
 
-	t.Run("один владелец и личный остаток", func(t *testing.T) {
-		first := newHTTPTestAPI(t, testAPIConfig{})
-		second := newHTTPTestAPI(t, testAPIConfig{})
-		owner := first.registerAccount(t, "")
-		setUserQuota(t, first, owner.ID, 1, 1)
+	t.Run(
+		"конкурентное создание одним владельцем принимает один запрос в пределах личного остатка",
+		func(t *testing.T) {
+			first := newHTTPTestAPI(t, testAPIConfig{})
+			second := newHTTPTestAPI(t, testAPIConfig{})
+			owner := first.registerAccount(t, "")
+			setUserQuota(t, first, owner.ID, 1, 1)
 
-		responses := runConcurrentRequests(t,
-			createRequest(first, owner, "user-first", uuid.NewString()),
-			createRequest(second, owner, "user-second", uuid.NewString()),
-		)
-		assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
-		assertOneErrorCode(t, responses, apierr.CodeQuotaExceeded)
-		assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", owner.ID), 1)
-	})
+			responses := runConcurrentRequests(t,
+				createRequest(first, owner, "user-first", uuid.NewString()),
+				createRequest(second, owner, "user-second", uuid.NewString()),
+			)
+			assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
+			assertOneErrorCode(t, responses, apierr.CodeQuotaExceeded)
+			assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", owner.ID), 1)
+		},
+	)
 }
 
-func TestConcurrentCreateAndResizeShareClusterBudget(t *testing.T) {
+func Test_CreateAndResizeValkey_WithConcurrentRequestsAtClusterLimit_ShareClusterBudget(t *testing.T) {
 	config := testAPIConfig{clusterVCPU: 2, clusterRAMGB: 8}
 	first := newHTTPTestAPI(t, config)
 	second := newHTTPTestAPI(t, config)
@@ -91,21 +97,29 @@ func TestConcurrentCreateAndResizeShareClusterBudget(t *testing.T) {
 	}
 }
 
-func TestConcurrentConfigurationMutationsAdvanceOneGeneration(t *testing.T) {
+func Test_MutateValkeyConfiguration_WithConcurrentRequests_AcceptsOneGeneration(t *testing.T) {
 	tests := []struct {
 		name   string
 		first  func(*testAPI, testAccount, uuid.UUID) concurrentRequest
 		second func(*testAPI, testAccount, uuid.UUID) concurrentRequest
 	}{
-		{name: "два resize", first: resizeRequest(2, 8), second: resizeRequest(4, 16)},
-		{name: "resize и whitelist", first: resizeRequest(2, 8), second: whitelistRequest("192.0.2.0/24")},
 		{
-			name:   "whitelist и rotate",
+			name:   "два конкурентных изменения размера увеличивают поколение один раз",
+			first:  resizeRequest(2, 8),
+			second: resizeRequest(4, 16),
+		},
+		{
+			name:   "одновременные изменения размера и списка доступа увеличивают поколение один раз",
+			first:  resizeRequest(2, 8),
+			second: whitelistRequest("192.0.2.0/24"),
+		},
+		{
+			name:   "одновременное изменение списка доступа и смена пароля увеличивают поколение один раз",
 			first:  whitelistRequest("192.0.2.0/24"),
 			second: rotateRequest(rotatedValkeyPassword),
 		},
 		{
-			name:   "два rotate",
+			name:   "две конкурентные смены пароля увеличивают поколение один раз",
 			first:  rotateRequest(rotatedValkeyPassword),
 			second: rotateRequest("abcdefghijklmnopqrstuvwxyz012345"),
 		},
@@ -140,7 +154,7 @@ func TestConcurrentConfigurationMutationsAdvanceOneGeneration(t *testing.T) {
 	}
 }
 
-func TestConcurrentIdempotentRequestsCommitOnce(t *testing.T) {
+func Test_CreateValkey_WithConcurrentIdempotentRequests_CommitsOnce(t *testing.T) {
 	first := newHTTPTestAPI(t, testAPIConfig{})
 	second := newHTTPTestAPI(t, testAPIConfig{})
 	owner := first.registerAccount(t, "")
@@ -166,8 +180,8 @@ func TestConcurrentIdempotentRequestsCommitOnce(t *testing.T) {
 	assertOneErrorCode(t, responses, apierr.CodeIdempotencyMismatch)
 }
 
-func TestConcurrentNamesAndDeletesDoNotLoseChanges(t *testing.T) {
-	t.Run("одно новое имя", func(t *testing.T) {
+func Test_RenameOrDeleteValkey_WithConcurrentRequests_DoesNotLoseChanges(t *testing.T) {
+	t.Run("конкурентное переименование двух инстансов сохраняет новое имя только у одного", func(t *testing.T) {
 		first := newHTTPTestAPI(t, testAPIConfig{})
 		second := newHTTPTestAPI(t, testAPIConfig{})
 		owner := first.registerAccount(t, "")
@@ -185,7 +199,7 @@ func TestConcurrentNamesAndDeletesDoNotLoseChanges(t *testing.T) {
 			Where("user_id = ? AND name = ?", owner.ID, "same-name"), 1)
 	})
 
-	t.Run("два DELETE", func(t *testing.T) {
+	t.Run("два конкурентных запроса удаления создают по одной записи аудита и биллинга", func(t *testing.T) {
 		first := newHTTPTestAPI(t, testAPIConfig{})
 		second := newHTTPTestAPI(t, testAPIConfig{})
 		owner := first.registerAccount(t, "")
@@ -206,7 +220,7 @@ func TestConcurrentNamesAndDeletesDoNotLoseChanges(t *testing.T) {
 	})
 }
 
-func TestDeleteRejectsEveryLaterConfigurationMutation(t *testing.T) {
+func Test_MutateValkeyConfiguration_AfterDeleteRequest_RejectsEveryMutation(t *testing.T) {
 	first := newHTTPTestAPI(t, testAPIConfig{})
 	second := newHTTPTestAPI(t, testAPIConfig{})
 	owner := first.registerAccount(t, "")
@@ -235,7 +249,7 @@ func TestDeleteRejectsEveryLaterConfigurationMutation(t *testing.T) {
 	}
 }
 
-func TestQueuedDeletePrecedesEveryConfigurationMutation(t *testing.T) {
+func Test_DeleteValkey_WhenQueuedBeforeConfigurationMutation_TakesPrecedence(t *testing.T) {
 	builders := []struct {
 		name  string
 		build func(*testAPI, testAccount, uuid.UUID) concurrentRequest
@@ -281,7 +295,7 @@ func TestQueuedDeletePrecedesEveryConfigurationMutation(t *testing.T) {
 	}
 }
 
-func TestQueuedResizePrecedesDeleteAndDeleteClosesNewPeriod(t *testing.T) {
+func Test_DeleteValkey_WhenQueuedAfterResize_PreservesResizeAndClosesNewBillingPeriod(t *testing.T) {
 	first := newHTTPTestAPI(t, testAPIConfig{})
 	second := newHTTPTestAPI(t, testAPIConfig{})
 	owner := first.registerAccount(t, "")
@@ -328,7 +342,7 @@ func TestQueuedResizePrecedesDeleteAndDeleteClosesNewPeriod(t *testing.T) {
 	}
 }
 
-func TestConcurrentCreateHonorsInstanceLimit(t *testing.T) {
+func Test_CreateValkey_WithConcurrentRequestsAtInstanceLimit_AcceptsOnlyRemainingSlot(t *testing.T) {
 	first := newHTTPTestAPI(t, testAPIConfig{})
 	second := newHTTPTestAPI(t, testAPIConfig{})
 	seedOwner := first.registerAccount(t, "")

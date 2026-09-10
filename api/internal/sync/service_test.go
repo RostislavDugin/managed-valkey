@@ -13,7 +13,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-func TestProcessInstancesContinuesAfterFailure(t *testing.T) {
+func Test_ProcessInstances_WhenOneInstanceFails_ContinuesWithNextInstance(t *testing.T) {
 	failedID := uuid.Must(uuid.NewV7())
 	healthyID := uuid.Must(uuid.NewV7())
 	healthyCalled := make(chan struct{})

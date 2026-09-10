@@ -22,18 +22,18 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestEnvtestCT01CT02CT06CT07ReviewBoundaries(t *testing.T) {
+func Test_Envtest_CT01CT02CT06CT07_ReviewBoundaries_EnforceStatusFencingAndRecoveryContracts(t *testing.T) {
 	k8s := startReviewEnvtest(t)
-	t.Run("CT-01 serializes status updates", func(t *testing.T) {
+	t.Run("CT-01 при конфликте status повторяет запись и сохраняет конкурентные поля", func(t *testing.T) {
 		testEnvtestCT01StatusSerialization(t, k8s)
 	})
-	t.Run("CT-02 resets transport series on replies", func(t *testing.T) {
+	t.Run("CT-02 при ответе процесса сбрасывает серию транспортных ошибок", func(t *testing.T) {
 		testEnvtestCT02ObservationKinds(t, k8s)
 	})
-	t.Run("CT-06 rejects stale and live-node fencing", func(t *testing.T) {
+	t.Run("CT-06 при устаревшей идентичности или доступной ноде отклоняет ручное fencing", func(t *testing.T) {
 		testEnvtestCT06ManualFencing(t, k8s)
 	})
-	t.Run("CT-07 requires fencing before empty timeout", func(t *testing.T) {
+	t.Run("CT-07 до пустого восстановления требует fencing и полного таймаута", func(t *testing.T) {
 		testEnvtestCT07EmptyRecovery(t, k8s)
 	})
 }

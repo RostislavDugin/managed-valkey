@@ -11,7 +11,7 @@ type mutableClock struct{ now time.Time }
 
 func (c *mutableClock) Now() time.Time { return c.now }
 
-func TestRateLimiterUsesOneSlidingWindow(t *testing.T) {
+func Test_AllowRequest_WithSlidingWindow_LimitsEachClientIndependently(t *testing.T) {
 	clock := &mutableClock{now: time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)}
 	limiter := api.NewRateLimiter(clock, 2, time.Minute)
 

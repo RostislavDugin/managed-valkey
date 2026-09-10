@@ -11,7 +11,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-func TestOpenFailsWhenDatabaseUnreachable(t *testing.T) {
+func Test_OpenStore_WhenDatabaseIsUnreachable_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -27,7 +27,7 @@ func TestOpenFailsWhenDatabaseUnreachable(t *testing.T) {
 	}
 }
 
-func TestOpenFailsWhenURLIsEmpty(t *testing.T) {
+func Test_OpenStore_WithoutDatabaseUrl_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 

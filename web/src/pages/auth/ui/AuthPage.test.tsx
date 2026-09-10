@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe('экран авторизации с API', () => {
-  it('выполняет двухшаговый вход и оставляет подсказку менеджеру паролей', async () => {
+  it('для существующего аккаунта выполняет двухшаговый вход, сохраняет токен и помечает поле текущего пароля', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ exists: true }))
@@ -53,7 +53,7 @@ describe('экран авторизации с API', () => {
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBe(TOKEN);
   });
 
-  it('показывает регистрацию и сообщает о конкурентно созданном аккаунте', async () => {
+  it('для свободной почты показывает регистрацию, а после конфликта предлагает войти в созданный конкурентно аккаунт', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ exists: false }))
@@ -79,7 +79,7 @@ describe('экран авторизации с API', () => {
     expect(screen.getByRole('button', { name: 'Войти' })).toBeVisible();
   });
 
-  it('показывает срок ожидания после RATE_LIMITED', async () => {
+  it('после ответа RATE_LIMITED показывает пользователю срок до повторной проверки почты', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse(

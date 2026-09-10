@@ -16,7 +16,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestEnvtestCT08PasswordCleanupRetriesConflictAndPreservesConcurrentData(t *testing.T) {
+func Test_Envtest_CT08_CleanPreviousPasswordHash_WhenPatchConflicts_RetriesAndPreservesConcurrentData(t *testing.T) {
 	environment := &envtest.Environment{}
 	restConfig, err := environment.Start()
 	if err != nil {

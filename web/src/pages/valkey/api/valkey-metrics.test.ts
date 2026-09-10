@@ -40,20 +40,23 @@ beforeEach(() => {
 });
 
 describe('клиент метрик Valkey', () => {
-  it.each(METRIC_WINDOWS)('запрашивает окно %s у API', async (range) => {
-    const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(response());
-    const controller = new AbortController();
+  it.each(METRIC_WINDOWS)(
+    'для окна %s передаёт выбранный диапазон и идентификатор базы в API',
+    async (range) => {
+      const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(response());
+      const controller = new AbortController();
 
-    await getValkeyMetrics({ instanceId: INSTANCE_ID, range, signal: controller.signal });
+      await getValkeyMetrics({ instanceId: INSTANCE_ID, range, signal: controller.signal });
 
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      `/v1/managed/valkey/instances/${INSTANCE_ID}/metrics?range=${range}`
-    );
-    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
-  });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        `/v1/managed/valkey/instances/${INSTANCE_ID}/metrics?range=${range}`
+      );
+      expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    }
+  );
 
-  it('преобразует серверный DTO без автора и демонстрационного источника', async () => {
+  it('при получении метрик преобразует серверный DTO без добавления автора или демонстрационного источника', async () => {
     vi.spyOn(window, 'fetch').mockResolvedValue(response());
 
     const metrics = await getValkeyMetrics({
@@ -91,7 +94,7 @@ describe('клиент метрик Valkey', () => {
     expect(metrics).not.toHaveProperty('source');
   });
 
-  it('передаёт отмену запроса в fetch', async () => {
+  it('при отмене загрузки метрик передаёт исходный AbortSignal в fetch', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockImplementation((_, init) => {
       return new Promise((_, reject) => {
         init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });

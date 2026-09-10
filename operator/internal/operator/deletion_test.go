@@ -23,7 +23,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestDeletionStagesCloseRouteAndKeepSecretUntilProcessStops(t *testing.T) {
+func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilProcessStops(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	instance, pod, node, secret := processObservationObjects()
@@ -159,7 +159,7 @@ func TestDeletionStagesCloseRouteAndKeepSecretUntilProcessStops(t *testing.T) {
 	}
 }
 
-func TestDeletionWaitsWhenPodDisappearsWithoutProof(t *testing.T) {
+func Test_ReconcileDeletion_WhenPodDisappearsWithoutProof_WaitsUntilNodeDeletionProvesTermination(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Finalizers = []string{instanceFinalizer}
@@ -214,7 +214,7 @@ func TestDeletionWaitsWhenPodDisappearsWithoutProof(t *testing.T) {
 	}
 }
 
-func TestDeletionCopiesKnownTerminationToDuplicateHistory(t *testing.T) {
+func Test_ReconcileDeletion_WithDuplicateProcessHistory_CopiesKnownTerminationEvidence(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Finalizers = []string{instanceFinalizer}
@@ -247,15 +247,22 @@ func TestDeletionCopiesKnownTerminationToDuplicateHistory(t *testing.T) {
 	}
 }
 
-func TestDeletionBeforeWorkloadDoesNotCreateResources(t *testing.T) {
+func Test_ReconcileDeletion_BeforeWorkloadExists_RemovesInstanceWithoutCreatingResources(t *testing.T) {
 	tests := []struct {
 		name        string
 		phase       valkeyv1alpha1.InstancePhase
 		unsupported bool
 	}{
-		{name: "provisioning", phase: valkeyv1alpha1.InstancePhaseProvisioning},
-		{name: "error", phase: valkeyv1alpha1.InstancePhaseError},
-		{name: "unsupported change", phase: valkeyv1alpha1.InstancePhaseRunning, unsupported: true},
+		{
+			name:  "при подготовке инстанса удаляет CR без создания StatefulSet",
+			phase: valkeyv1alpha1.InstancePhaseProvisioning,
+		},
+		{name: "при ошибке инстанса удаляет CR без создания StatefulSet", phase: valkeyv1alpha1.InstancePhaseError},
+		{
+			name:        "при неподдерживаемом изменении удаляет CR без создания StatefulSet",
+			phase:       valkeyv1alpha1.InstancePhaseRunning,
+			unsupported: true,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -300,7 +307,7 @@ func TestDeletionBeforeWorkloadDoesNotCreateResources(t *testing.T) {
 	}
 }
 
-func TestDeletionContinuesWhenAppProcessIsUnavailable(t *testing.T) {
+func Test_ReconcileDeletion_WhenAppProcessIsUnavailable_ContinuesToStoppingStage(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, secret := processObservationObjects()
 	instance.Finalizers = []string{instanceFinalizer}
@@ -330,7 +337,7 @@ func TestDeletionContinuesWhenAppProcessIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestDeletionDoesNotStopWorkloadWhenSecretCannotBeRead(t *testing.T) {
+func Test_ReconcileDeletion_WhenSecretCannotBeRead_DoesNotStopWorkload(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, _ := processObservationObjects()
 	instance.Finalizers = []string{instanceFinalizer}

@@ -17,7 +17,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestCommandCancellation(t *testing.T) {
+func Test_SetAppUser_WhenContextIsCanceled_ReturnsContextCancellation(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "ACL" {
 			return "", false
@@ -48,7 +48,7 @@ func TestCommandCancellation(t *testing.T) {
 	}
 }
 
-func TestMutationIsNotRetriedAfterLostResponse(t *testing.T) {
+func Test_SetAppUser_WhenResponseIsLost_SendsMutationOnce(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "ACL" {
 			return "", true
@@ -71,7 +71,7 @@ func TestMutationIsNotRetriedAfterLostResponse(t *testing.T) {
 	}
 }
 
-func TestSensitiveCommandErrorDoesNotContainArguments(t *testing.T) {
+func Test_SetAppUser_WhenServerRejectsSensitiveCommand_RedactsArgumentsFromError(t *testing.T) {
 	const secret = "operator-secret"
 	hash := strings.Repeat("ab", 32)
 	server := newRESPServer(t, func(command []string) (string, bool) {
@@ -96,7 +96,7 @@ func TestSensitiveCommandErrorDoesNotContainArguments(t *testing.T) {
 	}
 }
 
-func TestTakeControlWaitsForAuthenticationAndReadsState(t *testing.T) {
+func Test_TakeControl_AfterAuthentication_ReadsStateAndKillsPreviousOperatorConnections(t *testing.T) {
 	hash := strings.Repeat("ab", 32)
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		switch command[0] {
@@ -153,7 +153,7 @@ func TestTakeControlWaitsForAuthenticationAndReadsState(t *testing.T) {
 	}
 }
 
-func TestObserveReadsStateWithoutKillingOperatorConnections(t *testing.T) {
+func Test_Observe_AfterAuthentication_ReadsStateWithoutKillingOperatorConnections(t *testing.T) {
 	hash := strings.Repeat("ab", 32)
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		switch command[0] {
@@ -189,7 +189,7 @@ func TestObserveReadsStateWithoutKillingOperatorConnections(t *testing.T) {
 	}
 }
 
-func TestAuthenticationErrorDoesNotContainPassword(t *testing.T) {
+func Test_TakeControl_WhenAuthenticationFails_RedactsPasswordAndClassifiesError(t *testing.T) {
 	const password = "operator-secret"
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "HELLO" {
@@ -215,7 +215,7 @@ func TestAuthenticationErrorDoesNotContainPassword(t *testing.T) {
 	}
 }
 
-func TestObservationErrorsAreClassifiedByServerReply(t *testing.T) {
+func Test_TakeControl_WhenObservationCommandFails_ClassifiesServerReply(t *testing.T) {
 	tests := []struct {
 		name     string
 		command  string
@@ -224,19 +224,28 @@ func TestObservationErrorsAreClassifiedByServerReply(t *testing.T) {
 		sentinel error
 	}{
 		{
-			name: "PING BUSY", command: "PING", reply: "-BUSY running a script\r\n",
-			kind: operatorvalkey.ErrorKindBusy, sentinel: operatorvalkey.ErrBusy,
+			name:     "при ответе BUSY на PING возвращает ошибку занятого процесса",
+			command:  "PING",
+			reply:    "-BUSY running a script\r\n",
+			kind:     operatorvalkey.ErrorKindBusy,
+			sentinel: operatorvalkey.ErrBusy,
 		},
 		{
-			name: "ROLE LOADING", command: "ROLE", reply: "-LOADING dataset\r\n",
-			kind: operatorvalkey.ErrorKindLoading, sentinel: operatorvalkey.ErrLoading,
+			name:     "при ответе LOADING на ROLE возвращает ошибку загрузки",
+			command:  "ROLE",
+			reply:    "-LOADING dataset\r\n",
+			kind:     operatorvalkey.ErrorKindLoading,
+			sentinel: operatorvalkey.ErrLoading,
 		},
 		{
-			name: "INFO NOAUTH", command: "INFO", reply: "-NOAUTH authentication required\r\n",
-			kind: operatorvalkey.ErrorKindAuth, sentinel: operatorvalkey.ErrAuthentication,
+			name:     "при ответе NOAUTH на INFO возвращает ошибку авторизации",
+			command:  "INFO",
+			reply:    "-NOAUTH authentication required\r\n",
+			kind:     operatorvalkey.ErrorKindAuth,
+			sentinel: operatorvalkey.ErrAuthentication,
 		},
 		{
-			name: "INFO server error", command: "INFO", reply: "-ERR unavailable\r\n",
+			name: "при серверной ошибке INFO возвращает ошибку сервера", command: "INFO", reply: "-ERR unavailable\r\n",
 			kind: operatorvalkey.ErrorKindServer,
 		},
 	}
@@ -267,7 +276,7 @@ func TestObservationErrorsAreClassifiedByServerReply(t *testing.T) {
 	}
 }
 
-func TestPingTimeoutIsTransportFailure(t *testing.T) {
+func Test_TakeControl_WhenPingTimesOut_ClassifiesTransportFailure(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "PING" {
 			return "", false
@@ -287,7 +296,7 @@ func TestPingTimeoutIsTransportFailure(t *testing.T) {
 	}
 }
 
-func TestRoleMutationsAreSentOnce(t *testing.T) {
+func Test_PromoteAndFollow_WhenChangingRole_SendEachMutationOnce(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "REPLICAOF" {
 			return "+OK\r\n", false
@@ -319,7 +328,7 @@ func TestRoleMutationsAreSentOnce(t *testing.T) {
 	}
 }
 
-func TestRoleMutationIsNotRetriedAfterLostResponse(t *testing.T) {
+func Test_Promote_WhenResponseIsLost_SendsRoleMutationOnce(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "REPLICAOF" {
 			return "", true
@@ -339,7 +348,7 @@ func TestRoleMutationIsNotRetriedAfterLostResponse(t *testing.T) {
 	}
 }
 
-func TestPasswordRotationPreservesAppStateInCommand(t *testing.T) {
+func Test_RotateAppPassword_WhenSendingCommand_PreservesAppEnabledState(t *testing.T) {
 	hash := strings.Repeat("cd", 32)
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if len(command) >= 2 && command[0] == "ACL" && command[1] == "SETUSER" {
@@ -369,10 +378,10 @@ func TestPasswordRotationPreservesAppStateInCommand(t *testing.T) {
 	}
 }
 
-func TestBusyRecoveryFallsBackFromScriptToFunction(t *testing.T) {
+func Test_StopBusy_WhenScriptIsNotRunningOrFunctionIsRunning_FallsBackToFunctionKill(t *testing.T) {
 	for name, scriptReply := range map[string]string{
-		"no Lua":        "-NOTBUSY No scripts in execution right now.\r\n",
-		"real Function": "-BUSY Valkey is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n",
+		"когда Lua-скрипт не выполняется, отправляет FUNCTION KILL": "-NOTBUSY No scripts in execution right now.\r\n",
+		"когда выполняется Function, отправляет FUNCTION KILL":      "-BUSY Valkey is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := newRESPServer(t, func(command []string) (string, bool) {
@@ -398,7 +407,7 @@ func TestBusyRecoveryFallsBackFromScriptToFunction(t *testing.T) {
 	}
 }
 
-func TestBusyRecoveryClassifiesUnkillable(t *testing.T) {
+func Test_StopBusy_WhenScriptCannotBeKilled_ClassifiesUnkillableWithoutFunctionKill(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if len(command) >= 2 && command[0] == "SCRIPT" && command[1] == "KILL" {
 			return "-UNKILLABLE script already executed write commands\r\n", false
@@ -442,7 +451,7 @@ func successfulObservationReply(command []string) string {
 	}
 }
 
-func TestClientCloseCallsHookOnce(t *testing.T) {
+func Test_ClientClose_WhenCalledRepeatedly_CallsHookOnce(t *testing.T) {
 	server := newRESPServer(t, func([]string) (string, bool) {
 		return "+OK\r\n", false
 	})
@@ -462,7 +471,7 @@ func TestClientCloseCallsHookOnce(t *testing.T) {
 	}
 }
 
-func TestLeaseLossCancelsChecksAndRejectsFurtherCommands(t *testing.T) {
+func Test_Session_WhenLeaseIsLost_CancelsActiveCheckAndRejectsFurtherCommands(t *testing.T) {
 	server := newRESPServer(t, func(command []string) (string, bool) {
 		if command[0] == "HELLO" {
 			return "+OK\r\n", false

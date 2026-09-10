@@ -8,7 +8,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
-func TestProductionIgnoresEnvoyProcessOverride(t *testing.T) {
+func Test_LoadEnvoyProcesses_WhenBuiltForProduction_IgnoresProcessOverride(t *testing.T) {
 	t.Setenv("VALKEY_ENVOY_PROCESSES", "1")
 	cfg, err := config.Load()
 	if err != nil {

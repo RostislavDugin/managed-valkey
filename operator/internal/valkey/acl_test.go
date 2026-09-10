@@ -7,7 +7,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestInitialACLStartsWithAppDisabled(t *testing.T) {
+func Test_InitialACL_WhenGenerated_StartsWithAppDisabledAndRestrictedServiceUsers(t *testing.T) {
 	acl := string(valkey.InitialACL(strings.Repeat("ab", 32), "operator", "replica", "health"))
 
 	for _, line := range []string{

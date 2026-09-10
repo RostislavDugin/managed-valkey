@@ -23,7 +23,7 @@ chmod +x "$resources"
 export MV_TEST_EVENTS=$events
 export MV_TEST_RESOURCES_SCRIPT=$resources
 if "$repo_root/scripts/run_operator_test_scenario.sh" \
-    run environment scenario '^TestScenario$' 1 1 100 1m \
+    run environment scenario '^Test_Scenario$' 1 1 100 1m \
     operator:image valkey:image binary "$temporary/results" archive; then
     echo "ошибка резерва была потеряна" >&2
     exit 1

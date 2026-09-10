@@ -16,7 +16,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-func TestValkeyAuditPagesUseHTTPAndPostgreSQL(t *testing.T) {
+func Test_ReadValkeyAuditPages_WithOwnerAndCursor_ReturnsOrderedPublicEvents(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	owner := app.registerAccount(t, "")
 	stranger := app.registerAccount(t, "")
@@ -125,7 +125,7 @@ func TestValkeyAuditPagesUseHTTPAndPostgreSQL(t *testing.T) {
 	}
 }
 
-func TestValkeyAuditValidatesQueryAndRejectsWrites(t *testing.T) {
+func Test_AccessValkeyAudit_WithInvalidQueryOrWrite_ReturnsValidationOrNotFound(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "audit-query"})
@@ -142,7 +142,7 @@ func TestValkeyAuditValidatesQueryAndRejectsWrites(t *testing.T) {
 		"?limit=1&limit=2",
 		"?before=broken&before=again",
 	} {
-		t.Run(query, func(t *testing.T) {
+		t.Run("недопустимые параметры "+query+" возвращают ошибку валидации", func(t *testing.T) {
 			response := app.requestJSON(t, http.MethodGet, base+query, nil, bearer(account.Token))
 			assertError(t, response, http.StatusBadRequest, string(apierr.CodeValidationFailed))
 		})
@@ -158,7 +158,7 @@ func TestValkeyAuditValidatesQueryAndRejectsWrites(t *testing.T) {
 	}
 }
 
-func TestValkeyAuditRemainsReadableAfterSoftDelete(t *testing.T) {
+func Test_ReadValkeyAudit_AfterSoftDelete_ReturnsPreservedHistory(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "deleted-audit"})

@@ -22,7 +22,7 @@ func (c fixedDatabaseClock) DatabaseTime(context.Context, *gorm.DB) (time.Time, 
 	return c.now, nil
 }
 
-func TestValkeyFreshnessBoundaryAndStatePriorityUseDatabaseTime(t *testing.T) {
+func Test_ResizeValkey_WithFreshStaleOrDeletingState_UsesDatabaseTimeAndStatePriority(t *testing.T) {
 	fixedNow := time.Date(2026, time.September, 8, 12, 0, 0, 123456000, time.UTC)
 	app := newHTTPTestAPI(t, testAPIConfig{
 		wrapDatabaseClock: func(valkeydomain.DatabaseClock) valkeydomain.DatabaseClock {
@@ -97,7 +97,7 @@ func TestValkeyFreshnessBoundaryAndStatePriorityUseDatabaseTime(t *testing.T) {
 	}
 }
 
-func TestValkeyPasswordValidationOrder(t *testing.T) {
+func Test_RotateValkeyPassword_WithPendingGenerationOrInvalidPassword_UsesExpectedValidationOrder(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{"name": "password-state"})

@@ -14,7 +14,7 @@ type fixedClock struct{ now time.Time }
 
 func (c fixedClock) Now() time.Time { return c.now }
 
-func TestTokenIssueAndVerify(t *testing.T) {
+func Test_IssueAndVerifyToken_WithValidUser_ReturnsUserAndConfiguredExpiry(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	userID, err := uuid.NewV7()
 	if err != nil {
@@ -45,7 +45,7 @@ func TestTokenIssueAndVerify(t *testing.T) {
 	}
 }
 
-func TestTokenRejectsInvalidValues(t *testing.T) {
+func Test_VerifyToken_WithInvalidClaimsSignatureOrAlgorithm_RejectsToken(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	service := auth.NewTokenService("secret", fixedClock{now: now})
 	userID, _ := uuid.NewV7()

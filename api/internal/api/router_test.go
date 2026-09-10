@@ -34,8 +34,8 @@ func (p *countingProbe) Ping(context.Context) error {
 	return nil
 }
 
-func TestHealthUsesHTTP(t *testing.T) {
-	t.Run("livez не зависит от PostgreSQL", func(t *testing.T) {
+func Test_CheckHealth_WithHttp_SeparatesLivenessFromPostgreSqlReadiness(t *testing.T) {
+	t.Run("запрос GET /livez при недоступной PostgreSQL возвращает успешный ответ", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{probe: stubProbe{err: errors.New("нет соединения")}})
 
 		response := app.requestJSON(t, http.MethodGet, api.PathLive, nil, nil)
@@ -43,7 +43,7 @@ func TestHealthUsesHTTP(t *testing.T) {
 		assertStatus(t, response, http.StatusOK)
 	})
 
-	t.Run("readyz использует настоящую PostgreSQL", func(t *testing.T) {
+	t.Run("запрос GET /readyz при доступной PostgreSQL возвращает успешный ответ", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 
 		response := app.requestJSON(t, http.MethodGet, api.PathReady, nil, nil)
@@ -51,7 +51,7 @@ func TestHealthUsesHTTP(t *testing.T) {
 		assertStatus(t, response, http.StatusOK)
 	})
 
-	t.Run("readyz возвращает ошибку зависимости", func(t *testing.T) {
+	t.Run("запрос GET /readyz при недоступной PostgreSQL возвращает ошибку зависимости", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{probe: stubProbe{err: errors.New("нет соединения")}})
 
 		response := app.requestJSON(t, http.MethodGet, api.PathReady, nil, nil)
@@ -59,7 +59,7 @@ func TestHealthUsesHTTP(t *testing.T) {
 		assertError(t, response, http.StatusServiceUnavailable, string(apierr.CodeUnavailable))
 	})
 
-	t.Run("readyz проверяет только PostgreSQL", func(t *testing.T) {
+	t.Run("запрос GET /readyz проверяет PostgreSQL ровно один раз", func(t *testing.T) {
 		probe := &countingProbe{}
 		app := newHTTPTestAPI(t, testAPIConfig{probe: probe})
 
@@ -72,7 +72,7 @@ func TestHealthUsesHTTP(t *testing.T) {
 	})
 }
 
-func TestMetricCleanupFailureDoesNotChangeReadiness(t *testing.T) {
+func Test_CheckReadiness_WhenMetricCleanupFails_RemainsReady(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	cleanupStarted := make(chan struct{})
 	blocked := func(ctx context.Context) error {
@@ -106,7 +106,7 @@ func TestMetricCleanupFailureDoesNotChangeReadiness(t *testing.T) {
 	runner.Wait()
 }
 
-func TestRequestIDUsesHTTPHeaders(t *testing.T) {
+func Test_HandleRequest_WithOrWithoutRequestIdHeader_ReturnsExpectedRequestId(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 
 	generated := app.requestJSON(t, http.MethodGet, api.PathLive, nil, nil).Header.Get(api.HeaderRequestID)
@@ -122,7 +122,7 @@ func TestRequestIDUsesHTTPHeaders(t *testing.T) {
 	}
 }
 
-func TestRequestLogKeepsHTTPSecretsOut(t *testing.T) {
+func Test_LogHttpRequest_WithSecretHeadersAndBody_OmitsSecrets(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 
 	response := app.requestRaw(t, http.MethodGet, api.PathLive, `{"password":"тайна-в-теле"}`, map[string]string{
@@ -140,7 +140,7 @@ func TestRequestLogKeepsHTTPSecretsOut(t *testing.T) {
 	}
 }
 
-func TestRecoveryUsesCommonHTTPError(t *testing.T) {
+func Test_RecoverHttpPanic_WithSecretValue_ReturnsCommonErrorWithoutLeakingSecret(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{addRoutes: func(router *gin.Engine) {
 		router.GET("/panic", func(*gin.Context) {
 			panic("Authorization: Bearer секрет-из-паники")
@@ -158,7 +158,7 @@ func TestRecoveryUsesCommonHTTPError(t *testing.T) {
 	}
 }
 
-func TestClientIPIgnoresForwardedHTTPHeader(t *testing.T) {
+func Test_LogClientIp_WithForwardedHeader_UsesDirectConnectionAddress(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 
 	response := app.requestJSON(t, http.MethodGet, api.PathLive, nil, map[string]string{

@@ -184,7 +184,7 @@ func (c *interceptUpdateClient) Update(
 	return c.Client.Update(ctx, object, options...)
 }
 
-func TestValkeyStateSyncThroughK3S(t *testing.T) {
+func Test_SynchronizeValkeyState_WithK3s_DeliversSpecAndImportsObservedState(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 32, 128)
@@ -311,7 +311,7 @@ func TestValkeyStateSyncThroughK3S(t *testing.T) {
 	assertImportedRows(t, app, created.ID, 0, 4)
 }
 
-func TestValkeyMetricsSyncThroughK3S(t *testing.T) {
+func Test_SynchronizeValkeyMetrics_WithK3s_ImportsValidSnapshotsAndSkipsDuplicates(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 32, 128)
@@ -434,7 +434,7 @@ func TestValkeyMetricsSyncThroughK3S(t *testing.T) {
 	assertInvalidMetricStatuses(t, app, current, nodes[0], secondCollectedAt)
 }
 
-func TestValkeyMetricImportLogsWriteFailureSafely(t *testing.T) {
+func Test_ImportValkeyMetrics_WhenDatabaseWriteFails_LogsFailureWithoutSecretData(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	app.startSync(t)
@@ -487,7 +487,7 @@ func TestValkeyMetricImportLogsWriteFailureSafely(t *testing.T) {
 	}
 }
 
-func TestValkeySyncStorePreservesIntentAndRollsBackObservation(t *testing.T) {
+func Test_ImportValkeyObservation_WithConcurrentIntentOrInvalidData_PreservesIntentAndRollsBack(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 32, 128)
@@ -713,20 +713,20 @@ func assertInvalidMetricStatuses(
 		metrics []valkeyv1alpha1.NodeMetricStatus
 	}{
 		{
-			name: "повтор ordinal",
+			name: "снимок с повторным ordinal отклоняется целиком",
 			metrics: []valkeyv1alpha1.NodeMetricStatus{
 				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRolePrimary, nil, 100),
 				testNodeMetricStatus(node, collectedAt.Add(time.Second), valkeyv1alpha1.NodeRolePrimary, nil, 100),
 			},
 		},
 		{
-			name: "отрицательный показатель",
+			name: "снимок с отрицательным показателем отклоняется целиком",
 			metrics: []valkeyv1alpha1.NodeMetricStatus{
 				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRolePrimary, nil, -1),
 			},
 		},
 		{
-			name: "неизвестная роль",
+			name: "снимок с неизвестной ролью отклоняется целиком",
 			metrics: []valkeyv1alpha1.NodeMetricStatus{
 				testNodeMetricStatus(node, collectedAt, valkeyv1alpha1.NodeRole("unknown"), nil, 100),
 			},
@@ -744,35 +744,43 @@ func assertInvalidMetricStatuses(
 	}
 }
 
-func TestValkeySyncRequiresRecoveryForLostObjects(t *testing.T) {
-	t.Run("потерянный Namespace", func(t *testing.T) {
-		app := newHTTPTestAPI(t, testAPIConfig{})
-		app.startSync(t)
-		app.stopSync()
-		account := app.registerAccount(t, "")
-		created := createValkey(t, app, account, map[string]any{"name": "lost-namespace", "prefix": "lostnamespace"})
-		if err := app.database.BindValkeyNamespaceUID(
-			context.Background(),
-			created.ID,
-			"missing-namespace-uid",
-		); err != nil {
-			t.Fatalf("подготовить UID отсутствующего Namespace: %v", err)
-		}
+func Test_SynchronizeValkeyObjects_WhenManagedObjectIsLost_RequiresRecoveryBeforeRecreation(t *testing.T) {
+	t.Run(
+		"потерянное пространство имён Kubernetes требует восстановления и не создаётся заново автоматически",
+		func(t *testing.T) {
+			app := newHTTPTestAPI(t, testAPIConfig{})
+			app.startSync(t)
+			app.stopSync()
+			account := app.registerAccount(t, "")
+			created := createValkey(
+				t,
+				app,
+				account,
+				map[string]any{"name": "lost-namespace", "prefix": "lostnamespace"},
+			)
+			if err := app.database.BindValkeyNamespaceUID(
+				context.Background(),
+				created.ID,
+				"missing-namespace-uid",
+			); err != nil {
+				t.Fatalf("подготовить UID отсутствующего Namespace: %v", err)
+			}
 
-		if err := app.syncService.RunDelivery(context.Background()); err != nil {
-			t.Fatalf("выполнить сверку после потери Namespace: %v", err)
-		}
-		waitForSyncRecoveryReason(t, app, created.ID, true)
-		if err := app.adminKubernetes.Get(
-			context.Background(),
-			client.ObjectKey{Name: "valkey-" + created.Slug},
-			&corev1.Namespace{},
-		); !apierrors.IsNotFound(err) {
-			t.Fatalf("потерянный Namespace был создан заново: %v", err)
-		}
-	})
+			if err := app.syncService.RunDelivery(context.Background()); err != nil {
+				t.Fatalf("выполнить сверку после потери Namespace: %v", err)
+			}
+			waitForSyncRecoveryReason(t, app, created.ID, true)
+			if err := app.adminKubernetes.Get(
+				context.Background(),
+				client.ObjectKey{Name: "valkey-" + created.Slug},
+				&corev1.Namespace{},
+			); !apierrors.IsNotFound(err) {
+				t.Fatalf("потерянный Namespace был создан заново: %v", err)
+			}
+		},
+	)
 
-	t.Run("потерянный Secret", func(t *testing.T) {
+	t.Run("потерянный объект Secret требует восстановления и не создаётся заново автоматически", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 		account := app.registerAccount(t, "")
 		app.startSync(t)
@@ -843,51 +851,54 @@ func TestValkeySyncRequiresRecoveryForLostObjects(t *testing.T) {
 		})
 	})
 
-	t.Run("потерянный ValkeyInstance", func(t *testing.T) {
-		app := newHTTPTestAPI(t, testAPIConfig{})
-		account := app.registerAccount(t, "")
-		app.startSync(t)
-		created := createValkey(t, app, account, map[string]any{"name": "lost-resource", "prefix": "lostcr"})
-		namespaceName := "valkey-" + created.Slug
-		t.Cleanup(func() {
+	t.Run(
+		"потерянный объект ValkeyInstance требует восстановления и не создаётся заново автоматически",
+		func(t *testing.T) {
+			app := newHTTPTestAPI(t, testAPIConfig{})
+			account := app.registerAccount(t, "")
+			app.startSync(t)
+			created := createValkey(t, app, account, map[string]any{"name": "lost-resource", "prefix": "lostcr"})
+			namespaceName := "valkey-" + created.Slug
+			t.Cleanup(func() {
+				app.stopSync()
+				cleanupSyncNamespace(t, app, namespaceName)
+			})
+
+			resource := waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool {
+				return true
+			})
+			confirmValkeyStatus(t, app, resource)
+			waitForHTTPInstance(t, app, account, created.ID, func(instance valkeydomain.Instance) bool {
+				return instance.ObservedGeneration == 1
+			})
 			app.stopSync()
-			cleanupSyncNamespace(t, app, namespaceName)
-		})
 
-		resource := waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool {
-			return true
-		})
-		confirmValkeyStatus(t, app, resource)
-		waitForHTTPInstance(t, app, account, created.ID, func(instance valkeydomain.Instance) bool {
-			return instance.ObservedGeneration == 1
-		})
-		app.stopSync()
-
-		resource = &valkeyv1alpha1.ValkeyInstance{}
-		key := client.ObjectKey{Namespace: namespaceName, Name: created.Slug}
-		if err := app.adminKubernetes.Get(context.Background(), key, resource); err != nil {
-			t.Fatalf("перечитать удаляемый ValkeyInstance: %v", err)
-		}
-		resource.Finalizers = nil
-		if err := app.adminKubernetes.Update(context.Background(), resource); err != nil {
-			t.Fatalf("снять защитную отметку потерянного ValkeyInstance: %v", err)
-		}
-		if err := app.adminKubernetes.Delete(context.Background(), resource); err != nil {
-			t.Fatalf("удалить ValkeyInstance вне протокола: %v", err)
-		}
-		if err := app.syncService.RunDelivery(context.Background()); err != nil {
-			t.Fatalf("выполнить сверку после потери ValkeyInstance: %v", err)
-		}
-		waitForSyncRecoveryReason(t, app, created.ID, true)
-		if err := app.adminKubernetes.Get(
-			context.Background(), client.ObjectKey{Name: namespaceName}, &corev1.Namespace{},
-		); err != nil {
-			t.Fatalf("Namespace удалён после потери ValkeyInstance: %v", err)
-		}
-	})
+			resource = &valkeyv1alpha1.ValkeyInstance{}
+			key := client.ObjectKey{Namespace: namespaceName, Name: created.Slug}
+			if err := app.adminKubernetes.Get(context.Background(), key, resource); err != nil {
+				t.Fatalf("перечитать удаляемый ValkeyInstance: %v", err)
+			}
+			resource.Finalizers = nil
+			if err := app.adminKubernetes.Update(context.Background(), resource); err != nil {
+				t.Fatalf("снять защитную отметку потерянного ValkeyInstance: %v", err)
+			}
+			if err := app.adminKubernetes.Delete(context.Background(), resource); err != nil {
+				t.Fatalf("удалить ValkeyInstance вне протокола: %v", err)
+			}
+			if err := app.syncService.RunDelivery(context.Background()); err != nil {
+				t.Fatalf("выполнить сверку после потери ValkeyInstance: %v", err)
+			}
+			waitForSyncRecoveryReason(t, app, created.ID, true)
+			if err := app.adminKubernetes.Get(
+				context.Background(), client.ObjectKey{Name: namespaceName}, &corev1.Namespace{},
+			); err != nil {
+				t.Fatalf("Namespace удалён после потери ValkeyInstance: %v", err)
+			}
+		},
+	)
 }
 
-func TestValkeySyncLeavesForeignAndOrphanNamespacesUntouched(t *testing.T) {
+func Test_SynchronizeValkeyNamespaces_WithForeignOrOrphanNamespaces_LeavesThemUntouched(t *testing.T) {
 	generator := &sequenceSlugGenerator{values: []string{"aaaaaa", "bbbbbb"}}
 	app := newHTTPTestAPI(t, testAPIConfig{slugGenerator: generator})
 	account := app.registerAccount(t, "")
@@ -973,7 +984,7 @@ func TestValkeySyncLeavesForeignAndOrphanNamespacesUntouched(t *testing.T) {
 	}
 }
 
-func TestValkeySyncContinuesPasswordDeliveryAndRetriesConflict(t *testing.T) {
+func Test_DeliverValkeyPassword_WithConcurrentSecretChanges_PreservesFieldsAndRetriesConflict(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	app.startSync(t)
@@ -1089,8 +1100,8 @@ func TestValkeySyncContinuesPasswordDeliveryAndRetriesConflict(t *testing.T) {
 	}
 }
 
-func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
-	t.Run("доставка", func(t *testing.T) {
+func Test_SynchronizeValkey_WithConcurrentDelete_CoordinatesDeliveryAndObservationImport(t *testing.T) {
+	t.Run("параллельное удаление во время доставки не оставляет Kubernetes-объекты", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 		account := app.registerAccount(t, "")
 		app.startSync(t)
@@ -1136,7 +1147,7 @@ func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
 		completeDeletionWithoutOperator(t, app, created.Slug, created.ID)
 	})
 
-	t.Run("импорт", func(t *testing.T) {
+	t.Run("параллельное удаление во время импорта не восстанавливает удаляемое состояние", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 		account := app.registerAccount(t, "")
 		app.startSync(t)
@@ -1188,7 +1199,7 @@ func TestValkeySyncCoordinatesWithConcurrentDelete(t *testing.T) {
 	})
 }
 
-func TestValkeySyncTransportFailureDoesNotAffectHTTPReadiness(t *testing.T) {
+func Test_SynchronizeValkey_WhenKubernetesTransportFails_DoesNotAffectHttpReadiness(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	app.startSync(t)
@@ -1214,8 +1225,8 @@ func TestValkeySyncTransportFailureDoesNotAffectHTTPReadiness(t *testing.T) {
 	waitForValkeyInstance(t, app, created.Slug, func(*valkeyv1alpha1.ValkeyInstance) bool { return true })
 }
 
-func TestValkeySyncRecoversCreateBoundaries(t *testing.T) {
-	t.Run("потерянный ответ Create", func(t *testing.T) {
+func Test_DeliverValkeyObjects_AfterLostCreateResponseOrEarlyCancellation_RecoversWithoutDuplicates(t *testing.T) {
+	t.Run("потерянный ответ на создание восстанавливается без повторного объекта Kubernetes", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 		account := app.registerAccount(t, "")
 		app.startSync(t)
@@ -1251,7 +1262,7 @@ func TestValkeySyncRecoversCreateBoundaries(t *testing.T) {
 		}
 	})
 
-	t.Run("отмена до первого CR", func(t *testing.T) {
+	t.Run("отмена до создания ValkeyInstance позволяет следующему проходу завершить доставку", func(t *testing.T) {
 		app := newHTTPTestAPI(t, testAPIConfig{})
 		account := app.registerAccount(t, "")
 		app.startSync(t)

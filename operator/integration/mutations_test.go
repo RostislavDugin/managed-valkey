@@ -293,7 +293,7 @@ func credentialRotationConfirmed(
 	return false
 }
 
-func TestPW01RZ01SinglePasswordAndResize(t *testing.T) {
+func Test_PW01RZ01_RotatePasswordAndResizeSingle_PreservesDataAndCredentials(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -344,7 +344,7 @@ func TestPW01RZ01SinglePasswordAndResize(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW08FencedProcessKeepsAppOffDuringRotation(t *testing.T) {
+func Test_PW08_RotatePassword_WithFencedProcess_KeepsApplicationAccessDisabledUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -402,7 +402,7 @@ func TestPW08FencedProcessKeepsAppOffDuringRotation(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW03RotationStagesAndUnknownResultsResume(t *testing.T) {
+func Test_PW03_ResumePasswordRotation_AfterRestartsAndUnknownResults_CompletesEveryStage(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -580,7 +580,7 @@ func TestPW03RotationStagesAndUnknownResultsResume(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW05ReplicaFailureBeforeAndAfterConfirmation(t *testing.T) {
+func Test_PW05_RotatePassword_WhenReplicaFailsBeforeOrAfterConfirmation_RecoversWithoutDataLoss(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -689,7 +689,7 @@ func TestPW05ReplicaFailureBeforeAndAfterConfirmation(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW06LiveIsolatedReplicaBlocksRotationUntilReturn(t *testing.T) {
+func Test_PW06_RotatePassword_WithLiveIsolatedReplica_WaitsForReplicaReturn(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -793,7 +793,7 @@ func TestPW06LiveIsolatedReplicaBlocksRotationUntilReturn(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW07AgentLossCompletesRotationWithoutReplacementCapacity(t *testing.T) {
+func Test_PW07_RotatePassword_WhenAgentIsDestroyedWithoutReplacementCapacity_CompletesInDegradedState(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -887,7 +887,7 @@ func TestPW07AgentLossCompletesRotationWithoutReplacementCapacity(t *testing.T) 
 	h.deleteInstance(t, instance)
 }
 
-func TestPW04PrimaryFailureDuringRotationUsesTargetPassword(t *testing.T) {
+func Test_PW04_RotatePassword_WhenPrimaryFails_UsesTargetPasswordDuringFailover(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -976,7 +976,9 @@ func TestPW04PrimaryFailureDuringRotationUsesTargetPassword(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestPW09CompletedRotationDoesNotDisconnectAndFuturePodUsesCurrentPassword(t *testing.T) {
+func Test_PW09_ObserveCompletedPasswordRotation_WithoutFurtherChanges_KeepsConnectionsAndUsesCurrentPasswordForReplacement(
+	t *testing.T,
+) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1052,7 +1054,7 @@ func TestPW09CompletedRotationDoesNotDisconnectAndFuturePodUsesCurrentPassword(t
 	h.deleteInstance(t, instance)
 }
 
-func TestPW10PasswordPrecedesResizeAndDeletionPreemptsRotation(t *testing.T) {
+func Test_PW10_ApplyPasswordResizeAndDeletion_WhenRequestedTogether_OrdersAndPreemptsOperationsSafely(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1237,15 +1239,15 @@ func verifyPW10DeletionPreemption(
 	h.waitDeleted(t, instance)
 }
 
-func TestDL01DeletionDuringUnknownCandidate(t *testing.T) {
+func Test_DL01_DeleteInstance_WhenFailoverCandidateOutcomeIsUnknown_WaitsForTerminationEvidence(t *testing.T) {
 	testDL01DeletionDuringOperation(t, "unknown-candidate")
 }
 
-func TestDL01DeletionDuringShrink(t *testing.T) {
+func Test_DL01_DeleteInstance_WhenHAShrinkIsInProgress_WaitsForTerminationEvidence(t *testing.T) {
 	testDL01DeletionDuringOperation(t, "shrink")
 }
 
-func TestDL01DeletionDuringPasswordRotation(t *testing.T) {
+func Test_DL01_DeleteInstance_WhenPasswordRotationIsInProgress_WaitsForTerminationEvidence(t *testing.T) {
 	testDL01DeletionDuringOperation(t, "password-rotation")
 }
 
@@ -1418,11 +1420,11 @@ func assertDeletionFinalizerBoundary(
 	}
 }
 
-func TestDL02DeletionAfterAgentDestroyed(t *testing.T) {
+func Test_DL02_DeleteInstance_AfterAgentIsDestroyed_AcceptsNodeDeletionAsTerminationEvidence(t *testing.T) {
 	testDL02DL03NodeFailureDuringDeletion(t, "agent-destroyed")
 }
 
-func TestDL03DeletionWithLiveIsolatedAgent(t *testing.T) {
+func Test_DL03_DeleteInstance_WithLiveIsolatedAgent_WaitsForProcessTermination(t *testing.T) {
 	testDL02DL03NodeFailureDuringDeletion(t, "live-isolated-agent")
 }
 
@@ -1541,7 +1543,7 @@ func testDL02DL03NodeFailureDuringDeletion(t *testing.T, scenario string) {
 	}
 }
 
-func TestDL04HADeletionRestartsAtEveryStage(t *testing.T) {
+func Test_DL04_ResumeHADeletion_WhenOperatorRestartsAtEveryStage_CompletesSafely(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1749,7 +1751,7 @@ func waitForValkeyInstanceDeletion(t *testing.T, h *harness, instance *testInsta
 	}
 }
 
-func TestCT09CredentialLossRestoresWithoutRegenerationOrLeaks(t *testing.T) {
+func Test_CT09_ReconcileCredentialLoss_WhenSecretOrServiceFieldReturns_ReusesCredentialsWithoutLeaks(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1919,7 +1921,7 @@ func TestCT09CredentialLossRestoresWithoutRegenerationOrLeaks(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestCT10CT11SingleRegressionAfterHAFailureAndMutation(t *testing.T) {
+func Test_CT10CT11_RunSingleLifecycle_AfterHAFailureAndMutation_PreservesInstanceIsolation(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2159,7 +2161,7 @@ func deletionAgentProcess(
 	return valkeyv1alpha1.NodeStatus{}
 }
 
-func TestPW02PasswordHashAndSpecDeliveryOrder(t *testing.T) {
+func Test_PW02_RotatePassword_WithHashAndSpecDeliveredInEitherOrder_WaitsForBothInputs(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2242,7 +2244,7 @@ func TestPW02PasswordHashAndSpecDeliveryOrder(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ03HAShrinkStartsEmpty(t *testing.T) {
+func Test_RZ03_ShrinkHA_WithFullStop_StartsEmptyOnTargetSize(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2282,7 +2284,7 @@ func TestRZ03HAShrinkStartsEmpty(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ08HAShrinkRestartsKeepWorkloadStoppedUntilTargetTemplate(t *testing.T) {
+func Test_RZ08_ResumeHAShrink_AfterRestarts_KeepsWorkloadStoppedUntilTargetTemplate(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2374,7 +2376,7 @@ func TestRZ08HAShrinkRestartsKeepWorkloadStoppedUntilTargetTemplate(t *testing.T
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ08HARollingRestartsAtTemplateDeleteAndAppliedBoundaries(t *testing.T) {
+func Test_RZ08_ResumeHARollingResize_AfterRestartsAtMutationBoundaries_PreservesData(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2495,7 +2497,7 @@ func TestRZ08HARollingRestartsAtTemplateDeleteAndAppliedBoundaries(t *testing.T)
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ04PendingCapacityKeepsAcceptedRolloutUnapplied(t *testing.T) {
+func Test_RZ04_ResizeHA_WhenReplacementHasNoCapacity_KeepsAcceptedRolloutUnapplied(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2583,7 +2585,7 @@ func TestRZ04PendingCapacityKeepsAcceptedRolloutUnapplied(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ05PrimaryFailureKeepsRolloutTarget(t *testing.T) {
+func Test_RZ05_ResumeHARollout_WhenPrimaryFails_KeepsAcceptedTarget(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2672,7 +2674,7 @@ func TestRZ05PrimaryFailureKeepsRolloutTarget(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ07AgentLossDuringRollingAndFullStopResumesRollout(t *testing.T) {
+func Test_RZ07_ResumeHARollout_WhenAgentIsDestroyedDuringRollingOrFullStop_CompletesTarget(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2809,7 +2811,9 @@ func TestRZ07AgentLossDuringRollingAndFullStopResumesRollout(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ11EarlyGenerationAndDeletionKeepAcceptedRollout(t *testing.T) {
+func Test_RZ11_ProcessCompetingGenerationAndDeletion_WhenHARolloutIsInProgress_PreservesAcceptedTargetAndPrioritizesDeletion(
+	t *testing.T,
+) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2958,7 +2962,7 @@ func (h *harness) getInstanceStatefulSet(t *testing.T, instance *testInstance) *
 	return statefulSet
 }
 
-func TestRZ09OldPodRestartKeepsOriginalConfig(t *testing.T) {
+func Test_RZ09_RestartOldPod_WhenHARolloutIsInProgress_UsesOriginalConfiguration(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -3035,7 +3039,7 @@ func TestRZ09OldPodRestartKeepsOriginalConfig(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ06UpdatedReplicaFailureWaitsForSynchronizedReplacement(t *testing.T) {
+func Test_RZ06_ResumeHARollout_WhenUpdatedReplicaFails_WaitsForSynchronizedReplacement(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })

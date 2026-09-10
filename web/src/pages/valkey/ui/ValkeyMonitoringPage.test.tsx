@@ -148,7 +148,7 @@ beforeEach(() => {
 });
 
 describe('экран мониторинга', () => {
-  it('показывает сводку, четыре графика, единицы, роли и разрывы', async () => {
+  it('после загрузки метрик показывает сводку, четыре графика, единицы измерения, роли нод и разрывы данных', async () => {
     renderPage();
 
     expect(await screen.findAllByTestId('area-chart')).toHaveLength(4);
@@ -175,7 +175,7 @@ describe('экран мониторинга', () => {
     expect(screen.getAllByTestId('area-chart')[1]).toHaveAttribute('data-y-domain', '[0,100]');
   });
 
-  it('выбирает все ноды при первом запросе в StrictMode', async () => {
+  it('при первом ответе в StrictMode выбирает все ноды и не теряет выбор после повторного эффекта', async () => {
     render(<StrictMode>{withProviders(<ValkeyMonitoringPage />)}</StrictMode>);
 
     expect(
@@ -184,7 +184,7 @@ describe('экран мониторинга', () => {
     expect(screen.getAllByRole('button', { name: /показана/ })).toHaveLength(3);
   });
 
-  it('меняет видимость ноды с клавиатуры и сохраняет выбор при смене окна', async () => {
+  it('при управлении с клавиатуры меняет видимость ноды и сохраняет выбранные ноды после смены окна', async () => {
     const user = userEvent.setup();
     renderPage();
     const replica = await screen.findByRole('button', { name: /valkey-1, реплика, показана/ });
@@ -199,7 +199,7 @@ describe('экран мониторинга', () => {
     expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute('data-points', '336');
   });
 
-  it('открывает подсказку мышью и переводит фокус между точками', async () => {
+  it('при работе с графиком открывает подсказку мышью и перемещает фокус между точками с клавиатуры', async () => {
     const user = userEvent.setup();
     renderPage();
     const charts = await screen.findAllByTestId('area-chart');
@@ -237,20 +237,23 @@ describe('экран мониторинга', () => {
     ['1 час', '1h', 60],
     ['24 часа', '24h', 288],
     ['7 дней', '7d', 336],
-  ] as const)('загружает окно %s с %s точками', async (label, range, count) => {
-    const user = userEvent.setup();
-    renderPage();
-    await screen.findAllByTestId('area-chart');
+  ] as const)(
+    'после выбора периода %s загружает окно %s и показывает ожидаемое число точек',
+    async (label, range, count) => {
+      const user = userEvent.setup();
+      renderPage();
+      await screen.findAllByTestId('area-chart');
 
-    await user.click(screen.getByText(label));
+      await user.click(screen.getByText(label));
 
-    await waitFor(() =>
-      expect(getValkeyMetrics).toHaveBeenLastCalledWith(expect.objectContaining({ range }))
-    );
-    expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute('data-points', String(count));
-  });
+      await waitFor(() =>
+        expect(getValkeyMetrics).toHaveBeenLastCalledWith(expect.objectContaining({ range }))
+      );
+      expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute('data-points', String(count));
+    }
+  );
 
-  it('показывает пустой ответ', async () => {
+  it('если сервер не вернул ни одной ноды, показывает отдельное пустое состояние без графиков', async () => {
     vi.mocked(getValkeyMetrics).mockResolvedValue({
       from: '2026-09-09T10:00:00Z',
       to: '2026-09-09T10:05:00Z',
@@ -263,7 +266,7 @@ describe('экран мониторинга', () => {
     expect(await screen.findByRole('heading', { name: 'Метрик пока нет' })).toBeVisible();
   });
 
-  it('выбирает ноды, которые появились после пустого ответа', async () => {
+  it('после пустого первого ответа автоматически выбирает ноды, появившиеся при следующей загрузке', async () => {
     vi.mocked(getValkeyMetrics)
       .mockResolvedValueOnce({
         from: '2026-09-09T10:00:00Z',
@@ -283,7 +286,7 @@ describe('экран мониторинга', () => {
     ).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('показывает ошибку и повторяет запрос', async () => {
+  it('после ошибки загрузки показывает сообщение и по кнопке повторяет запрос метрик', async () => {
     vi.mocked(getValkeyMetrics)
       .mockRejectedValueOnce(new Error('Сеть недоступна'))
       .mockResolvedValueOnce(response('5m'));
@@ -299,7 +302,7 @@ describe('экран мониторинга', () => {
     expect(await screen.findByRole('heading', { name: 'Использованная память' })).toBeVisible();
   });
 
-  it('отбрасывает поздний ответ прежнего окна', async () => {
+  it('после смены окна отбрасывает поздний ответ предыдущего запроса и показывает актуальные метрики', async () => {
     const hour = deferred<ValkeyMetricsResponse>();
     const day = deferred<ValkeyMetricsResponse>();
     vi.mocked(getValkeyMetrics).mockImplementation(({ range }) => {
@@ -327,7 +330,7 @@ describe('экран мониторинга', () => {
     expect(await screen.findAllByText(/24\sоп\/\u0441/)).toHaveLength(3);
   });
 
-  it('обновляет метрики раз в пять секунд без параллельных запросов', async () => {
+  it('при периодическом обновлении запрашивает метрики каждые пять секунд и не создаёт параллельных запросов', async () => {
     vi.useFakeTimers();
     const first = deferred<ValkeyMetricsResponse>();
     const second = deferred<ValkeyMetricsResponse>();

@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 describe('удаление базы', () => {
-  it('отправляет DELETE только после ввода точного slug', async () => {
+  it('при удалении базы разрешает отправить DELETE только после ввода её точного slug', async () => {
     const fetchMock = vi
       .spyOn(window, 'fetch')
       .mockResolvedValue(new Response(null, { status: 202 }));

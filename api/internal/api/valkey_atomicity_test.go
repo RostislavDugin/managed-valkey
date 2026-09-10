@@ -45,7 +45,7 @@ type atomicMutation struct {
 	success       int
 }
 
-func TestEveryValkeyMutationRollsBackOnAuditFailure(t *testing.T) {
+func Test_MutateValkey_WhenAuditWriteFails_RollsBackEveryMutation(t *testing.T) {
 	mutations := []atomicMutation{
 		{
 			name: "PATCH", action: audit.ActionInstanceUpdate, success: http.StatusOK,
@@ -131,7 +131,7 @@ func TestEveryValkeyMutationRollsBackOnAuditFailure(t *testing.T) {
 	}
 }
 
-func TestCreateRollsBackOnAuditFailure(t *testing.T) {
+func Test_CreateValkey_WhenAuditWriteFails_RollsBackTransaction(t *testing.T) {
 	for _, afterWrite := range []bool{false, true} {
 		name := "до вставки"
 		if afterWrite {
@@ -161,8 +161,8 @@ func TestCreateRollsBackOnAuditFailure(t *testing.T) {
 	}
 }
 
-func TestIdempotencyWriteFailureRollsBackEarlierWrites(t *testing.T) {
-	t.Run("create", func(t *testing.T) {
+func Test_MutateValkey_WhenIdempotencyWriteFails_RollsBackEarlierWrites(t *testing.T) {
+	t.Run("отказ записи ключа идемпотентности при создании откатывает предшествующие записи", func(t *testing.T) {
 		setup := newHTTPTestAPI(t, testAPIConfig{})
 		owner := setup.registerAccount(t, "")
 		before := loadValkeyDatabaseSnapshot(t, setup, owner.ID)

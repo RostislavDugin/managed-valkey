@@ -11,10 +11,10 @@ maximum=$temporary/maximum
 
 printf '%s\n' \
     $'scenario\ttest_pattern\tnodes\tenvoy_replicas\tmemory_mib\testimated_seconds\ttimeout' \
-    $'first\t^TestFirst$\t1\t1\t100\t40\t1m' \
-    $'second\t^TestSecond$\t2\t1\t100\t30\t1m' \
-    $'third\t^TestThird$\t3\t1\t100\t20\t1m' \
-    $'fourth\t^TestFourth$\t4\t2\t100\t10\t1m' >"$catalog"
+    $'first\t^Test_First$\t1\t1\t100\t40\t1m' \
+    $'second\t^Test_Second$\t2\t1\t100\t30\t1m' \
+    $'third\t^Test_Third$\t3\t1\t100\t20\t1m' \
+    $'fourth\t^Test_Fourth$\t4\t2\t100\t10\t1m' >"$catalog"
 : >"$events"
 printf '0\n' >"$active"
 printf '0\n' >"$maximum"
@@ -62,7 +62,7 @@ write_script "$temporary/job" \
     'attempt="$results_root/$scenario/attempts/1"' \
     'mkdir -p "$attempt"' \
     'printf '\''pass\n'\'' >"$attempt/status"' \
-    'printf -- '\''--- PASS: Test%s\n'\'' "${scenario^}" >"$attempt/log"' \
+    'printf -- '\''--- PASS: Test_%s\n'\'' "${scenario^}" >"$attempt/log"' \
     'printf '\''1\n'\'' >"$attempt/duration"'
 write_script "$temporary/network" \
     'exec 9>"$MV_TEST_COUNTER_LOCK"' \

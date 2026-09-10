@@ -10,7 +10,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestBuildMetricSnapshotsKeepsValidNeighborsAndSnapshotRole(t *testing.T) {
+func Test_BuildMetricSnapshots_WithMixedProcessIdentities_KeepsValidNeighborsAndSnapshotRole(t *testing.T) {
 	collectedAt := time.Date(2026, time.September, 9, 12, 34, 56, 123456000, time.UTC)
 	cpu := int64(125)
 	resource := &valkeyv1alpha1.ValkeyInstance{Status: valkeyv1alpha1.ValkeyInstanceStatus{
@@ -55,7 +55,7 @@ func TestBuildMetricSnapshotsKeepsValidNeighborsAndSnapshotRole(t *testing.T) {
 	}
 }
 
-func TestBuildMetricSnapshotsRejectsInvalidFields(t *testing.T) {
+func Test_BuildMetricSnapshots_WithInvalidFields_RejectsSnapshot(t *testing.T) {
 	collectedAt := time.Date(2026, time.September, 9, 12, 34, 56, 0, time.UTC)
 	resource := &valkeyv1alpha1.ValkeyInstance{Status: valkeyv1alpha1.ValkeyInstanceStatus{
 		Nodes: []valkeyv1alpha1.NodeStatus{
@@ -67,18 +67,33 @@ func TestBuildMetricSnapshotsRejectsInvalidFields(t *testing.T) {
 		name   string
 		mutate func(*valkeyv1alpha1.NodeMetricStatus)
 	}{
-		{name: "пустой Pod UID", mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) { metric.PodUID = "" }},
-		{name: "нулевое время", mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
-			metric.CollectedAt = metav1.MicroTime{}
-		}},
-		{name: "неизвестная роль", mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) { metric.Role = "unknown" }},
-		{name: "отрицательный счётчик", mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
-			metric.KeyspaceHits = -1
-		}},
-		{name: "отрицательный CPU", mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
-			value := int64(-1)
-			metric.CPUMillicores = &value
-		}},
+		{
+			name:   "снимок без Pod UID отклоняется из-за недопустимых полей",
+			mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) { metric.PodUID = "" },
+		},
+		{
+			name: "снимок с нулевым временем отклоняется из-за недопустимых полей",
+			mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
+				metric.CollectedAt = metav1.MicroTime{}
+			},
+		},
+		{
+			name:   "снимок с неизвестной ролью отклоняется из-за недопустимых полей",
+			mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) { metric.Role = "unknown" },
+		},
+		{
+			name: "снимок с отрицательным счётчиком отклоняется из-за недопустимых полей",
+			mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
+				metric.KeyspaceHits = -1
+			},
+		},
+		{
+			name: "снимок с отрицательным CPU отклоняется из-за недопустимых полей",
+			mutate: func(metric *valkeyv1alpha1.NodeMetricStatus) {
+				value := int64(-1)
+				metric.CPUMillicores = &value
+			},
+		},
 	}
 
 	for _, testCase := range tests {

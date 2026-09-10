@@ -22,7 +22,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestTerminatedContainerIsSavedBeforePodFinalizerIsRemoved(t *testing.T) {
+func Test_ReconcileProcessTermination_WhenContainerTerminates_SavesEvidenceBeforeRemovingPodFinalizer(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -115,7 +115,9 @@ func (c *lostDeleteResponseClient) Delete(
 	return nil
 }
 
-func TestLastStateOfDifferentContainerDoesNotProveOldProcessStopped(t *testing.T) {
+func Test_ReconcileProcessTermination_WhenLastStateBelongsToDifferentContainer_DoesNotProvePreviousProcessStopped(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -166,7 +168,7 @@ func TestLastStateOfDifferentContainerDoesNotProveOldProcessStopped(t *testing.T
 	}
 }
 
-func TestNodeDeletionRequiresSavedNameAndUID(t *testing.T) {
+func Test_CheckPreviousNodeDeletion_WithMissingReusedOrUnavailableNode_RequiresSavedNameAndUID(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	process := valkeyv1alpha1.NodeStatus{
@@ -180,22 +182,31 @@ func TestNodeDeletionRequiresSavedNameAndUID(t *testing.T) {
 		process  valkeyv1alpha1.NodeStatus
 		expected bool
 	}{
-		{name: "missing node", expected: true},
-		{name: "reused name", objects: []client.Object{&corev1.Node{ObjectMeta: metav1.ObjectMeta{
-			Name: "worker-1", UID: types.UID("node-new"),
-		}}}, expected: true},
-		{name: "same not ready node", objects: []client.Object{&corev1.Node{
+		{name: "при отсутствии сохранённой ноды подтверждает её удаление", expected: true},
+		{
+			name: "при повторном использовании имени с новым UID подтверждает удаление прежней ноды",
+			objects: []client.Object{&corev1.Node{ObjectMeta: metav1.ObjectMeta{
+				Name: "worker-1", UID: types.UID("node-new"),
+			}}},
+			expected: true,
+		},
+		{name: "при прежней ноде в состоянии NotReady не подтверждает удаление", objects: []client.Object{&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: "worker-1", UID: types.UID("node-old")},
 			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
 				Type: corev1.NodeReady, Status: corev1.ConditionFalse,
 			}}},
 		}}, expected: false},
-		{name: "missing identity", process: valkeyv1alpha1.NodeStatus{}, expected: false},
+		{
+			name:     "при отсутствии сохранённой идентичности не подтверждает удаление ноды",
+			process:  valkeyv1alpha1.NodeStatus{},
+			expected: false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			observed := process
-			if test.process.NodeName == "" && test.name == "missing identity" {
+			if test.process.NodeName == "" &&
+				test.name == "при отсутствии сохранённой идентичности не подтверждает удаление ноды" {
 				observed = test.process
 			}
 			k8s := fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(test.objects...).Build()
@@ -210,7 +221,7 @@ func TestNodeDeletionRequiresSavedNameAndUID(t *testing.T) {
 	}
 }
 
-func TestND01DeletedNodeProvesStoppedPodStillHeldByFinalizer(t *testing.T) {
+func Test_ND01_ReconcileProcessTermination_WhenNodeIsDeleted_ProvesStoppedPodStillHeldByFinalizer(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, _ := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -253,7 +264,7 @@ func TestND01DeletedNodeProvesStoppedPodStillHeldByFinalizer(t *testing.T) {
 	}
 }
 
-func TestCT06DeletingPodWithoutFinalizerDoesNotBlockFailover(t *testing.T) {
+func Test_CT06_ReconcileProcessTermination_WhenDeletingPodHasNoFinalizer_DoesNotBlockFailover(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	deletingAt := metav1.Now()
@@ -279,7 +290,7 @@ func TestCT06DeletingPodWithoutFinalizerDoesNotBlockFailover(t *testing.T) {
 	}
 }
 
-func TestCT06ManualFencingForceDeletesStoppedPod(t *testing.T) {
+func Test_CT06_ReconcileProcessTermination_AfterManualFencing_ForceDeletesStoppedPod(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -306,7 +317,7 @@ func TestCT06ManualFencingForceDeletesStoppedPod(t *testing.T) {
 	}
 }
 
-func TestDeletionRecordsTerminatedReplacementAfterProvenOldProcess(t *testing.T) {
+func Test_ReconcileDeletion_WhenReplacementTerminatesAfterProvenOldProcess_RecordsBothTerminations(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, _ := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -370,7 +381,7 @@ func (errorReader) Get(context.Context, client.ObjectKey, client.Object, ...clie
 	return errors.New("kubernetes недоступен")
 }
 
-func TestNodeReadErrorIsNotProof(t *testing.T) {
+func Test_CheckPreviousNodeDeletion_WhenNodeReadFails_DoesNotTreatErrorAsTerminationProof(t *testing.T) {
 	reconciler := &ValkeyInstanceReconciler{APIReader: errorReader{}}
 	deleted, err := reconciler.previousNodeDeleted(context.Background(), valkeyv1alpha1.NodeStatus{
 		NodeName: "worker-1", NodeUID: "node-1",

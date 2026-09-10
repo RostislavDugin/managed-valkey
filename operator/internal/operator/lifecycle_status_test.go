@@ -23,7 +23,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestProvisionTimeoutUsesCreationTimestampAcrossRestart(t *testing.T) {
+func Test_ReconcileProvisioningDeadline_AfterTimeoutAcrossRestart_UsesCreationTimestampAndReportsError(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	instance := completeAcceptedInstance()
@@ -57,7 +57,9 @@ func TestProvisionTimeoutUsesCreationTimestampAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestHeartbeatAdvancesWhenEnvoyVerificationIsUnknown(t *testing.T) {
+func Test_UpdateLifecycleStatus_WhenEnvoyVerificationIsUnknown_AdvancesHeartbeatWithoutChangingOperationalState(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -103,7 +105,7 @@ func TestHeartbeatAdvancesWhenEnvoyVerificationIsUnknown(t *testing.T) {
 	}
 }
 
-func TestCT01SecondObservationSchedule(t *testing.T) {
+func Test_CT01_ReconcileSchedule_AfterFirstObservation_UsesSecondObservationInterval(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	clock := clocktesting.NewFakeClock(now)
 	observedAt := metav1.NewTime(clock.Now())
@@ -140,7 +142,7 @@ func TestCT01SecondObservationSchedule(t *testing.T) {
 	}
 }
 
-func TestCT10IndependentInstancesHaveBoundedConcurrency(t *testing.T) {
+func Test_CT10_Manager_WithIndependentInstances_UsesBoundedConcurrentReconciliation(t *testing.T) {
 	options := valkeyInstanceControllerOptions()
 	if options.MaxConcurrentReconciles != config.MaxConcurrentReconciles ||
 		options.MaxConcurrentReconciles <= 1 {
@@ -148,7 +150,7 @@ func TestCT10IndependentInstancesHaveBoundedConcurrency(t *testing.T) {
 	}
 }
 
-func TestUnchangedStatusDoesNotWriteAndConflictPreservesConcurrentFields(t *testing.T) {
+func Test_UpdateStatus_WithUnchangedOrConflictingState_SkipsWriteAndPreservesConcurrentFields(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.Phase = valkeyv1alpha1.InstancePhaseProvisioning
@@ -190,7 +192,7 @@ func TestUnchangedStatusDoesNotWriteAndConflictPreservesConcurrentFields(t *test
 	}
 }
 
-func TestUnchangedRecoveryConditionDoesNotDuplicateEvent(t *testing.T) {
+func Test_UpdateRecoveryCondition_WhenConditionIsUnchanged_DoesNotDuplicateEvent(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	k8s := fake.NewClientBuilder().
@@ -259,7 +261,7 @@ var (
 	_ client.SubResourceWriter = (*conflictingStatusWriter)(nil)
 )
 
-func TestProcessMissingMovesInitializedInstanceToUnavailable(t *testing.T) {
+func Test_UpdateLifecycleStatus_WhenInitializedProcessIsMissing_MovesInstanceToUnavailable(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.Initialized = true
@@ -281,7 +283,7 @@ func TestProcessMissingMovesInitializedInstanceToUnavailable(t *testing.T) {
 	}
 }
 
-func TestValkeyInstancePredicateIgnoresStatusEcho(t *testing.T) {
+func Test_ValkeyInstancePredicate_WhenOnlyStatusChanges_IgnoresUpdate(t *testing.T) {
 	filter := valkeyInstancePredicate()
 	before := completeAcceptedInstance()
 	after := before.DeepCopy()

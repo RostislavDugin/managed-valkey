@@ -78,7 +78,7 @@ beforeEach(() => {
 });
 
 describe('клиент Valkey API', () => {
-  it('преобразует каталог, квоту, список, карточку и credentials', async () => {
+  it('при чтении каталога, квоты, списка, карточки и реквизитов преобразует все серверные поля в клиентскую модель', async () => {
     const fetchMock = vi
       .spyOn(window, 'fetch')
       .mockResolvedValueOnce(
@@ -135,7 +135,7 @@ describe('клиент Valkey API', () => {
     ]);
   });
 
-  it('отправляет серверные DTO и ключи без автора и browser storage', async () => {
+  it('при изменении базы отправляет серверные DTO и ключи идемпотентности без лишних полей и чтения localStorage', async () => {
     const fetchMock = vi
       .spyOn(window, 'fetch')
       .mockResolvedValueOnce(jsonResponse(instanceDto(), 202))
@@ -205,7 +205,7 @@ describe('клиент Valkey API', () => {
     ]);
   });
 
-  it('не повторяет немедленный отказ по общему бюджету', async () => {
+  it('после немедленного отказа по общей квоте возвращает ошибку без повторного запроса создания', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
       jsonResponse(
         {

@@ -10,7 +10,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestConfigMapMemoryCalculations(t *testing.T) {
+func Test_ConfigMapData_WithSupportedResourceSizes_CalculatesMemoryAndIOThreads(t *testing.T) {
 	tests := []struct {
 		name      string
 		vcpu      int32
@@ -19,9 +19,30 @@ func TestConfigMapMemoryCalculations(t *testing.T) {
 		backlog   int64
 		ioThreads int64
 	}{
-		{name: "smallest", vcpu: 1, ramGB: 1, maxmemory: 805306368, backlog: 10737418, ioThreads: 1},
-		{name: "four cores", vcpu: 4, ramGB: 4, maxmemory: 3221225472, backlog: 42949672, ioThreads: 4},
-		{name: "largest", vcpu: 16, ramGB: 128, maxmemory: 103079215104, backlog: 67108864, ioThreads: 8},
+		{
+			name:      "для минимального размера вычисляет память, backlog и один поток ввода-вывода",
+			vcpu:      1,
+			ramGB:     1,
+			maxmemory: 805306368,
+			backlog:   10737418,
+			ioThreads: 1,
+		},
+		{
+			name:      "для четырёх ядер вычисляет память, backlog и четыре потока ввода-вывода",
+			vcpu:      4,
+			ramGB:     4,
+			maxmemory: 3221225472,
+			backlog:   42949672,
+			ioThreads: 4,
+		},
+		{
+			name:      "для максимального размера ограничивает backlog и число потоков ввода-вывода",
+			vcpu:      16,
+			ramGB:     128,
+			maxmemory: 103079215104,
+			backlog:   67108864,
+			ioThreads: 8,
+		},
 	}
 
 	for _, test := range tests {
@@ -43,7 +64,7 @@ func TestConfigMapMemoryCalculations(t *testing.T) {
 	}
 }
 
-func TestDesiredConfigMapIsImmutableAndContentAddressed(t *testing.T) {
+func Test_DesiredConfigMap_WhenConfigurationChanges_IsImmutableAndContentAddressed(t *testing.T) {
 	instance := &valkeyv1alpha1.ValkeyInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: "cache-a1b2c3", Namespace: "valkey-cache-a1b2c3", UID: "instance-uid"},
 		Status: valkeyv1alpha1.ValkeyInstanceStatus{
@@ -75,7 +96,7 @@ func TestDesiredConfigMapIsImmutableAndContentAddressed(t *testing.T) {
 	}
 }
 
-func TestConfigMapContainsNoSecretsAndReadinessUsesRoleAndInfo(t *testing.T) {
+func Test_ConfigMapData_WithSingleMode_ContainsNoSecretsAndChecksRoleAndInfoForReadiness(t *testing.T) {
 	data := configMapData(valkeyv1alpha1.AcceptedConfiguration{VCPU: 1, RAMGB: 1})
 	all := strings.Join([]string{data[valkeyConfigKey], data[startScriptKey], data[readinessScriptKey]}, "\n")
 	for _, secret := range []string{"operator-password-value", strings.Repeat("ab", 32)} {
@@ -102,7 +123,7 @@ func TestConfigMapContainsNoSecretsAndReadinessUsesRoleAndInfo(t *testing.T) {
 	}
 }
 
-func TestHAConfigStartsAsReplicaAndAcceptsSyncedReplicaReadiness(t *testing.T) {
+func Test_ConfigMapData_WithHAMode_StartsAsReplicaAndAcceptsSynchronizedReplicaReadiness(t *testing.T) {
 	accepted := valkeyv1alpha1.AcceptedConfiguration{
 		Slug: "cache-a1b2c3", Mode: valkeyv1alpha1.ValkeyModeHA, VCPU: 1, RAMGB: 1,
 	}

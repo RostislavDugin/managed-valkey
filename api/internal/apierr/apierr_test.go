@@ -11,7 +11,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
 )
 
-func TestKnownErrors(t *testing.T) {
+func Test_WriteApiError_WithKnownCodes_ReturnsMappedHttpResponse(t *testing.T) {
 	cases := []struct {
 		code apierr.Code
 		want int
@@ -45,7 +45,7 @@ func TestKnownErrors(t *testing.T) {
 	}
 }
 
-func TestUnknownErrorIsSafe(t *testing.T) {
+func Test_WriteApiError_WithUnknownError_ReturnsSafeInternalResponse(t *testing.T) {
 	response := write(t, errors.New("пароль и токен не должны попасть в ответ"))
 
 	if response.Code != http.StatusInternalServerError {

@@ -12,7 +12,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-func TestValkeyCreateRejectsMalformedAndSystemFields(t *testing.T) {
+func Test_CreateValkey_WithMalformedBodyOrSystemFields_ReturnsValidationErrorWithoutWrites(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	headers := mergeHeaders(
@@ -25,16 +25,31 @@ func TestValkeyCreateRejectsMalformedAndSystemFields(t *testing.T) {
 		body   string
 		reason string
 	}{
-		{name: "пустое тело", body: ""},
-		{name: "null", body: "null"},
-		{name: "неверный тип", body: strings.Replace(valid, `"vcpu":1`, `"vcpu":"1"`, 1)},
-		{name: "дробное целое", body: strings.Replace(valid, `"vcpu":1`, `"vcpu":1.5`, 1)},
-		{name: "повторный ключ", body: strings.Replace(valid, `"name":"cache"`, `"name":"cache","name":"other"`, 1)},
-		{name: "неизвестное поле", body: strings.TrimSuffix(valid, "}") + `,"owner":"someone"}`},
-		{name: "служебное поле", body: strings.TrimSuffix(valid, "}") + `,"status":"running"}`},
-		{name: "второй документ", body: valid + `{}`},
+		{name: "пустое тело возвращает ошибку валидации без записи данных", body: ""},
+		{name: "значение null возвращает ошибку валидации без записи данных", body: "null"},
 		{
-			name:   "слишком большое тело",
+			name: "поле vcpu неверного типа возвращает ошибку валидации без записи данных",
+			body: strings.Replace(valid, `"vcpu":1`, `"vcpu":"1"`, 1),
+		},
+		{
+			name: "дробное значение целого поля возвращает ошибку валидации без записи данных",
+			body: strings.Replace(valid, `"vcpu":1`, `"vcpu":1.5`, 1),
+		},
+		{
+			name: "повторный ключ JSON возвращает ошибку валидации без записи данных",
+			body: strings.Replace(valid, `"name":"cache"`, `"name":"cache","name":"other"`, 1),
+		},
+		{
+			name: "неизвестное поле возвращает ошибку валидации без записи данных",
+			body: strings.TrimSuffix(valid, "}") + `,"owner":"someone"}`,
+		},
+		{
+			name: "служебное поле возвращает ошибку валидации без записи данных",
+			body: strings.TrimSuffix(valid, "}") + `,"status":"running"}`,
+		},
+		{name: "второй документ JSON возвращает ошибку валидации без записи данных", body: valid + `{}`},
+		{
+			name:   "слишком большое тело возвращает ошибку валидации без записи данных",
 			body:   strings.TrimSuffix(valid, "}") + `,"padding":"` + strings.Repeat("x", 17000) + `"}`,
 			reason: "body_too_large",
 		},
@@ -57,7 +72,7 @@ func TestValkeyCreateRejectsMalformedAndSystemFields(t *testing.T) {
 	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", account.ID), 0)
 }
 
-func TestValkeyFieldValidationUsesExactBoundaries(t *testing.T) {
+func Test_CreateValkey_WithFieldBoundaries_AcceptsOnlyValidValues(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	tests := []struct {
@@ -65,22 +80,62 @@ func TestValkeyFieldValidationUsesExactBoundaries(t *testing.T) {
 		overrides map[string]any
 		field     string
 	}{
-		{name: "пустое имя", overrides: map[string]any{"name": ""}, field: "name"},
-		{name: "имя длиннее 40", overrides: map[string]any{"name": strings.Repeat("a", 41)}, field: "name"},
-		{name: "имя с заглавной", overrides: map[string]any{"name": "Bad"}, field: "name"},
-		{name: "имя с дефисом с края", overrides: map[string]any{"name": "-bad"}, field: "name"},
-		{name: "короткий prefix", overrides: map[string]any{"prefix": "ab"}, field: "prefix"},
-		{name: "длинный prefix", overrides: map[string]any{"prefix": strings.Repeat("a", 21)}, field: "prefix"},
-		{name: "неизвестный mode", overrides: map[string]any{"mode": "cluster"}, field: "mode"},
-		{name: "пароль 31", overrides: map[string]any{"password": testValkeyPassword[:31]}, field: "password"},
-		{name: "пароль 33", overrides: map[string]any{"password": testValkeyPassword + "x"}, field: "password"},
+		{name: "пустое имя отклоняется с ошибкой поля name", overrides: map[string]any{"name": ""}, field: "name"},
 		{
-			name:      "пароль с запрещённым символом",
+			name:      "имя длиннее 40 символов отклоняется с ошибкой поля name",
+			overrides: map[string]any{"name": strings.Repeat("a", 41)},
+			field:     "name",
+		},
+		{
+			name:      "имя с заглавной буквой отклоняется с ошибкой поля name",
+			overrides: map[string]any{"name": "Bad"},
+			field:     "name",
+		},
+		{
+			name:      "имя с дефисом с края отклоняется с ошибкой поля name",
+			overrides: map[string]any{"name": "-bad"},
+			field:     "name",
+		},
+		{
+			name:      "prefix короче трёх символов отклоняется с ошибкой поля prefix",
+			overrides: map[string]any{"prefix": "ab"},
+			field:     "prefix",
+		},
+		{
+			name:      "prefix длиннее 20 символов отклоняется с ошибкой поля prefix",
+			overrides: map[string]any{"prefix": strings.Repeat("a", 21)},
+			field:     "prefix",
+		},
+		{
+			name:      "неизвестный mode отклоняется с ошибкой поля mode",
+			overrides: map[string]any{"mode": "cluster"},
+			field:     "mode",
+		},
+		{
+			name:      "пароль длиной 31 символ отклоняется с ошибкой поля password",
+			overrides: map[string]any{"password": testValkeyPassword[:31]},
+			field:     "password",
+		},
+		{
+			name:      "пароль длиной 33 символа отклоняется с ошибкой поля password",
+			overrides: map[string]any{"password": testValkeyPassword + "x"},
+			field:     "password",
+		},
+		{
+			name:      "пароль с запрещённым символом отклоняется с ошибкой поля password",
 			overrides: map[string]any{"password": testValkeyPassword[:31] + "!"},
 			field:     "password",
 		},
-		{name: "неизвестный размер", overrides: map[string]any{"vcpu": 3, "ram_gb": 3}, field: "size"},
-		{name: "размер вне тарифной сетки", overrides: map[string]any{"vcpu": 2, "ram_gb": 4}, field: "size"},
+		{
+			name:      "неизвестный размер отклоняется с ошибкой поля size",
+			overrides: map[string]any{"vcpu": 3, "ram_gb": 3},
+			field:     "size",
+		},
+		{
+			name:      "размер вне тарифной сетки отклоняется с ошибкой поля size",
+			overrides: map[string]any{"vcpu": 2, "ram_gb": 4},
+			field:     "size",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -115,7 +170,7 @@ func TestValkeyFieldValidationUsesExactBoundaries(t *testing.T) {
 	}
 }
 
-func TestValkeyWhitelistAndMaintenanceValidation(t *testing.T) {
+func Test_UpdateValkeyWhitelistOrMaintenance_WithBoundaryValues_ValidatesAndAppliesSettings(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{"name": "validation-cache"})
@@ -126,9 +181,12 @@ func TestValkeyWhitelistAndMaintenanceValidation(t *testing.T) {
 		name  string
 		cidrs []string
 	}{
-		{name: "IPv6", cidrs: []string{"2001:db8::/32"}},
-		{name: "prefix 33", cidrs: []string{"192.0.2.1/33"}},
-		{name: "больше 100 до дедупликации", cidrs: repeatString("192.0.2.1", 101)},
+		{name: "адрес IPv6 отклоняется с ошибкой валидации", cidrs: []string{"2001:db8::/32"}},
+		{name: "префикс IPv4 длиннее 32 бит отклоняется с ошибкой валидации", cidrs: []string{"192.0.2.1/33"}},
+		{
+			name:  "больше 100 адресов до удаления повторов отклоняются с ошибкой валидации",
+			cidrs: repeatString("192.0.2.1", 101),
+		},
 	}
 	for _, testCase := range invalidCIDRs {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -147,10 +205,13 @@ func TestValkeyWhitelistAndMaintenanceValidation(t *testing.T) {
 		`{"maintenance":{"dow":0,"hour_utc":0,"duration_min":30,"unknown":1}}`,
 	}
 	for index, body := range maintenanceBodies {
-		t.Run(fmt.Sprintf("maintenance-%d", index), func(t *testing.T) {
-			response := app.requestRaw(t, http.MethodPatch, base, body, bearer(account.Token))
-			assertError(t, response, http.StatusBadRequest, string(apierr.CodeValidationFailed))
-		})
+		t.Run(
+			fmt.Sprintf("недопустимый вариант окна обслуживания %d возвращает ошибку валидации", index),
+			func(t *testing.T) {
+				response := app.requestRaw(t, http.MethodPatch, base, body, bearer(account.Token))
+				assertError(t, response, http.StatusBadRequest, string(apierr.CodeValidationFailed))
+			},
+		)
 	}
 
 	set := app.requestRaw(
@@ -168,7 +229,7 @@ func TestValkeyWhitelistAndMaintenanceValidation(t *testing.T) {
 	}
 }
 
-func TestValkeyMutationRejectsQueryAndInvalidIDAfterAuthentication(t *testing.T) {
+func Test_MutateValkey_WithUnexpectedQueryOrInvalidId_AuthenticatesBeforeValidation(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 

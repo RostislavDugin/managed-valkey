@@ -43,7 +43,7 @@ import (
 
 const clusterOperatorName = "operator-integration"
 
-func TestCT14HA03PendingReplicaBecomesRunningWhenCapacityReturns(t *testing.T) {
+func Test_CT14HA03_ReconcilePendingReplica_WhenCapacityReturns_MarksInstanceRunning(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -87,7 +87,7 @@ func TestCT14HA03PendingReplicaBecomesRunningWhenCapacityReturns(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestHA05PDBRejectsEvictionWithTwoReadyPods(t *testing.T) {
+func Test_HA05_EvictPod_WhenTwoPodsAreReady_IsRejectedByPDB(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -131,7 +131,7 @@ func TestHA05PDBRejectsEvictionWithTwoReadyPods(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestFP01FP02FP03SIGKILLHAProcesses(t *testing.T) {
+func Test_FP01FP02FP03_RecoverHA_WhenPrimaryOrReplicaReceivesSIGKILL_PreservesDataAndRoles(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -193,7 +193,7 @@ func TestFP01FP02FP03SIGKILLHAProcesses(t *testing.T) {
 	h.deleteInstance(t, ha)
 }
 
-func TestFP01FP02FP03SIGKILLSingleProcess(t *testing.T) {
+func Test_FP01FP02FP03_RecoverSingle_WhenProcessReceivesSIGKILL_ReplacesProcessWithEmptyCache(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -220,7 +220,7 @@ func TestFP01FP02FP03SIGKILLSingleProcess(t *testing.T) {
 	h.deleteInstance(t, single)
 }
 
-func TestFP12MostAdvancedReplicaWinsFailover(t *testing.T) {
+func Test_FP12_FailOver_WhenReplicasHaveDifferentOffsets_PromotesMostAdvancedReplica(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -292,7 +292,7 @@ func TestFP12MostAdvancedReplicaWinsFailover(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestHA08OP03OP04OP08FailoverStagesResumeAfterRestart(t *testing.T) {
+func Test_HA08OP03OP04OP08_ResumeFailover_WhenOperatorRestartsAtEveryStage_CompletesWithoutDataLoss(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -593,11 +593,11 @@ func TestHA08OP03OP04OP08FailoverStagesResumeAfterRestart(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestOP05CandidateLossBeforePromotion(t *testing.T) {
+func Test_OP05_ResumeFailover_WhenCandidateStopsBeforePromotion_SelectsAnotherCandidateWithoutDataLoss(t *testing.T) {
 	testOP05CandidateLoss(t, operatorvalkey.IntegrationCommandBefore)
 }
 
-func TestOP05CandidateLossAfterPromotion(t *testing.T) {
+func Test_OP05_ResumeFailover_WhenCandidateStopsAfterPromotion_SelectsAnotherCandidateWithoutDataLoss(t *testing.T) {
 	testOP05CandidateLoss(t, operatorvalkey.IntegrationCommandAfter)
 }
 
@@ -652,7 +652,7 @@ func testOP05CandidateLoss(t *testing.T, stage operatorvalkey.IntegrationCommand
 	h.deleteInstance(t, instance)
 }
 
-func TestOP06LiveUnknownCandidateBlocksSecondPromotion(t *testing.T) {
+func Test_OP06_ResumeFailover_WithLiveUnknownCandidate_BlocksSecondPromotionUntilFenced(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -757,7 +757,7 @@ func TestOP06LiveUnknownCandidateBlocksSecondPromotion(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestRZ10FormerPrimaryWaitsForDirectReplicaUpstream(t *testing.T) {
+func Test_RZ10_ReplaceFormerPrimary_WhenHARolloutIsInProgress_WaitsForDirectReplicaUpstream(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -867,7 +867,7 @@ func TestRZ10FormerPrimaryWaitsForDirectReplicaUpstream(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestOP07TakeoverClosesDelayedAdministrativeConnection(t *testing.T) {
+func Test_OP07_TakeOverOperator_WithDelayedAdministrativeConnection_ClosesPreviousConnection(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -908,7 +908,7 @@ func TestOP07TakeoverClosesDelayedAdministrativeConnection(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestOP02LeaseLossStopsOperatorAndSuccessorResumes(t *testing.T) {
+func Test_OP02_ResumeRollout_AfterOperatorLosesLease_UsesSuccessorWithoutDataLoss(t *testing.T) {
 	h := newHarness(t)
 	h.startClusterOperator(t)
 	t.Cleanup(func() {
@@ -968,7 +968,7 @@ func TestOP02LeaseLossStopsOperatorAndSuccessorResumes(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestFP04DeleteSinglePod(t *testing.T) {
+func Test_FP04_DeleteSinglePod_ReplacesProcessWithEmptyCacheAndStableCredentials(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1115,7 +1115,7 @@ func assertCT10IndependentInstanceObservation(
 	h.waitForSameProcessHealthy(t, blocked, blockedProcess, "CT-10 восстановления недоступного инстанса")
 }
 
-func TestNT06EnvoyAdminFailureDoesNotBlockObservationAndMutations(t *testing.T) {
+func Test_NT06_ApplyHAChanges_WhenEnvoyAdminAPIIsUnavailable_ContinuesObservationAndMutations(t *testing.T) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)
@@ -1212,7 +1212,9 @@ func TestNT06EnvoyAdminFailureDoesNotBlockObservationAndMutations(t *testing.T) 
 	t.Logf("NT-06 всего: %s", time.Since(testStartedAt))
 }
 
-func TestNT01NT02NT03AddressedNetworkPartitionsRecover(t *testing.T) {
+func Test_NT01NT02NT03_RecoverAddressedNetworkPartitions_WhenOperatorOrAgentLinksFail_PreservesProcessesAndData(
+	t *testing.T,
+) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)
@@ -1482,7 +1484,7 @@ func (h *harness) getNode(t *testing.T, name string) *corev1.Node {
 	return node
 }
 
-func TestOP04ValkeyCommandRestartPointsAndLostResponse(t *testing.T) {
+func Test_OP04_ResumePasswordRotation_AfterValkeyCommandRestartsAndLostResponse_AvoidsDuplicateEffects(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1556,7 +1558,7 @@ func TestOP04ValkeyCommandRestartPointsAndLostResponse(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestNT04KubernetesOutageBlocksStaleActionsAndRecovers(t *testing.T) {
+func Test_NT04_ReconcileDuringKubernetesOutage_WithStaleState_BlocksActionsAndRecovers(t *testing.T) {
 	h := newHarness(t)
 	kubernetesProxy := newTCPFaultProxy(t, strings.TrimPrefix(h.operatorREST.Host, "https://"))
 	h.operatorREST.Host = "https://" + kubernetesProxy.address()
@@ -1682,7 +1684,7 @@ func TestNT04KubernetesOutageBlocksStaleActionsAndRecovers(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestNT05ReplicationPartitionKeepsEmptyReplacementOutOfFailover(t *testing.T) {
+func Test_NT05_FailOverDuringReplicationPartition_WithEmptyReplacement_ExcludesUnsynchronizedReplica(t *testing.T) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)
@@ -1836,7 +1838,7 @@ func TestNT05ReplicationPartitionKeepsEmptyReplacementOutOfFailover(t *testing.T
 	t.Logf("NT-05 всего: %s", time.Since(testStartedAt))
 }
 
-func TestFP06FP07OP08SIGSTOPSIGCONTHAProcesses(t *testing.T) {
+func Test_FP06FP07OP08_RecoverHA_WhenProcessesReceiveSIGSTOPOrSIGCONT_PreservesDataAndRoles(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1918,7 +1920,7 @@ func TestFP06FP07OP08SIGSTOPSIGCONTHAProcesses(t *testing.T) {
 	h.deleteInstance(t, ha)
 }
 
-func TestFP06FP07OP08SIGSTOPSIGCONTSingleProcess(t *testing.T) {
+func Test_FP06FP07OP08_RecoverSingle_WhenProcessReceivesSIGSTOPOrSIGCONT_ReusesOrReplacesProcessSafely(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -1957,7 +1959,9 @@ func TestFP06FP07OP08SIGSTOPSIGCONTSingleProcess(t *testing.T) {
 	h.deleteInstance(t, single)
 }
 
-func TestFP08FP09OP08BusyRecovery(t *testing.T) {
+func Test_FP08FP09OP08_RecoverBusySingle_WhenCommandsAreKillableOrUnkillable_KillsCommandOrReplacesProcess(
+	t *testing.T,
+) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2060,7 +2064,7 @@ func TestFP08FP09OP08BusyRecovery(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestFP10BothReplicasLostStayDegradedUntilReplacementSync(t *testing.T) {
+func Test_FP10_RecoverBothLostReplicas_WhenReplacementsAreSynchronizing_RemainsDegradedUntilSafe(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2177,7 +2181,7 @@ func TestFP10BothReplicasLostStayDegradedUntilReplacementSync(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestFP05FP11AllValkeyProcessesStopWhileOperatorIsDown(t *testing.T) {
+func Test_FP05FP11_RecoverHA_WhenAllProcessesStopWhileOperatorIsDown_RebuildsClusterWithEmptyCache(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2215,7 +2219,7 @@ func TestFP05FP11AllValkeyProcessesStopWhileOperatorIsDown(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestOP01ClusterOperatorRecoversAfterSIGKILL(t *testing.T) {
+func Test_OP01_RecoverClusterOperator_AfterSIGKILL_ResumesWithNewLeaseHolderWithoutDataLoss(t *testing.T) {
 	h := newHarness(t)
 	h.startClusterOperator(t)
 	t.Cleanup(func() {
@@ -2249,7 +2253,7 @@ func TestOP01ClusterOperatorRecoversAfterSIGKILL(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestCT06ManualFencingRestoresAfterRealAgentStop(t *testing.T) {
+func Test_CT06_ResumeFailover_AfterManualFencingConfirmsStoppedAgent_PreservesData(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2329,7 +2333,7 @@ func TestCT06ManualFencingRestoresAfterRealAgentStop(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestND04OperatorAndPrimaryWorkerLossRecovers(t *testing.T) {
+func Test_ND04_RecoverHA_WhenOperatorAndPrimaryWorkerAreDestroyed_ReplacesOperatorAndFailsOver(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() {
@@ -2410,7 +2414,9 @@ func TestND04OperatorAndPrimaryWorkerLossRecovers(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestND05PrimaryLossWithoutSpareRecoversAfterCleanAgent(t *testing.T) {
+func Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_WaitsForCleanAgentAndRestoresComposition(
+	t *testing.T,
+) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)
@@ -2538,7 +2544,7 @@ func TestND05PrimaryLossWithoutSpareRecoversAfterCleanAgent(t *testing.T) {
 	t.Logf("ND-05 всего: %s", time.Since(testStartedAt))
 }
 
-func TestND01WorkerLossFailsOverAndRestoresOnSpareNode(t *testing.T) {
+func Test_ND01_RecoverHA_WhenPrimaryWorkerIsDestroyed_FailsOverAndRestoresOnSpareNode(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2597,7 +2603,7 @@ func TestND01WorkerLossFailsOverAndRestoresOnSpareNode(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestND02ReplicaWorkerLossUsesSpareNode(t *testing.T) {
+func Test_ND02_RecoverHA_WhenReplicaWorkerIsDestroyed_ReplacesReplicaOnSpareNode(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2648,7 +2654,7 @@ func TestND02ReplicaWorkerLossUsesSpareNode(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestND03SingleWorkerLossStartsEmptyReplacement(t *testing.T) {
+func Test_ND03_RecoverSingle_WhenWorkerIsDestroyed_StartsEmptyReplacementWithStableCredentials(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2698,7 +2704,7 @@ func TestND03SingleWorkerLossStartsEmptyReplacement(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestND06WorkerLossWithEnvoyPreservesPublicIngress(t *testing.T) {
+func Test_ND06_RecoverHA_WhenWorkerWithEnvoyIsDestroyed_PreservesPublicIngressAndData(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -2796,7 +2802,9 @@ func TestND06WorkerLossWithEnvoyPreservesPublicIngress(t *testing.T) {
 	h.deleteInstance(t, instance)
 }
 
-func TestCT14ND07ND08ND09NodeLossDuringProcessStopResumesAfterRestart(t *testing.T) {
+func Test_CT14ND07ND08ND09_ResumeProcessRecovery_WhenNodeIsDestroyedDuringStopAndOperatorRestarts_UsesCurrentNodeIdentity(
+	t *testing.T,
+) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)

@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe('список баз Valkey', () => {
-  it('загружает сохранённые базы при повторном открытии', async () => {
+  it('при повторном открытии страницы загружает сохранённые базы с сервера и показывает их в таблице', async () => {
     const session = seedSession();
     installStatefulValkeyApi([valkeyInstanceDto({ name: 'persistent-cache' })]);
 
@@ -27,7 +27,7 @@ describe('список баз Valkey', () => {
     expect(await screen.findByText('persistent-cache', {}, WAIT)).toBeVisible();
   });
 
-  it('не перекрывает запросы опроса и выдерживает период от начала запроса', async () => {
+  it('при периодическом обновлении не перекрывает запросы и отсчитывает следующий период от начала предыдущего', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const session = seedSession();
     installStatefulValkeyApi();
@@ -65,7 +65,7 @@ describe('список баз Valkey', () => {
     expect(listCalls).toBe(3);
   });
 
-  it('отменяет прежний запрос и игнорирует поздний ответ после смены маршрута', async () => {
+  it('после ухода со страницы отменяет запрос списка и игнорирует его поздний ответ', async () => {
     const session = seedSession();
     installStatefulValkeyApi([]);
     const statefulFetch = window.fetch;
@@ -104,7 +104,7 @@ describe('список баз Valkey', () => {
     expect(screen.getByRole('heading', { name: 'Новая Valkey база' })).toBeVisible();
   });
 
-  it('отменяет запрос прежнего аккаунта и не показывает его поздний ответ', async () => {
+  it('после смены аккаунта отменяет прежний запрос списка и не показывает базы предыдущего пользователя', async () => {
     const session = seedSession();
     installStatefulValkeyApi([]);
     const statefulFetch = window.fetch;

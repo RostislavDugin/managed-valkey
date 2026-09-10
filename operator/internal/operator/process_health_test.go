@@ -15,7 +15,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestCT02ObservationCountersResetByResponseKind(t *testing.T) {
+func Test_CT02_RecordProcessObservation_WhenResponseKindChanges_ResetsOrContinuesExpectedCounters(t *testing.T) {
 	startedAt := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	observation := nextProcessObservation(
 		nil,
@@ -74,7 +74,7 @@ func TestCT02ObservationCountersResetByResponseKind(t *testing.T) {
 	}
 }
 
-func TestProcessObservationReasonsFollowStatusContract(t *testing.T) {
+func Test_ProcessObservationReason_WithEachObservationKind_ReturnsStatusContractReason(t *testing.T) {
 	tests := []struct {
 		kind   valkeyv1alpha1.ProcessObservationKind
 		reason string
@@ -94,7 +94,7 @@ func TestProcessObservationReasonsFollowStatusContract(t *testing.T) {
 	}
 }
 
-func TestCT01CT02RecoveryThresholdsAreIndependent(t *testing.T) {
+func Test_CT01CT02_ProcessRecoveryThresholds_WithPrimaryAndReplica_AreIndependent(t *testing.T) {
 	startedAt := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	transportSince := metav1.NewTime(startedAt)
 	transport := &valkeyv1alpha1.ProcessObservationStatus{
@@ -179,7 +179,7 @@ func TestCT01CT02RecoveryThresholdsAreIndependent(t *testing.T) {
 	}
 }
 
-func TestCT02BusyObservationPersistsAndSuccessClearsIt(t *testing.T) {
+func Test_CT02_RecordProcessObservation_WhenBusyThenSuccessful_PersistsBusyStateUntilSuccessClearsIt(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	pod.Finalizers = []string{processFinalizer}
@@ -232,7 +232,7 @@ func TestCT02BusyObservationPersistsAndSuccessClearsIt(t *testing.T) {
 	}
 }
 
-func TestOP08FirstTransportFailureAfterRestartStartsNewSeries(t *testing.T) {
+func Test_OP08_RecordProcessObservation_AfterManagerRestart_StartsNewTransportFailureSeries(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	instance, pod, node, _ := processObservationObjects()
@@ -281,7 +281,7 @@ func TestOP08FirstTransportFailureAfterRestartStartsNewSeries(t *testing.T) {
 	}
 }
 
-func TestHealthyIdentityReplacementClearsObservationState(t *testing.T) {
+func Test_RecordProcessObservation_WhenHealthyIdentityReplacesFailedProcess_ClearsObservationState(t *testing.T) {
 	process := valkeyv1alpha1.NodeStatus{
 		Ordinal: 0, PodUID: "pod-1", ContainerID: "containerd://1", RunID: "run-1",
 		NodeName: "worker-1", NodeUID: "node-1",

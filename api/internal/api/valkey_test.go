@@ -22,7 +22,7 @@ type valkeyListResponse struct {
 	Items []valkeydomain.Instance `json:"items"`
 }
 
-func TestValkeyCatalogAndLifecycleUseHTTPAndPostgreSQL(t *testing.T) {
+func Test_RunValkeyLifecycle_WithHttpAndPostgreSql_PersistsStateBillingAuditAndSafeCredentials(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 
@@ -173,7 +173,7 @@ func TestValkeyCatalogAndLifecycleUseHTTPAndPostgreSQL(t *testing.T) {
 	assertDatabaseCount(t, app.database.DB().Model(&store.AuditLog{}).Where("resource_id = ?", created.ID), 2)
 }
 
-func TestValkeyOwnerIsolationUsesHTTP(t *testing.T) {
+func Test_AccessValkeyResources_WithDifferentOwner_ReturnsNotFoundForEveryOperation(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	owner := app.registerAccount(t, "")
 	stranger := app.registerAccount(t, "")
@@ -210,7 +210,7 @@ func TestValkeyOwnerIsolationUsesHTTP(t *testing.T) {
 	}
 
 	for _, testCase := range tests {
-		t.Run(testCase.method+testCase.path, func(t *testing.T) {
+		t.Run("пользователь другого аккаунта получает 404 для "+testCase.method+" "+testCase.path, func(t *testing.T) {
 			headers := bearer(stranger.Token)
 			for key, value := range testCase.headers {
 				headers[key] = value
@@ -221,7 +221,7 @@ func TestValkeyOwnerIsolationUsesHTTP(t *testing.T) {
 	}
 }
 
-func TestValkeyEndToEndScenarioRunsWithoutKubernetes(t *testing.T) {
+func Test_RunValkeyHttpScenario_WithoutKubernetes_CompletesCreateReadRenameQuotaAndDelete(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 1, clusterRAMGB: 1})
 	account := app.registerAccount(t, "")
 

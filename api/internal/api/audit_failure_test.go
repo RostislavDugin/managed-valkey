@@ -35,7 +35,7 @@ func (r failingAuditRepository) WriteAudit(ctx context.Context, tx *gorm.DB, eve
 	return errAuditRejected
 }
 
-func TestRegistrationAuditFailureRollsBackOverHTTP(t *testing.T) {
+func Test_RegisterUser_WhenAuditWriteFails_RollsBackHttpTransaction(t *testing.T) {
 	email := "audit-failure-" + uuid.NewString() + "@example.com"
 	app := newHTTPTestAPI(t, testAPIConfig{
 		wrapAuditRepository: failAudit(audit.ActionUserRegister, false),
@@ -57,7 +57,7 @@ func TestRegistrationAuditFailureRollsBackOverHTTP(t *testing.T) {
 	)
 }
 
-func TestLoginAuditFailureDoesNotIssueJWTOverHTTP(t *testing.T) {
+func Test_LoginUser_WhenAuditWriteFails_ReturnsSafeErrorWithoutJwt(t *testing.T) {
 	setup := newHTTPTestAPI(t, testAPIConfig{})
 	account := setup.registerAccount(t, "")
 	app := newHTTPTestAPI(t, testAPIConfig{

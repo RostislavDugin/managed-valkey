@@ -100,7 +100,7 @@ beforeEach(() => {
 });
 
 describe('изменение тарифа', () => {
-  it('не отменяет активный запрос после фонового обновления той же базы', async () => {
+  it('при фоновом обновлении той же базы сохраняет активный запрос изменения тарифа и закрывает окно после ответа', async () => {
     let resolveRequest: (response: Response) => void = () => undefined;
     const request = new Promise<Response>((resolve) => {
       resolveRequest = resolve;

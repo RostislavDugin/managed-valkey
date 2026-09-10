@@ -14,7 +14,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestPW08RotationPreservesFencedProcessState(t *testing.T) {
+func Test_PW08_RotatePassword_WithFencedReplica_PreservesDisabledAppState(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -60,7 +60,7 @@ func TestPW08RotationPreservesFencedProcessState(t *testing.T) {
 	}
 }
 
-func TestPW05ConfirmationDoesNotTransferToReplacement(t *testing.T) {
+func Test_PW05_CheckRotationConfirmation_WithReplacementProcess_DoesNotReusePreviousProcessConfirmation(t *testing.T) {
 	_, pod, _, _ := processObservationObjects()
 	previous := testObservedNode(pod)
 	rotation := &valkeyv1alpha1.CredentialRotationStatus{
@@ -82,7 +82,7 @@ func TestPW05ConfirmationDoesNotTransferToReplacement(t *testing.T) {
 	}
 }
 
-func TestPW06LiveUnavailableProcessBlocksRotation(t *testing.T) {
+func Test_PW06_RotatePassword_WithLiveUnavailableProcess_BlocksRotation(t *testing.T) {
 	instance, pod, _, _ := processObservationObjects()
 	process := testObservedNode(pod)
 	process.Role = valkeyv1alpha1.NodeRoleReplica
@@ -105,7 +105,9 @@ func TestPW06LiveUnavailableProcessBlocksRotation(t *testing.T) {
 	}
 }
 
-func TestPW06UnavailableReplicaDoesNotBlockReachableReplica(t *testing.T) {
+func Test_PW06_RotatePassword_WithUnavailableAndReachableReplicas_UpdatesReachableReplicaAndRemainsBlocked(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	instance, pod, _, secret := processObservationObjects()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -163,7 +165,7 @@ func TestPW06UnavailableReplicaDoesNotBlockReachableReplica(t *testing.T) {
 	}
 }
 
-func TestPW07TerminatedAndNotStartedProcessesDoNotBlockRotation(t *testing.T) {
+func Test_PW07_RotatePassword_WithTerminatedOrNotStartedProcesses_CompletesWithoutBlocking(t *testing.T) {
 	instance, pod, _, _ := processObservationObjects()
 	process := testObservedNode(pod)
 	process.Role = valkeyv1alpha1.NodeRoleReplica
@@ -190,7 +192,7 @@ func TestPW07TerminatedAndNotStartedProcessesDoNotBlockRotation(t *testing.T) {
 	}
 }
 
-func TestCT08PasswordCleanupPreservesFutureHashAndServiceData(t *testing.T) {
+func Test_CT08_FinishCredentialRotation_WhenCleaningSecret_PreservesFutureHashAndServiceData(t *testing.T) {
 	ctx := context.Background()
 	instance, _, _, secret := processObservationObjects()
 	instance.Status.AcceptedConfiguration.PasswordVersion = 2

@@ -6,7 +6,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
-func TestLoadUsesDefaults(t *testing.T) {
+func Test_Load_WhenEnvironmentIsEmpty_UsesDefaults(t *testing.T) {
 	for _, name := range []string{
 		config.EnvSystemNamespace,
 		config.EnvValkeyImage,
@@ -40,7 +40,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadNormalizesOperatorCIDRs(t *testing.T) {
+func Test_Load_WithOperatorCIDRs_NormalizesValidValuesAndRejectsInvalidValue(t *testing.T) {
 	t.Setenv(config.EnvOperatorCIDRs, " 172.27.0.1/32,2001:db8::1/64,172.27.0.1/32 ")
 	cfg, err := config.Load()
 	if err != nil {
@@ -57,7 +57,7 @@ func TestLoadNormalizesOperatorCIDRs(t *testing.T) {
 	}
 }
 
-func TestLoadIgnoresDatabaseURL(t *testing.T) {
+func Test_Load_WithDatabaseURL_IgnoresDatabaseConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@postgres:45432/managed_valkey")
 
 	if _, err := config.Load(); err != nil {

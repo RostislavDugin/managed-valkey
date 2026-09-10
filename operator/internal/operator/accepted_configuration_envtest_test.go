@@ -21,7 +21,9 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestEnvtestCT04AcceptedGenerationWaitsAndRevalidatesAfterConflict(t *testing.T) {
+func Test_Envtest_CT04_AcceptGeneration_WhenHashIsMissingInvalidOrDeliveredDuringConflict_WaitsAndRevalidatesCurrentSpec(
+	t *testing.T,
+) {
 	environment := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd")},
 		ErrorIfCRDPathMissing: true,

@@ -30,7 +30,7 @@ func (g *sequenceSlugGenerator) Suffix() (string, error) {
 	return value, nil
 }
 
-func TestValkeyCreationRetriesSlugCollisionAtomically(t *testing.T) {
+func Test_CreateValkey_WithSlugCollisions_RetriesAtomicallyWithoutPartialWrites(t *testing.T) {
 	generator := &sequenceSlugGenerator{values: []string{"aaaaaa", "aaaaaa", "bbbbbb"}}
 	app := newHTTPTestAPI(t, testAPIConfig{slugGenerator: generator})
 	account := app.registerAccount(t, "")
@@ -62,7 +62,7 @@ func TestValkeyCreationRetriesSlugCollisionAtomically(t *testing.T) {
 	}
 }
 
-func TestValkeyNameIsUniqueOnlyForActiveOwnerRows(t *testing.T) {
+func Test_CreateValkey_WithRepeatedName_ConflictsOnlyForActiveOwnerRows(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	owner := app.registerAccount(t, "")
 	other := app.registerAccount(t, "")
@@ -94,7 +94,7 @@ func TestValkeyNameIsUniqueOnlyForActiveOwnerRows(t *testing.T) {
 	}
 }
 
-func TestValkeyBillingKeepsOldPriceAfterRateChange(t *testing.T) {
+func Test_ResizeValkey_AfterRateChange_PreservesOldBillingPeriodPrice(t *testing.T) {
 	initialCatalog := mustCatalog(t, 125, 50)
 	initial := newHTTPTestAPI(t, testAPIConfig{catalog: &initialCatalog})
 	account := initial.registerAccount(t, "")

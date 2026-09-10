@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func TestCheckAcceptsOnlySuccessfulResponse(t *testing.T) {
+func Test_CheckHealthEndpoint_WithDifferentStatuses_AcceptsOnlySuccessfulResponse(t *testing.T) {
 	for _, testCase := range []struct {
 		name    string
 		status  int
 		wantErr bool
 	}{
-		{name: "готов", status: http.StatusNoContent},
-		{name: "перенаправление", status: http.StatusFound, wantErr: true},
-		{name: "не готов", status: http.StatusServiceUnavailable, wantErr: true},
+		{name: "ответ 204 означает готовность и принимается", status: http.StatusNoContent},
+		{name: "ответ с перенаправлением отклоняется", status: http.StatusFound, wantErr: true},
+		{name: "ответ 503 означает неготовность и отклоняется", status: http.StatusServiceUnavailable, wantErr: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

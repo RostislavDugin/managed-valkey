@@ -17,7 +17,7 @@ function contrast(left: string, right: string) {
 }
 
 describe('токены графиков', () => {
-  it('сохраняет контраст рядов в светлой и тёмной схемах', () => {
+  it('для каждого ряда графика обеспечивает контраст не ниже 4,5 в светлой и тёмной схемах', () => {
     const css = readFileSync('src/app/styles/tokens.css', 'utf8');
     const colors = [...css.matchAll(/--h3-chart-[123]:\s*(#[0-9a-f]{6})/gi)].map(
       (match) => match[1]

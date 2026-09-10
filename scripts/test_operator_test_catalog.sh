@@ -22,8 +22,8 @@ expect_catalog_failure() {
 }
 
 cp "$catalog" "$work_dir/unknown.tsv"
-printf '%s\n' 'TestUnknown	^TestUnknown$	1	1	2048	60	2m' >>"$work_dir/unknown.tsv"
-expect_catalog_failure unknown 'неизвестный тест в каталоге: TestUnknown'
+printf '%s\n' 'Test_Unknown	^Test_Unknown$	1	1	2048	60	2m' >>"$work_dir/unknown.tsv"
+expect_catalog_failure unknown 'неизвестный тест в каталоге: Test_Unknown'
 
 sed '2d' "$catalog" >"$work_dir/missing.tsv"
 expect_catalog_failure missing 'тест не назначен:'
@@ -43,15 +43,15 @@ results=$work_dir/results
 scenario=matrix
 attempt=$results/scenarios/$scenario/attempts/1
 mkdir -p "$attempt"
-printf '%s\n' '--- PASS: TestCT01CT02CT06CT07' >"$results/unit.log"
-printf '%s\n' '--- PASS: TestCT01CT02CT03CT04CT05CT06CT07CT08' >"$results/envtest.log"
+printf '%s\n' '--- PASS: Test_CT01CT02CT06CT07_UnitChecks_CompleteSuccessfully' >"$results/unit.log"
+printf '%s\n' '--- PASS: Test_Envtest_CT01CT02CT03CT04CT05CT06CT07CT08_ContractChecks_CompleteSuccessfully' >"$results/envtest.log"
 printf '%s\n' pass >"$results/unit.status"
 printf '%s\n' pass >"$results/envtest.status"
 printf '%s\n' 'CT-12: pass' >"$results/network-faults.log"
 printf '%s\n' pass >"$results/network-faults.status"
 printf '%s\n' $'unit\t100\t3' $'envtest\t103\t5' >"$results/durations.tsv"
 {
-    printf '%s' '--- PASS: Test'
+    printf '%s' '--- PASS: Test_'
     for prefix_and_last in HA:8 FP:12 ND:9 NT:6 OP:8 RZ:11 PW:10 DL:4; do
         prefix=${prefix_and_last%:*}
         last=${prefix_and_last#*:}
@@ -61,14 +61,14 @@ printf '%s\n' $'unit\t100\t3' $'envtest\t103\t5' >"$results/durations.tsv"
     done
     printf '%s\n' 'CT09CT10CT11CT14'
     printf '%s\n' 'CT-13 CT-14: pass'
-    printf '%s\n' '--- PASS: TestMatrix'
+    printf '%s\n' '--- PASS: Test_Matrix'
     printf '%s\n' 'journal-sentinel-must-stay-separate'
 } >"$attempt/log"
 printf '%s\n' pass >"$attempt/status"
 printf '%s\n' 12.5 >"$attempt/duration"
 printf '%s\n' \
     $'scenario\ttest_pattern\tnodes\tenvoy_replicas\tmemory_mib\testimated_seconds\ttimeout' \
-    $'matrix\t^TestMatrix$\t1\t1\t2048\t60\t2m' >"$work_dir/report-catalog.tsv"
+    $'matrix\t^Test_Matrix$\t1\t1\t2048\t60\t2m' >"$work_dir/report-catalog.tsv"
 
 "$reporter" "$results" full "$work_dir/report-catalog.tsv" >"$work_dir/report-pass.out" 2>&1
 grep -Fq 'OPERATOR TEST MODE full' "$work_dir/report-pass.out"
@@ -133,12 +133,12 @@ grep -Fq 'MATRIX CT-12 FAIL' "$work_dir/report-network-marker.out"
 printf '%s\n' 'CT-12: pass' >"$results/network-faults.log"
 
 cp "$attempt/log" "$work_dir/log"
-sed -i '/TestMatrix/d' "$attempt/log"
+sed -i '/Test_Matrix/d' "$attempt/log"
 if "$reporter" "$results" full "$work_dir/report-catalog.tsv" >"$work_dir/report-no-pass.out" 2>&1; then
     echo 'отчёт принял результат без PASS назначенного теста' >&2
     exit 1
 fi
-grep -Fq 'нет PASS для TestMatrix' "$work_dir/report-no-pass.out"
+grep -Fq 'нет PASS для Test_Matrix' "$work_dir/report-no-pass.out"
 mv "$work_dir/log" "$attempt/log"
 
 printf '%s\n' fail >"$attempt/status"

@@ -29,7 +29,7 @@ type observedSnapshot struct {
 	AppliedRAMGB              int
 }
 
-func TestValkeyMutationsPreserveObservedStateAndBilling(t *testing.T) {
+func Test_MutateValkey_WithNameMaintenanceSizeWhitelistAndPassword_PreservesObservedStateAndBilling(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{
@@ -188,7 +188,7 @@ func TestValkeyMutationsPreserveObservedStateAndBilling(t *testing.T) {
 	assertStatus(t, afterDeleteRotate, http.StatusAccepted)
 }
 
-func TestResizeNoOpPrecedesReadinessAndIsIdempotent(t *testing.T) {
+func Test_ResizeValkey_WithCurrentSize_ReturnsIdempotentNoOpBeforeReadinessChecks(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	created := createValkey(t, app, account, map[string]any{"name": "noop-cache", "vcpu": 1, "ram_gb": 2})

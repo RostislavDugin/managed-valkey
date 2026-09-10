@@ -9,7 +9,7 @@ import {
 } from './valkey-credentials';
 
 describe('учётные данные Valkey', () => {
-  it('кодирует 24 случайных байта в 32 символа base64url', () => {
+  it('при создании пароля кодирует 24 случайных байта в 32 символа base64url', () => {
     const getRandomValues = vi.spyOn(crypto, 'getRandomValues').mockImplementation((value) => {
       const bytes = value as Uint8Array;
       bytes.fill(255);
@@ -26,7 +26,7 @@ describe('учётные данные Valkey', () => {
     expect(password).toMatch(VALKEY_PASSWORD_PATTERN);
   });
 
-  it('проверяет формат и строит маску из первых четырёх символов', () => {
+  it('для пароля допустимого формата подтверждает валидность и строит маску из первых четырёх символов', () => {
     const password = 'abcdEFGHijklMNOPqrstUVWXyz01_234';
 
     expect(validateValkeyPassword(password)).toBeNull();

@@ -37,7 +37,7 @@ import (
 	valkeyclient "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestEnvtestManagerStartsAndStopsOnContext(t *testing.T) {
+func Test_Envtest_Manager_WhenContextIsCanceled_StartsAndStopsCleanly(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	probeAddr := freeAddress(t)
@@ -78,7 +78,7 @@ func TestEnvtestManagerStartsAndStopsOnContext(t *testing.T) {
 	}
 }
 
-func TestEnvtestValkeyInstanceContract(t *testing.T) {
+func Test_Envtest_ValkeyInstance_WithValidAndInvalidResources_EnforcesCRDContractAndPersistsStatus(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx := context.Background()
 
@@ -197,7 +197,7 @@ func TestEnvtestValkeyInstanceContract(t *testing.T) {
 	}
 }
 
-func TestEnvtestCT03OperationStatusContract(t *testing.T) {
+func Test_Envtest_CT03_OperationStatus_WithValidAndInvalidValues_PersistsStateAndRejectsUnknownEnums(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx := context.Background()
 
@@ -318,19 +318,19 @@ func TestEnvtestCT03OperationStatusContract(t *testing.T) {
 	}
 
 	tests := map[string]func(*valkeyv1alpha1.ValkeyInstanceStatus){
-		"phase": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		"при неизвестной фазе отклоняет обновление status": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			status.Phase = valkeyv1alpha1.InstancePhase("invalid")
 		},
-		"failover reason": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		"при неизвестной причине failover отклоняет обновление status": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			status.Failover.Reason = valkeyv1alpha1.FailoverReason("invalid")
 		},
-		"failover stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		"при неизвестной стадии failover отклоняет обновление status": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			status.Failover.Stage = valkeyv1alpha1.FailoverStage("invalid")
 		},
-		"rollout stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		"при неизвестной стадии rollout отклоняет обновление status": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			status.Rollout.Stage = valkeyv1alpha1.RolloutStage("invalid")
 		},
-		"credential rotation stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		"при неизвестной стадии смены пароля отклоняет обновление status": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 			status.CredentialRotation.Stage = valkeyv1alpha1.CredentialRotationStage("invalid")
 		},
 	}
@@ -397,7 +397,7 @@ func newCompleteInstance(name string) *valkeyv1alpha1.ValkeyInstance {
 	}
 }
 
-func TestEnvtestReconcileDiagnosesIncompleteResource(t *testing.T) {
+func Test_Envtest_Reconcile_WithIncompleteResource_SetsErrorPhaseWithoutCreatingWorkload(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	mgr, err := operator.NewManager(restConfig, config.Config{
@@ -467,7 +467,7 @@ func TestEnvtestReconcileDiagnosesIncompleteResource(t *testing.T) {
 	assertNoDependents(ctx, t, k8s, namespace.Name)
 }
 
-func TestEnvtestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
+func Test_Envtest_Reconcile_WithStableInitialConfiguration_AcceptsIntentAndStartsProvisioning(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	mgr, err := operator.NewManager(restConfig, config.Config{
@@ -571,7 +571,7 @@ func TestEnvtestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 	assertNoDependents(ctx, t, k8s, ha.Namespace)
 }
 
-func TestEnvtestCredentialsInitializationSurvivesRestartBoundary(t *testing.T) {
+func Test_Envtest_ReconcileCredentials_AfterManagerRestart_PreservesGeneratedServiceCredentials(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -668,7 +668,7 @@ func TestEnvtestCredentialsInitializationSurvivesRestartBoundary(t *testing.T) {
 	assertCredentialsPrecedeStatefulSet(ctx, t, k8s, persisted)
 }
 
-func TestEnvtestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
+func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIdempotently(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -836,7 +836,7 @@ func TestEnvtestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
 	assertResourceVersion(t, context.Background(), k8s, &policies.Items[0], policies.Items[0].ResourceVersion)
 }
 
-func TestEnvtestCredentialFailuresDoNotRegenerateOrExposeSecrets(t *testing.T) {
+func Test_Envtest_ReconcileCredentials_WhenInitializationFails_DoesNotRegenerateOrExposeSecrets(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

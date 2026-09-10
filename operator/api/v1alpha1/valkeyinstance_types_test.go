@@ -10,7 +10,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestNodeMetricStatusPreservesMicrosecondsAndNullableCPU(t *testing.T) {
+func Test_NodeMetricStatus_WhenJSONRoundTrip_PreservesMicrosecondsAndNullableCPU(t *testing.T) {
 	collectedAt := time.Date(2026, time.September, 9, 12, 34, 56, 123456000, time.UTC)
 	metric := valkeyv1alpha1.NodeMetricStatus{
 		Ordinal:          1,

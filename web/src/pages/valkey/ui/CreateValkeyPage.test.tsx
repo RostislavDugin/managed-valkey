@@ -51,7 +51,7 @@ function installApi(catalogResponses: Response[]) {
 }
 
 describe('форма создания Valkey', () => {
-  it('сохраняет значения и запрещает создание до повторной загрузки каталога', async () => {
+  it('после ошибки каталога сохраняет введённые значения и запрещает создание до успешной повторной загрузки', async () => {
     const session = seedSession();
     installApi([
       jsonResponse(
@@ -84,7 +84,7 @@ describe('форма создания Valkey', () => {
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
   });
 
-  it('требует подтверждения включённого пустого списка адресов', async () => {
+  it('при включённом пустом списке адресов требует явного подтверждения недоступности базы', async () => {
     const session = seedSession();
     installApi([jsonResponse(catalog)]);
     const user = userEvent.setup();
@@ -106,7 +106,7 @@ describe('форма создания Valkey', () => {
     expect(create).toBeEnabled();
   });
 
-  it('сохраняет форму после 422 и создаёт новый пароль при следующей отправке', async () => {
+  it('после ответа 422 сохраняет поля формы, а при следующей отправке создаёт новый пароль', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi([]);
     const statefulFetch = window.fetch;
@@ -175,7 +175,7 @@ describe('форма создания Valkey', () => {
     );
   });
 
-  it('повторяет потерянную отправку с теми же ключом и паролем и показывает пароль один раз', async () => {
+  it('после потерянного ответа повторяет создание с теми же ключом и паролем, а полученный пароль показывает один раз', async () => {
     const session = seedSession();
     installStatefulValkeyApi([]);
     const statefulFetch = window.fetch;

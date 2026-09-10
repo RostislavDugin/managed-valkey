@@ -15,7 +15,9 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestFP12ChooseMostAdvancedCandidateFromSameHistory(t *testing.T) {
+func Test_FP12_ChooseFailoverCandidate_WithMultipleHistories_ReturnsMostAdvancedCandidateFromSourceHistory(
+	t *testing.T,
+) {
 	syncedAt := metav1.NewTime(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC))
 	source := failoverNode(0, valkeyv1alpha1.NodeRolePrimary, "history-a", 100, &syncedAt)
 	older := failoverNode(1, valkeyv1alpha1.NodeRoleReplica, "history-a", 90, &syncedAt)
@@ -36,7 +38,7 @@ func TestFP12ChooseMostAdvancedCandidateFromSameHistory(t *testing.T) {
 	}
 }
 
-func TestOP04PromotionLostResponseUsesPersistedCandidate(t *testing.T) {
+func Test_OP04_ReconcileFailoverPromoting_WhenPromotionResponseWasLost_UsesPersistedCandidateState(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -81,7 +83,7 @@ func TestOP04PromotionLostResponseUsesPersistedCandidate(t *testing.T) {
 	}
 }
 
-func TestOP03ReconfiguringRestartsFailoverWhenNewPrimaryFails(t *testing.T) {
+func Test_OP03_ReconcileFailoverReconfiguring_WhenNewPrimaryFails_RestartsFailoverWithNewFencing(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -117,7 +119,7 @@ func TestOP03ReconfiguringRestartsFailoverWhenNewPrimaryFails(t *testing.T) {
 	}
 }
 
-func TestFP11AllStoppedProcessesPermitEmptyRecovery(t *testing.T) {
+func Test_FP11_ReconcileFailoverChoosing_WhenAllPreviousProcessesAreStopped_PermitsEmptyRecovery(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -171,7 +173,7 @@ func TestFP11AllStoppedProcessesPermitEmptyRecovery(t *testing.T) {
 	}
 }
 
-func TestCT07EmptyRecoveryRejectsUnknownOrPreviouslySyncedProcess(t *testing.T) {
+func Test_CT07_CheckEmptyRecovery_WithUnknownOrPreviouslySynchronizedProcess_RejectsRecovery(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.PasswordVersion = 1
@@ -204,7 +206,7 @@ func TestCT07EmptyRecoveryRejectsUnknownOrPreviouslySyncedProcess(t *testing.T) 
 	}
 }
 
-func TestCT07EmptyRecoveryWaitRequiresFencingAndFullTimeout(t *testing.T) {
+func Test_CT07_ReconcileEmptyRecovery_BeforeSourceIsFencedAndTimeoutExpires_WaitsBeforeDeclaringDataLoss(t *testing.T) {
 	ctx := context.Background()
 	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	emptySince := metav1.NewTime(startedAt)

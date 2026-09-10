@@ -23,7 +23,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestValidateEnvoySnapshot(t *testing.T) {
+func Test_ValidateEnvoySnapshot_WithReadyWarmingAndUnknownSnapshots_ReturnsExpectedValidationState(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)
 	snapshot := testEnvoySnapshot(t, expected, false)
@@ -44,7 +44,7 @@ func TestValidateEnvoySnapshot(t *testing.T) {
 	}
 }
 
-func TestHA04VerifyEnvoyRequiresPrimaryAndReadOnlyRoutes(t *testing.T) {
+func Test_HA04_VerifyEnvoy_WithHAMode_RequiresPrimaryAndReadOnlyRoutes(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)
 	readOnly := expected
@@ -83,7 +83,7 @@ func TestHA04VerifyEnvoyRequiresPrimaryAndReadOnlyRoutes(t *testing.T) {
 	}
 }
 
-func TestHA04VerifyEnvoyAllowsReadOnlyRouteWithoutReadyReplica(t *testing.T) {
+func Test_HA04_ValidateEnvoySnapshot_WhenReadOnlyReplicaIsNotReady_AcceptsRouteWithoutBackendAddress(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)
 	readOnly := expected
@@ -99,12 +99,14 @@ func TestHA04VerifyEnvoyAllowsReadOnlyRouteWithoutReadyReplica(t *testing.T) {
 	}
 }
 
-func TestVerifyEnvoyRejectsOneResponseAndCompositionChange(t *testing.T) {
+func Test_VerifyEnvoy_WithConfiguredCountUnavailableProcessOrCompositionChange_ReturnsExpectedVerificationState(
+	t *testing.T,
+) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)
 	snapshot := testEnvoySnapshot(t, expected, false)
 
-	t.Run("configured single process", func(t *testing.T) {
+	t.Run("при одном настроенном процессе подтверждает единственный снимок", func(t *testing.T) {
 		k8s := testEnvoyClient()
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: envoyNamespace, Name: "envoy-1"}}
 		if err := k8s.Delete(context.Background(), pod); err != nil {
@@ -123,7 +125,7 @@ func TestVerifyEnvoyRejectsOneResponseAndCompositionChange(t *testing.T) {
 		}
 	})
 
-	t.Run("one response", func(t *testing.T) {
+	t.Run("при ответе только одного из двух процессов возвращает неизвестное состояние", func(t *testing.T) {
 		k8s := testEnvoyClient()
 		reconciler := &ValkeyInstanceReconciler{
 			Client:          k8s,
@@ -143,40 +145,43 @@ func TestVerifyEnvoyRejectsOneResponseAndCompositionChange(t *testing.T) {
 		}
 	})
 
-	t.Run("composition changed", func(t *testing.T) {
-		k8s := testEnvoyClient()
-		var once sync.Once
-		reconciler := &ValkeyInstanceReconciler{
-			Client:          k8s,
-			SystemNamespace: "valkey-system",
-			ReadEnvoy: func(ctx context.Context, _ corev1.Pod) (EnvoyAdminSnapshot, error) {
-				once.Do(func() {
-					pod := &corev1.Pod{}
-					key := client.ObjectKey{Namespace: envoyNamespace, Name: "envoy-1"}
-					if err := k8s.Get(ctx, key, pod); err != nil {
-						t.Fatalf("прочитать меняющийся Pod Envoy: %v", err)
-					}
-					pod.Status.ContainerStatuses[0].ContainerID = "containerd://changed"
-					if err := k8s.Status().Update(ctx, pod); err != nil {
-						t.Fatalf("изменить процесс Envoy: %v", err)
-					}
-				})
+	t.Run(
+		"при смене процесса во время чтения возвращает неизвестное состояние без содержимого снимка",
+		func(t *testing.T) {
+			k8s := testEnvoyClient()
+			var once sync.Once
+			reconciler := &ValkeyInstanceReconciler{
+				Client:          k8s,
+				SystemNamespace: "valkey-system",
+				ReadEnvoy: func(ctx context.Context, _ corev1.Pod) (EnvoyAdminSnapshot, error) {
+					once.Do(func() {
+						pod := &corev1.Pod{}
+						key := client.ObjectKey{Namespace: envoyNamespace, Name: "envoy-1"}
+						if err := k8s.Get(ctx, key, pod); err != nil {
+							t.Fatalf("прочитать меняющийся Pod Envoy: %v", err)
+						}
+						pod.Status.ContainerStatuses[0].ContainerID = "containerd://changed"
+						if err := k8s.Status().Update(ctx, pod); err != nil {
+							t.Fatalf("изменить процесс Envoy: %v", err)
+						}
+					})
 
-				return snapshot, nil
-			},
-		}
-		result := reconciler.verifyEnvoy(context.Background(), expected)
-		if result.status != valkeyv1alpha1.NetworkVerificationUnknown ||
-			result.reason != "EnvoyCompositionChanged" {
-			t.Fatalf("смена процесса Envoy не обнаружена: %+v", result)
-		}
-		if strings.Contains(fmt.Sprintf("%+v", result), "sensitive-dump-marker") {
-			t.Fatal("дамп Envoy попал в результат проверки")
-		}
-	})
+					return snapshot, nil
+				},
+			}
+			result := reconciler.verifyEnvoy(context.Background(), expected)
+			if result.status != valkeyv1alpha1.NetworkVerificationUnknown ||
+				result.reason != "EnvoyCompositionChanged" {
+				t.Fatalf("смена процесса Envoy не обнаружена: %+v", result)
+			}
+			if strings.Contains(fmt.Sprintf("%+v", result), "sensitive-dump-marker") {
+				t.Fatal("дамп Envoy попал в результат проверки")
+			}
+		},
+	)
 }
 
-func TestVerifyEnvoyReusesSnapshotUntilProcessesOrIntervalChange(t *testing.T) {
+func Test_VerifyEnvoy_WithUnchangedProcessesAndRefreshInterval_ReusesValidatedSnapshot(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)
 	snapshot := testEnvoySnapshot(t, expected, false)
@@ -255,7 +260,7 @@ func TestVerifyEnvoyReusesSnapshotUntilProcessesOrIntervalChange(t *testing.T) {
 	}
 }
 
-func TestNT06EnvoyRefreshDoesNotBlockValkeyHeartbeat(t *testing.T) {
+func Test_NT06_VerifyEnvoy_WhenBackgroundRefreshBlocks_DoesNotBlockValkeyHeartbeat(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	pod.Spec.NodeName = "valkey-worker"

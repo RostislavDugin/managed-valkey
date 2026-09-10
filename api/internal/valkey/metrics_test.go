@@ -7,7 +7,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func TestParseMetricWindowUsesFixedRanges(t *testing.T) {
+func Test_ParseMetricWindow_WithFixedRange_UsesExpectedDurationAndStep(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 34, 56, 0, time.FixedZone("test", 3*60*60))
 	tests := []struct {
 		name     string
@@ -15,7 +15,7 @@ func TestParseMetricWindowUsesFixedRanges(t *testing.T) {
 		duration time.Duration
 		step     time.Duration
 	}{
-		{name: "default", duration: time.Hour, step: time.Minute},
+		{name: "диапазон по умолчанию", duration: time.Hour, step: time.Minute},
 		{name: "5m", input: metricRangeInput("5m"), duration: 5 * time.Minute, step: 10 * time.Second},
 		{name: "1h", input: metricRangeInput("1h"), duration: time.Hour, step: time.Minute},
 		{name: "24h", input: metricRangeInput("24h"), duration: 24 * time.Hour, step: 5 * time.Minute},
@@ -38,7 +38,7 @@ func TestParseMetricWindowUsesFixedRanges(t *testing.T) {
 	}
 }
 
-func TestParseMetricWindowUsesCustomRange(t *testing.T) {
+func Test_ParseMetricWindow_WithCustomRange_NormalizesTimeAndSelectsStep(t *testing.T) {
 	tests := []struct {
 		name string
 		from string
@@ -46,14 +46,14 @@ func TestParseMetricWindowUsesCustomRange(t *testing.T) {
 		step time.Duration
 	}{
 		{
-			name: "five minutes",
+			name: "пять минут",
 			from: "2026-09-09T09:00:00+03:00",
 			to:   "2026-09-09T09:05:00+03:00",
 			step: 10 * time.Second,
 		},
-		{name: "one hour", from: "2026-09-09T06:00:00Z", to: "2026-09-09T07:00:00Z", step: time.Minute},
-		{name: "one day", from: "2026-09-08T06:00:00Z", to: "2026-09-09T06:00:00Z", step: 5 * time.Minute},
-		{name: "seven days", from: "2026-09-02T06:00:00Z", to: "2026-09-09T06:00:00Z", step: 30 * time.Minute},
+		{name: "один час", from: "2026-09-09T06:00:00Z", to: "2026-09-09T07:00:00Z", step: time.Minute},
+		{name: "один день", from: "2026-09-08T06:00:00Z", to: "2026-09-09T06:00:00Z", step: 5 * time.Minute},
+		{name: "семь дней", from: "2026-09-02T06:00:00Z", to: "2026-09-09T06:00:00Z", step: 30 * time.Minute},
 	}
 
 	for _, testCase := range tests {
@@ -69,7 +69,7 @@ func TestParseMetricWindowUsesCustomRange(t *testing.T) {
 	}
 }
 
-func TestParseMetricWindowRejectsInvalidInput(t *testing.T) {
+func Test_ParseMetricWindow_WithInvalidInput_ReturnsError(t *testing.T) {
 	rangeValue := "5m"
 	from := "2026-09-09T06:00:00Z"
 	to := "2026-09-09T07:00:00Z"

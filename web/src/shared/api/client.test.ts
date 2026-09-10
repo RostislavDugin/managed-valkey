@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 describe('apiRequest', () => {
-  it('добавляет URL, JSON-заголовки, request id и JWT', async () => {
+  it('при запросе к API добавляет базовый путь, JSON-заголовки, идентификатор запроса и JWT', async () => {
     localStorage.setItem('mv_token', 'server-token');
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(jsonResponse({ ok: true }));
 
@@ -45,7 +45,7 @@ describe('apiRequest', () => {
 });
 
 describe('повторы', () => {
-  it('возвращает успех первой попытки без ожидания', async () => {
+  it('после успешной первой попытки возвращает ответ без задержки и повторного запроса', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ ok: true }));
     const sleep = vi.fn().mockResolvedValue(undefined);
 
@@ -56,21 +56,26 @@ describe('повторы', () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it.each([408, 425, 500, 502, 503, 504])('повторяет временный статус %d', async (status) => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'TEMPORARY' } }, status))
-      .mockResolvedValueOnce(jsonResponse({ ok: true }));
-    const sleep = vi.fn().mockResolvedValue(undefined);
+  it.each([408, 425, 500, 502, 503, 504])(
+    'после временного статуса %d ждёт и повторяет запрос',
+    async (status) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({ error: { code: 'TEMPORARY' } }, status))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const sleep = vi.fn().mockResolvedValue(undefined);
 
-    await expect(executeApiRequest('/probe', {}, dependencies(fetchMock, sleep))).resolves.toEqual({
-      ok: true,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(125, undefined);
-  });
+      await expect(
+        executeApiRequest('/probe', {}, dependencies(fetchMock, sleep))
+      ).resolves.toEqual({
+        ok: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(125, undefined);
+    }
+  );
 
-  it('останавливается после трёх сетевых ошибок', async () => {
+  it('после трёх последовательных сетевых ошибок прекращает повторы и возвращает последнюю ошибку', async () => {
     const networkError = new TypeError('network failed');
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(networkError);
     const sleep = vi.fn().mockResolvedValue(undefined);
@@ -82,18 +87,21 @@ describe('повторы', () => {
     expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([125, 250]);
   });
 
-  it.each([400, 401, 403, 404, 409, 422, 429])('не повторяет статус %d', async (status) => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(jsonResponse({ error: { code: 'REJECTED' } }, status));
+  it.each([400, 401, 403, 404, 409, 422, 429])(
+    'после постоянного статуса %d сразу возвращает ошибку без повтора',
+    async (status) => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ error: { code: 'REJECTED' } }, status));
 
-    await expect(executeApiRequest('/probe', {}, dependencies(fetchMock))).rejects.toBeInstanceOf(
-      ApiError
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
+      await expect(executeApiRequest('/probe', {}, dependencies(fetchMock))).rejects.toBeInstanceOf(
+        ApiError
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  );
 
-  it('не повторяет изменяющий запрос без политики или ключа', async () => {
+  it('после сетевой ошибки не повторяет изменяющий запрос без разрешающей политики или ключа идемпотентности', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('network failed'));
 
     await expect(
@@ -102,7 +110,7 @@ describe('повторы', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('повторяет явно разрешённый POST и не повторяет ReadableStream', async () => {
+  it('после сетевой ошибки повторяет явно разрешённый POST, но не повторяет запрос с ReadableStream', async () => {
     const retryingFetch = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(new TypeError('network failed'))
@@ -127,7 +135,7 @@ describe('повторы', () => {
     expect(streamFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('сохраняет метод, путь, тело и заголовки запроса с ключом', async () => {
+  it('при повторе идемпотентного запроса сохраняет его метод, путь, тело и служебные заголовки', async () => {
     const headers = new Headers({
       'Idempotency-Key': 'operation-key',
       'X-Request-Id': 'request-id',
@@ -156,7 +164,7 @@ describe('повторы', () => {
 });
 
 describe('отмена', () => {
-  it('не начинает отменённый запрос', async () => {
+  it('если сигнал уже отменён, не начинает запрос и возвращает AbortError', async () => {
     const controller = new AbortController();
     controller.abort();
     const fetchMock = vi.fn<typeof fetch>();
@@ -167,7 +175,7 @@ describe('отмена', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('не преобразует AbortError из fetch', async () => {
+  it('если fetch возвращает AbortError, передаёт тот же объект ошибки вызывающему коду', async () => {
     const abortError = new DOMException('aborted', 'AbortError');
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(abortError);
 
@@ -175,7 +183,7 @@ describe('отмена', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('останавливает активный fetch через AbortSignal', async () => {
+  it('после отмены сигнала останавливает активный fetch и возвращает AbortError', async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn<typeof fetch>(
       (_input, init) =>
@@ -195,7 +203,7 @@ describe('отмена', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('останавливается между попытками', async () => {
+  it('при отмене во время задержки прекращает повторы до следующего запроса', async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('network failed'));
     const sleep = vi.fn(
@@ -220,7 +228,7 @@ describe('отмена', () => {
 });
 
 describe('ошибки ответа', () => {
-  it('берёт retry_after из JSON, затем заголовка, затем использует 60 секунд', async () => {
+  it('для ответа 429 выбирает retry_after из JSON или заголовка, а без них использует 60 секунд', async () => {
     await expect(
       parseApiResponse(
         jsonResponse({ error: { code: 'RATE_LIMITED', details: { retry_after: 17 } } }, 429)
@@ -244,7 +252,7 @@ describe('ошибки ответа', () => {
     });
   });
 
-  it('отмечает недействительный JSON', async () => {
+  it('если тело ошибочного ответа не является JSON, возвращает ошибку INVALID_RESPONSE', async () => {
     await expect(parseApiResponse(new Response('not-json', { status: 500 }))).rejects.toMatchObject(
       {
         code: 'INVALID_RESPONSE',
@@ -252,7 +260,7 @@ describe('ошибки ответа', () => {
     );
   });
 
-  it('удаляет токен и отправляет событие при 401', async () => {
+  it('после ответа 401 удаляет локальный токен и отправляет событие недействительной авторизации', async () => {
     localStorage.setItem('mv_token', 'server-token');
     const listener = vi.fn();
     window.addEventListener(AUTH_INVALIDATED_EVENT, listener, { once: true });

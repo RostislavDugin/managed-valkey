@@ -16,7 +16,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestFP06UnresponsiveProcessDeletionIsPersisted(t *testing.T) {
+func Test_FP06_ReconcileProcessRecovery_WhenProcessIsUnresponsive_PersistsDeletionBeforeDeletingPod(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	instance, pod, node, secret := processObservationObjects()
@@ -57,7 +57,7 @@ func TestFP06UnresponsiveProcessDeletionIsPersisted(t *testing.T) {
 	}
 }
 
-func TestFP06RecoveryBelongsToExactProcess(t *testing.T) {
+func Test_FP06_ReconcileProcessRecovery_WhenProcessIdentityChanges_DoesNotApplyRecoveryToReplacement(t *testing.T) {
 	requestedAt := metav1.Now()
 	current := valkeyv1alpha1.NodeStatus{
 		Ordinal: 0, PodUID: "pod-old", ContainerID: "containerd://old", RunID: "run-old",
@@ -83,7 +83,7 @@ func TestFP06RecoveryBelongsToExactProcess(t *testing.T) {
 	}
 }
 
-func TestFP09UnkillableBusyProcessAdvancesToDeletion(t *testing.T) {
+func Test_FP09_ReconcileProcessRecovery_WhenBusyProcessIsUnkillable_AdvancesToDeletion(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	process := testObservedNode(pod)
@@ -113,7 +113,7 @@ func TestFP09UnkillableBusyProcessAdvancesToDeletion(t *testing.T) {
 	}
 }
 
-func TestFP08NoBusyProcessClearsRecovery(t *testing.T) {
+func Test_FP08_ReconcileProcessRecovery_WhenNoBusyProcessRemains_ClearsRecovery(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	process := testObservedNode(pod)
@@ -144,7 +144,7 @@ func TestFP08NoBusyProcessClearsRecovery(t *testing.T) {
 	}
 }
 
-func TestFP07ResponseCancelsUnacceptedUnresponsiveDeletion(t *testing.T) {
+func Test_FP07_ReconcileProcessRecovery_WhenNonTransportResponseArrives_CancelsUnacceptedDeletion(t *testing.T) {
 	for _, kind := range []valkeyv1alpha1.ProcessObservationKind{
 		valkeyv1alpha1.ProcessObservationBusy,
 		valkeyv1alpha1.ProcessObservationLoading,
@@ -178,7 +178,9 @@ func TestFP07ResponseCancelsUnacceptedUnresponsiveDeletion(t *testing.T) {
 	}
 }
 
-func TestFP09KillingBusyAdvancesAfterTransportThreshold(t *testing.T) {
+func Test_FP09_ReconcileProcessRecovery_WhenKillingBusyProcessReachesTransportThreshold_AdvancesToDeletion(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	instance, _, _, _ := processObservationObjects()
@@ -213,7 +215,7 @@ func TestFP09KillingBusyAdvancesAfterTransportThreshold(t *testing.T) {
 	}
 }
 
-func TestFP01PendingReplicaRecoveryAllowsPrimaryFailover(t *testing.T) {
+func Test_FP01_ReconcileProcessRecovery_WhenReplicaRecoveryIsPending_AllowsPrimaryFailover(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA

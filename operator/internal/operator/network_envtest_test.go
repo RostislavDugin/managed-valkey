@@ -26,7 +26,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestEnvtestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
+func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_PreservesOtherListeners(t *testing.T) {
 	environment := &envtest.Environment{CRDs: []*apiextensionsv1.CustomResourceDefinition{
 		networkTestCRD(gatewayv1.GroupName, "v1", "Gateway", "gateways"),
 		networkTestCRD(gatewayv1.GroupName, "v1alpha2", "TCPRoute", "tcproutes"),

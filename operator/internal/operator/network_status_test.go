@@ -26,7 +26,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestValidateTLSCertificate(t *testing.T) {
+func Test_ValidateTLSCertificate_WithReadyExpiringOrMismatchedCertificate_ReturnsExpectedState(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	valid := testCertificatePEM(t, "*.valkey.localhost", now.Add(-time.Hour), now.Add(time.Hour))
 	if _, err := inspectTLSCertificate(valid, "cache-a1b2c3.valkey.localhost", now); err != nil {
@@ -42,7 +42,7 @@ func TestValidateTLSCertificate(t *testing.T) {
 	}
 }
 
-func TestConditionsMustMatchCurrentGeneration(t *testing.T) {
+func Test_ConditionsReady_WithCurrentGeneration_AcceptsOnlyMatchingObservedGeneration(t *testing.T) {
 	conditions := []metav1.Condition{
 		{Type: "Accepted", Status: metav1.ConditionTrue, ObservedGeneration: 4},
 		{Type: "ResolvedRefs", Status: metav1.ConditionTrue, ObservedGeneration: 4},
@@ -55,7 +55,7 @@ func TestConditionsMustMatchCurrentGeneration(t *testing.T) {
 	}
 }
 
-func TestReadOnlyRouteAllowsOnlyMissingReadyEndpoints(t *testing.T) {
+func Test_ReadOnlyRouteReady_WithMissingOrInvalidConditions_AllowsOnlyMissingReadyEndpoints(t *testing.T) {
 	namespace := gatewayv1.Namespace("valkey-system")
 	section := gatewayv1.SectionName("cache-a1b2c3-ro")
 	route := &gatewayv1alpha2.TCPRoute{
@@ -89,7 +89,7 @@ func TestReadOnlyRouteAllowsOnlyMissingReadyEndpoints(t *testing.T) {
 	}
 }
 
-func TestNetworkFingerprintContainsOnlyInstanceSettings(t *testing.T) {
+func Test_NetworkFingerprint_WhenInstanceOrNeighborSettingsChange_ContainsOnlyTargetInstanceSettings(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	first := testNetworkPrerequisites(now)
 	first.CertificateHash = "certificate-a"
@@ -120,7 +120,7 @@ func TestNetworkFingerprintContainsOnlyInstanceSettings(t *testing.T) {
 	}
 }
 
-func TestTCPRouteServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
+func Test_ReconcileTCPRoute_WhenServerAddsDefaults_DoesNotPatchRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	desired := desiredTCPRoute(instance, "valkey-system", networkEndpoints(instance)[0])
@@ -141,7 +141,7 @@ func TestTCPRouteServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
 	}
 }
 
-func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
+func Test_UpdateNetworkVerification_WithoutNewSnapshot_KeepsLastSuccessfulVerification(t *testing.T) {
 	verifiedAt := metav1.NewTime(time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC))
 	processes := []valkeyv1alpha1.EnvoyProcessStatus{{
 		PodUID: "envoy-1", NodeName: "worker-1", NodeUID: "node-1", ContainerID: "containerd://1",
@@ -269,7 +269,7 @@ func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
 	}
 }
 
-func TestNetworkVerificationAllowsOperationsWithOneUnchangedEnvoy(t *testing.T) {
+func Test_NetworkVerification_WithOneUnchangedEnvoy_AllowsNonNetworkOperations(t *testing.T) {
 	processes := []valkeyv1alpha1.EnvoyProcessStatus{{
 		PodUID: "envoy-1", NodeName: "worker-1", NodeUID: "node-1", ContainerID: "containerd://1",
 	}}
@@ -293,7 +293,7 @@ func TestNetworkVerificationAllowsOperationsWithOneUnchangedEnvoy(t *testing.T) 
 	}
 }
 
-func TestCertificateResourceRulesDifferByEnvironment(t *testing.T) {
+func Test_CertificateResourceRules_WithDevelopmentAndProduction_UseEnvironmentSpecificRequirements(t *testing.T) {
 	ctx := context.Background()
 	withoutCertificate := fake.NewClientBuilder().WithScheme(NewScheme()).Build()
 	reconciler := &ValkeyInstanceReconciler{

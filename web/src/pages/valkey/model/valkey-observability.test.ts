@@ -12,14 +12,14 @@ function localIso(year: number, month: number, day: number, hour = 12) {
 }
 
 describe('модель метрик Valkey', () => {
-  it('задаёт четыре окна и их шаг', () => {
+  it('для выбора периода предоставляет четыре окна метрик с соответствующим шагом', () => {
     expect(METRIC_WINDOWS).toEqual(['5m', '1h', '24h', '7d']);
     expect(METRIC_WINDOWS.map((range) => METRIC_WINDOW_CONFIG[range].stepMs)).toEqual([
       10_000, 60_000, 300_000, 1_800_000,
     ]);
   });
 
-  it('форматирует единицы метрик и пропуски', () => {
+  it('для значений метрик форматирует байты, проценты, операции и отсутствующие точки', () => {
     expect(formatMetricValue('usedMemoryBytes', 1.5 * 1024 ** 3)).toBe('1,5\u00A0ГБ');
     expect(formatMetricValue('cpuMillicores', 62.7)).toBe('62,7\u00A0%');
     expect(formatMetricValue('connectedClients', 1200)).toMatch(/1\s200/);
@@ -27,13 +27,13 @@ describe('модель метрик Valkey', () => {
     expect(formatMetricValue('evictedKeys', null)).toBe('Нет данных');
   });
 
-  it('показывает календарный день на недельной оси', () => {
+  it('для недельного окна показывает на оси местный календарный день вместо времени', () => {
     const value = localIso(2026, 9, 8);
     expect(formatMetricAxisTime(value, '7d')).toMatch(/8\sсент/i);
     expect(formatMetricAxisTime(value, '1h')).toMatch(/\d{2}:\d{2}/);
   });
 
-  it('сводит ряды нод по времени, переводит CPU в проценты и сохраняет null', () => {
+  it('при объединении рядов нод выравнивает точки по времени, переводит CPU в проценты и сохраняет пропуски', () => {
     const collectedAt = localIso(2026, 9, 8);
     const metricPoint = {
       collectedAt,

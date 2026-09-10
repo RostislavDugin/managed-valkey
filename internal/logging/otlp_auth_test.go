@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestOTLPAuthorizationValidation(t *testing.T) {
+func Test_ConfigureOtlpExport_WithInvalidTransportOrCredentials_ReportsErrorWithoutLeakingPassword(t *testing.T) {
 	passwordFile := filepath.Join(t.TempDir(), "password")
 	if err := os.WriteFile(passwordFile, []byte("private-test-password\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -27,11 +27,11 @@ func TestOTLPAuthorizationValidation(t *testing.T) {
 		username string
 		file     string
 	}{
-		{"http", "http://localhost/logs", "operator", passwordFile},
-		{"missing username", "https://localhost/logs", "", passwordFile},
-		{"missing file", "https://localhost/logs", "operator", ""},
-		{"unreadable file", "https://localhost/logs", "operator", passwordFile + ".missing"},
-		{"credentials in URL", "https://operator:private-test-password@localhost/logs", "", ""},
+		{"адрес HTTP отключает экспорт и не раскрывает пароль", "http://localhost/logs", "operator", passwordFile},
+		{"отсутствующее имя пользователя отключает экспорт и не раскрывает пароль", "https://localhost/logs", "", passwordFile},
+		{"отсутствующий файл пароля отключает экспорт и не раскрывает пароль", "https://localhost/logs", "operator", ""},
+		{"недоступный файл пароля отключает экспорт и не раскрывает пароль", "https://localhost/logs", "operator", passwordFile + ".missing"},
+		{"учётные данные в URL отключают экспорт и не раскрывают пароль", "https://operator:private-test-password@localhost/logs", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
@@ -55,7 +55,7 @@ func TestOTLPAuthorizationValidation(t *testing.T) {
 	}
 }
 
-func TestOTLPAuthenticatedHTTPS(t *testing.T) {
+func Test_ExportLogs_WithAuthenticatedHttps_SendsOneAuthorizedRequestWithoutRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusUnauthorized, http.StatusTemporaryRedirect} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var received, leaked atomic.Int32
@@ -116,7 +116,7 @@ func TestOTLPAuthenticatedHTTPS(t *testing.T) {
 	}
 }
 
-func TestOTLPRejectsUntrustedCertificate(t *testing.T) {
+func Test_ExportLogs_WithUntrustedCertificate_DoesNotSendRequest(t *testing.T) {
 	var received atomic.Int32
 	receiver := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		received.Add(1)

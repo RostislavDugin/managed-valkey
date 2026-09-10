@@ -22,7 +22,7 @@ type expectedAuditEvent struct {
 	createdAt time.Time
 }
 
-func TestValkeyAuditKeepsActorHistoryAndResponsesHideSecrets(t *testing.T) {
+func Test_RunValkeyLifecycle_WithActorChangesAndReplays_PreservesAuditHistoryAndHidesSecrets(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 16, 64)

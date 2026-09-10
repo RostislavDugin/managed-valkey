@@ -10,7 +10,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
-func TestValkeyPersonalQuotaCountsModeAndExactBoundary(t *testing.T) {
+func Test_CreateValkey_WithPersonalQuotaBoundary_CountsModeAndAcceptsExactLimit(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 
@@ -40,7 +40,7 @@ func TestValkeyPersonalQuotaCountsModeAndExactBoundary(t *testing.T) {
 	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", account.ID), 2)
 }
 
-func TestValkeyClusterQuotaRejectsImmediatelyWithoutPartialRows(t *testing.T) {
+func Test_CreateValkey_WhenClusterQuotaIsExhausted_ReturnsDeficitWithoutPartialRows(t *testing.T) {
 	tests := []struct {
 		name        string
 		clusterVCPU int
@@ -105,7 +105,7 @@ func TestValkeyClusterQuotaRejectsImmediatelyWithoutPartialRows(t *testing.T) {
 	}
 }
 
-func TestValkeyClusterQuotaAcceptsExactBoundary(t *testing.T) {
+func Test_CreateValkey_WithExactClusterQuotaBoundary_AcceptsRequest(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 2, clusterRAMGB: 3})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 8, 32)
@@ -121,7 +121,7 @@ func TestValkeyClusterQuotaAcceptsExactBoundary(t *testing.T) {
 	}
 }
 
-func TestValkeyResizeCanReduceAfterQuotaDecrease(t *testing.T) {
+func Test_ResizeValkey_AfterPersonalQuotaDecrease_AllowsReductionAndRejectsIncrease(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	setUserQuota(t, app, account.ID, 8, 32)

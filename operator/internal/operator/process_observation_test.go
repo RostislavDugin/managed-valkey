@@ -22,7 +22,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestReconcileProcessSavesFinalizerBeforeIdentity(t *testing.T) {
+func Test_ReconcileProcess_WhenFirstObserved_SavesFinalizerBeforeProcessIdentity(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	k8s := fake.NewClientBuilder().
@@ -108,19 +108,19 @@ func TestReconcileProcessSavesFinalizerBeforeIdentity(t *testing.T) {
 	}
 }
 
-func TestProcessIdentityChangeRequiresRecovery(t *testing.T) {
+func Test_SameProcess_WhenAnyIdentityFieldChanges_ReturnsFalse(t *testing.T) {
 	base := valkeyv1alpha1.NodeStatus{
 		Ordinal: 0, PodUID: "pod-1", ContainerID: "containerd://1", RunID: "run-1",
 		NodeName: "worker-1", NodeUID: "node-1",
 	}
 
 	tests := map[string]func(*valkeyv1alpha1.NodeStatus){
-		"ordinal":      func(status *valkeyv1alpha1.NodeStatus) { status.Ordinal = 1 },
-		"pod UID":      func(status *valkeyv1alpha1.NodeStatus) { status.PodUID = "pod-2" },
-		"container ID": func(status *valkeyv1alpha1.NodeStatus) { status.ContainerID = "containerd://2" },
-		"run_id":       func(status *valkeyv1alpha1.NodeStatus) { status.RunID = "run-2" },
-		"node name":    func(status *valkeyv1alpha1.NodeStatus) { status.NodeName = "worker-2" },
-		"node UID":     func(status *valkeyv1alpha1.NodeStatus) { status.NodeUID = "node-2" },
+		"при изменении ordinal считает процесс заменённым":       func(status *valkeyv1alpha1.NodeStatus) { status.Ordinal = 1 },
+		"при изменении UID Pod считает процесс заменённым":       func(status *valkeyv1alpha1.NodeStatus) { status.PodUID = "pod-2" },
+		"при изменении ID контейнера считает процесс заменённым": func(status *valkeyv1alpha1.NodeStatus) { status.ContainerID = "containerd://2" },
+		"при изменении run ID считает процесс заменённым":        func(status *valkeyv1alpha1.NodeStatus) { status.RunID = "run-2" },
+		"при изменении имени ноды считает процесс заменённым":    func(status *valkeyv1alpha1.NodeStatus) { status.NodeName = "worker-2" },
+		"при изменении UID ноды считает процесс заменённым":      func(status *valkeyv1alpha1.NodeStatus) { status.NodeUID = "node-2" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestProcessIdentityChangeRequiresRecovery(t *testing.T) {
 	}
 }
 
-func TestProcessInspectionTakesControlOncePerManagerStart(t *testing.T) {
+func Test_ProcessNeedsControl_AfterManagerStart_ReturnsTrueOnlyForUncontrolledProcess(t *testing.T) {
 	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	before := metav1.NewTime(startedAt.Add(-time.Second))
 	after := metav1.NewTime(startedAt.Add(time.Second))
@@ -153,7 +153,7 @@ func TestProcessInspectionTakesControlOncePerManagerStart(t *testing.T) {
 	}
 }
 
-func TestCT06ProcessHistoryPreservesUnconfirmedIncarnations(t *testing.T) {
+func Test_CT06_ReconcileProcess_WhenIdentityChanges_PreservesUnconfirmedPreviousIncarnations(t *testing.T) {
 	process := func(id string) valkeyv1alpha1.NodeStatus {
 		return valkeyv1alpha1.NodeStatus{
 			Ordinal:     0,
@@ -186,7 +186,7 @@ func TestCT06ProcessHistoryPreservesUnconfirmedIncarnations(t *testing.T) {
 	}
 }
 
-func TestCT07RunIDChangeKeepsReplicationHistory(t *testing.T) {
+func Test_CT07_ReconcileProcess_WhenRunIDChanges_PreservesReplicationHistory(t *testing.T) {
 	now := metav1.Now()
 	old := valkeyv1alpha1.NodeStatus{
 		Ordinal: 0, PodUID: "pod-1", ContainerID: "containerd://1", RunID: "run-a",
@@ -216,7 +216,7 @@ func TestCT07RunIDChangeKeepsReplicationHistory(t *testing.T) {
 	}
 }
 
-func TestConfirmedProcessHistoryIsReleasedAfterObligationsClose(t *testing.T) {
+func Test_ReconcileProcessHistory_AfterConfirmedProcessObligationsClose_RemovesPreviousProcess(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	stale := valkeyv1alpha1.NodeStatus{
@@ -255,7 +255,7 @@ func TestConfirmedProcessHistoryIsReleasedAfterObligationsClose(t *testing.T) {
 	}
 }
 
-func TestReplicaSynchronizationBelongsToCurrentHistory(t *testing.T) {
+func Test_ReplicaSynchronization_WhenReplicationHistoryChanges_BelongsOnlyToCurrentHistory(t *testing.T) {
 	firstTime := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	first := mergeObservedReplication(nil, &valkeyv1alpha1.ReplicationStatus{
 		ReplicationID: "history-a", UpstreamHost: "10.42.0.1", UpstreamPort: 6379, LinkUp: true,
@@ -289,7 +289,7 @@ func TestReplicaSynchronizationBelongsToCurrentHistory(t *testing.T) {
 	}
 }
 
-func TestCT10HAObservesOtherProcessesWhileOneCallIsBlocked(t *testing.T) {
+func Test_CT10_ReconcileProcesses_WithHAMode_ObservesOtherProcessesWhileOneCallBlocks(t *testing.T) {
 	ctx := context.Background()
 	instance, basePod, _, secret := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -402,7 +402,7 @@ func TestCT10HAObservesOtherProcessesWhileOneCallIsBlocked(t *testing.T) {
 	}
 }
 
-func TestPodInstanceRequests(t *testing.T) {
+func Test_PodInstanceRequests_WithAndWithoutInstanceLabel_ReturnsRequestOnlyForLabeledPod(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: "cache-a1b2c3-0", Namespace: "valkey-cache-a1b2c3",
 		Labels: map[string]string{instanceLabelKey: "cache-a1b2c3"},

@@ -16,7 +16,7 @@ import (
 	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 )
 
-func TestRunnerStartsImmediatelyAndDoesNotOverlapPasses(t *testing.T) {
+func Test_StartSyncRunner_WhenPassIsStillActive_StartsImmediatelyWithoutOverlap(t *testing.T) {
 	clock := clocktesting.NewFakeClock(time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC))
 	deliveryStarted := make(chan struct{}, 8)
 	deliveryRelease := make(chan struct{}, 8)
@@ -92,7 +92,7 @@ func waitForClockWaiters(t *testing.T, clock *clocktesting.FakeClock, count int)
 	}
 }
 
-func TestRunnerCancelsActivePass(t *testing.T) {
+func Test_StopSyncRunner_WithActivePass_CancelsAndWaitsForPass(t *testing.T) {
 	clock := clocktesting.NewFakeClock(time.Now())
 	started := make(chan struct{})
 	stopped := make(chan struct{})
@@ -121,7 +121,7 @@ func TestRunnerCancelsActivePass(t *testing.T) {
 	waitSignal(t, stopped)
 }
 
-func TestRunnerRetriesCleanupWithoutOverlap(t *testing.T) {
+func Test_RunMetricCleanup_WhenPreviousPassFailsOrBlocks_RetriesWithoutOverlap(t *testing.T) {
 	clock := clocktesting.NewFakeClock(time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC))
 	cleanupStarted := make(chan int32, 4)
 	cleanupRelease := make(chan struct{})

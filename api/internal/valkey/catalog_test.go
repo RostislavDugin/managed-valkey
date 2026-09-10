@@ -7,7 +7,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func TestCatalogBuildsAllowedGrid(t *testing.T) {
+func Test_CreateCatalog_WithResourceLimits_BuildsAllowedSizeGrid(t *testing.T) {
 	catalog := testCatalog(t, 4, 16)
 	want := []valkey.Size{
 		{VCPU: 1, RAMGB: 1},
@@ -26,14 +26,14 @@ func TestCatalogBuildsAllowedGrid(t *testing.T) {
 	}
 }
 
-func TestCatalogRejectsEmptyGrid(t *testing.T) {
+func Test_CreateCatalog_WithoutResourceLimits_ReturnsInvalidSizeError(t *testing.T) {
 	_, err := valkey.NewCatalog(valkey.CatalogConfig{})
 	if !errors.Is(err, valkey.ErrInvalidSize) {
 		t.Fatalf("ошибка %v, ожидалась %v", err, valkey.ErrInvalidSize)
 	}
 }
 
-func TestPriceAndReserve(t *testing.T) {
+func Test_CalculatePriceAndReserve_WithSingleAndHaModes_ReturnsExpectedResourcesAndRates(t *testing.T) {
 	catalog := testCatalog(t, 4, 16)
 	size := valkey.Size{VCPU: 1, RAMGB: 2}
 
@@ -52,7 +52,7 @@ func TestPriceAndReserve(t *testing.T) {
 	}
 }
 
-func TestMonthlyPriceExamples(t *testing.T) {
+func Test_CalculateMonthlyPrice_WithCatalogSizes_ReturnsExpectedAmounts(t *testing.T) {
 	catalog := testCatalog(t, 4, 16)
 	tests := []struct {
 		size   valkey.Size

@@ -26,7 +26,9 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestHA01HA04HA07FP04PW01RZ02RZ03Lifecycle(t *testing.T) {
+func Test_HA01HA04HA07FP04PW01RZ02RZ03_RunHALifecycle_WithFailuresAndMutations_PreservesAvailabilityAndData(
+	t *testing.T,
+) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
@@ -198,7 +200,7 @@ func TestHA01HA04HA07FP04PW01RZ02RZ03Lifecycle(t *testing.T) {
 	h.waitDeleted(t, instance)
 }
 
-func TestHA02HA04HA06InitialSafetyAndIsolation(t *testing.T) {
+func Test_HA02HA04HA06_CreateHA_WhenOperatorRestarts_EnforcesInitialSafetyAndInstanceIsolation(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })

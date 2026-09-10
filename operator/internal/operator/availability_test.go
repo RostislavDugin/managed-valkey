@@ -9,7 +9,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestHA03OperationalPhaseTracksReplicaAvailability(t *testing.T) {
+func Test_HA03_UpdateOperationalPhase_WhenReplicaAvailabilityChanges_ReportsRunningOrDegraded(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.PasswordVersion = 1

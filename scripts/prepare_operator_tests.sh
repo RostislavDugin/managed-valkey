@@ -50,7 +50,7 @@ fast)
     run_logged envtest env \
         KUBEBUILDER_ASSETS="$(go tool setup-envtest use "$envtest_version" \
             --bin-dir "$repo_root/bin/envtest" -p path)" \
-        go test -v -tags=envtest -count=1 -run '^TestEnvtest' ./operator/... ./internal/...
+        go test -v -tags=envtest -count=1 -run '^Test_Envtest' ./operator/... ./internal/...
     ;;
 artifacts)
     run_logged integration-binary go test -c -tags=integration -o "$binary" ./operator/integration

@@ -21,7 +21,7 @@ import (
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func TestValkeyMetricsSchemaAcceptsSnapshotsAndRejectsInvalidRows(t *testing.T) {
+func Test_StoreValkeyMetrics_WithValidAndInvalidRows_EnforcesSchemaConstraints(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-schema"})
@@ -84,7 +84,7 @@ func TestValkeyMetricsSchemaAcceptsSnapshotsAndRejectsInvalidRows(t *testing.T) 
 	}
 }
 
-func TestImportValkeyNodeMetricsStoresRecentBatchOnce(t *testing.T) {
+func Test_ImportValkeyNodeMetrics_WithRepeatedRecentBatch_StoresRowsOnce(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import"})
@@ -131,7 +131,7 @@ func TestImportValkeyNodeMetricsStoresRecentBatchOnce(t *testing.T) {
 	}
 }
 
-func TestImportValkeyNodeMetricsRejectsLargeBatchAndExpiredRows(t *testing.T) {
+func Test_ImportValkeyNodeMetrics_WithLargeBatchOrExpiredRows_RejectsOrSkipsThem(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import-limits"})
@@ -166,7 +166,7 @@ func TestImportValkeyNodeMetricsRejectsLargeBatchAndExpiredRows(t *testing.T) {
 	}
 }
 
-func TestImportValkeyNodeMetricsDoesNotRaceDeletion(t *testing.T) {
+func Test_ImportValkeyNodeMetrics_WhenDeletionStarts_DoesNotStoreRows(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-import-deletion"})
@@ -220,7 +220,7 @@ func TestImportValkeyNodeMetricsDoesNotRaceDeletion(t *testing.T) {
 	}
 }
 
-func TestDeleteValkeyNodeMetricsBeforeKeepsBoundary(t *testing.T) {
+func Test_DeleteValkeyNodeMetrics_BeforeCutoff_KeepsBoundaryAndNewerRows(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-cleanup"})
@@ -256,7 +256,7 @@ func TestDeleteValkeyNodeMetricsBeforeKeepsBoundary(t *testing.T) {
 	}
 }
 
-func TestValkeyMetricsAggregateStoredRows(t *testing.T) {
+func Test_ReadValkeyMetrics_WithStoredRows_AggregatesBucketsAndHidesInternalFields(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-series", "prefix": "series"})
@@ -381,7 +381,7 @@ func TestValkeyMetricsAggregateStoredRows(t *testing.T) {
 	}
 }
 
-func TestValkeyMetricsValidateWindowAndProtectOwner(t *testing.T) {
+func Test_ReadValkeyMetrics_WithInvalidWindowOrNonOwner_ValidatesInputAndProtectsOwner(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	owner := app.registerAccount(t, "")
 	stranger := app.registerAccount(t, "")
@@ -446,7 +446,7 @@ func TestValkeyMetricsValidateWindowAndProtectOwner(t *testing.T) {
 	)
 }
 
-func TestValkeyMetricsHideRowsOlderThanSevenDays(t *testing.T) {
+func Test_ReadValkeyMetrics_WithRowsOlderThanSevenDays_HidesExpiredRows(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	instance := createValkey(t, app, account, map[string]any{"name": "metrics-retention"})

@@ -17,7 +17,9 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestEnvtestCT05NodeDeletionRequiresFreshUIDEvidence(t *testing.T) {
+func Test_Envtest_CT05_CheckPreviousNodeDeletion_WithCurrentReusedOrUnreadableNode_RequiresFreshUIDEvidence(
+	t *testing.T,
+) {
 	environment := &envtest.Environment{}
 	restConfig, err := environment.Start()
 	if err != nil {
@@ -106,10 +108,10 @@ func TestEnvtestCT05NodeDeletionRequiresFreshUIDEvidence(t *testing.T) {
 		name string
 		err  error
 	}{
-		{name: "Forbidden", err: apierrors.NewForbidden(
+		{name: "при запрете чтения ноды не считает процесс остановленным", err: apierrors.NewForbidden(
 			schema.GroupResource{Resource: "nodes"}, node.Name, errors.New("доступ запрещён"),
 		)},
-		{name: "timeout", err: apierrors.NewTimeoutError("таймаут чтения Node", 1)},
+		{name: "при таймауте чтения ноды не считает процесс остановленным", err: apierrors.NewTimeoutError("таймаут чтения Node", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reader := &ct05NodeErrorReader{Reader: k8s, err: test.err}

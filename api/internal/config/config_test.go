@@ -9,7 +9,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
 )
 
-func TestLoadRequiresDatabaseURL(t *testing.T) {
+func Test_LoadConfig_WithoutDatabaseUrl_ReturnsRequiredValueError(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvDatabaseURL, "")
 
@@ -19,7 +19,7 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresJWTSecret(t *testing.T) {
+func Test_LoadConfig_WithoutJwtSecret_ReturnsRequiredValueError(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvJWTSecret, "")
 
@@ -29,7 +29,7 @@ func TestLoadRequiresJWTSecret(t *testing.T) {
 	}
 }
 
-func TestLoadUsesDefaults(t *testing.T) {
+func Test_LoadConfig_WithoutOptionalValues_UsesDefaults(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvHTTPAddr, "")
 	t.Setenv(config.EnvValkeyPublicPort, "")
@@ -65,7 +65,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadValkeyMetricsRetention(t *testing.T) {
+func Test_LoadConfig_WithMetricsRetention_ParsesDuration(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvValkeyMetricsRetention, "36h30m")
 
@@ -78,7 +78,7 @@ func TestLoadValkeyMetricsRetention(t *testing.T) {
 	}
 }
 
-func TestLoadDisablesKubernetesSync(t *testing.T) {
+func Test_LoadConfig_WithKubernetesSyncDisabled_DisablesSynchronization(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvKubernetesSync, "false")
 
@@ -91,7 +91,7 @@ func TestLoadDisablesKubernetesSync(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsInvalidKubernetesSync(t *testing.T) {
+func Test_LoadConfig_WithInvalidKubernetesSync_ReturnsVariableError(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvKubernetesSync, "sometimes")
 
@@ -101,9 +101,9 @@ func TestLoadRejectsInvalidKubernetesSync(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsInvalidValkeyMetricsRetention(t *testing.T) {
+func Test_LoadConfig_WithInvalidMetricsRetention_ReturnsVariableError(t *testing.T) {
 	for _, value := range []string{"invalid", "0s", "-1h"} {
-		t.Run(value, func(t *testing.T) {
+		t.Run("недопустимый срок хранения "+value+" возвращает ошибку переменной окружения", func(t *testing.T) {
 			setValidEnv(t)
 			t.Setenv(config.EnvValkeyMetricsRetention, value)
 
@@ -115,20 +115,48 @@ func TestLoadRejectsInvalidValkeyMetricsRetention(t *testing.T) {
 	}
 }
 
-func TestLoadValidatesValkeyConfiguration(t *testing.T) {
+func Test_LoadConfig_WithInvalidValkeyValues_ReturnsVariableError(t *testing.T) {
 	tests := []struct {
 		name  string
 		env   string
 		value string
 	}{
-		{name: "общий CPU отсутствует", env: config.EnvManagedK8SNodeVCPU, value: ""},
-		{name: "общая RAM отрицательная", env: config.EnvManagedK8SNodeRAMGB, value: "-1"},
-		{name: "максимум CPU дробный", env: config.EnvValkeyInstanceMaxVCPU, value: "1.5"},
-		{name: "максимум RAM нулевой", env: config.EnvValkeyInstanceMaxRAMGB, value: "0"},
-		{name: "порт нулевой", env: config.EnvValkeyPublicPort, value: "0"},
-		{name: "порт слишком большой", env: config.EnvValkeyPublicPort, value: "65536"},
-		{name: "ставка отрицательная", env: config.EnvValkeyVCPUPriceCoinsPerHour, value: "-1"},
-		{name: "домен повреждён", env: config.EnvValkeyBaseDomain, value: "bad_domain"},
+		{
+			name:  "отсутствующий общий CPU возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SNodeVCPU,
+			value: "",
+		},
+		{
+			name:  "отрицательная общая RAM возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SNodeRAMGB,
+			value: "-1",
+		},
+		{
+			name:  "дробный максимум CPU возвращает ошибку переменной окружения",
+			env:   config.EnvValkeyInstanceMaxVCPU,
+			value: "1.5",
+		},
+		{
+			name:  "нулевой максимум RAM возвращает ошибку переменной окружения",
+			env:   config.EnvValkeyInstanceMaxRAMGB,
+			value: "0",
+		},
+		{name: "нулевой порт возвращает ошибку переменной окружения", env: config.EnvValkeyPublicPort, value: "0"},
+		{
+			name:  "слишком большой порт возвращает ошибку переменной окружения",
+			env:   config.EnvValkeyPublicPort,
+			value: "65536",
+		},
+		{
+			name:  "отрицательная ставка возвращает ошибку переменной окружения",
+			env:   config.EnvValkeyVCPUPriceCoinsPerHour,
+			value: "-1",
+		},
+		{
+			name:  "недопустимый домен возвращает ошибку переменной окружения",
+			env:   config.EnvValkeyBaseDomain,
+			value: "bad_domain",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -144,7 +172,7 @@ func TestLoadValidatesValkeyConfiguration(t *testing.T) {
 	}
 }
 
-func TestLoadKeepsClusterBudgetAsTotal(t *testing.T) {
+func Test_LoadConfig_WithClusterResources_PreservesTotalBudget(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvManagedK8SNodeVCPU, "24")
 	t.Setenv(config.EnvManagedK8SNodeRAMGB, "48")

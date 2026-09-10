@@ -16,7 +16,7 @@ const instance = {
 } as ValkeyInstance;
 
 describe('серверные цены и квота', () => {
-  it('использует ставки и длину месяца из каталога', () => {
+  it('при расчёте месячной цены использует ставки и число часов из серверного каталога', () => {
     const pricing: ValkeyPricing = {
       vcpuCoinsPerHour: 200,
       ramGbCoinsPerHour: 80,
@@ -28,7 +28,7 @@ describe('серверные цены и квота', () => {
     expect(getPeriodCoins({ vcpu: 1, ramGb: 4 }, 'ha', 'hour', pricing)).toBe(1560);
   });
 
-  it('учитывает applied-резерв и допускает уменьшение после снижения лимита', () => {
+  it('после снижения квоты учитывает применённый резерв и разрешает уменьшить конфигурацию базы', () => {
     expect(getInstanceReserve(instance)).toEqual({ vcpu: 4, ramGb: 8 });
     expect(
       checkQuota(quota, { size: { vcpu: 1, ramGb: 4 }, mode: 'single' }, instance)
@@ -38,7 +38,7 @@ describe('серверные цены и квота', () => {
     ).toMatchObject({ fits: false, missing: { vcpu: 4, ramGb: 8 } });
   });
 
-  it('умножает резерв HA на три ноды', () => {
+  it('для базы в режиме HA рассчитывает резерв процессора и памяти на три ноды', () => {
     expect(
       checkQuota(
         { limit: { vcpu: 3, ramGb: 12 }, usage: { vcpu: 0, ramGb: 0 } },

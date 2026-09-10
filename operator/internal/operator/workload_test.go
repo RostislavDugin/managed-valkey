@@ -18,7 +18,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestSingleStatefulSetContract(t *testing.T) {
+func Test_DesiredStatefulSet_WithSingleMode_CreatesOnePodWithSecurityAndResourceContract(t *testing.T) {
 	instance := completeAcceptedInstance()
 	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
 
@@ -73,7 +73,7 @@ func TestSingleStatefulSetContract(t *testing.T) {
 	}
 }
 
-func TestSingleServicesAndNetworkPolicy(t *testing.T) {
+func Test_DesiredServicesAndNetworkPolicy_WithSingleMode_ExposePrimaryAndRestrictTraffic(t *testing.T) {
 	instance := completeAcceptedInstance()
 	services := desiredServices(instance)
 	if len(services) != 2 || services[0].Name != "cache-a1b2c3-hl" || services[1].Name != "cache-a1b2c3-primary" {
@@ -98,7 +98,7 @@ func TestSingleServicesAndNetworkPolicy(t *testing.T) {
 	}
 }
 
-func TestValkeyImageChangePreservesStatefulSetTemplate(t *testing.T) {
+func Test_ReconcileStatefulSet_WhenValkeyImageChanges_PreservesExistingTemplate(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	scheme := NewScheme()
@@ -152,7 +152,7 @@ func TestValkeyImageChangePreservesStatefulSetTemplate(t *testing.T) {
 	}
 }
 
-func TestStatefulSetServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
+func Test_ReconcileStatefulSet_WhenServerAddsDefaults_DoesNotPatchRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
 	desired := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
@@ -168,7 +168,9 @@ func TestStatefulSetServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
 	}
 }
 
-func TestHAStatefulSetAndDisruptionBudgetContract(t *testing.T) {
+func Test_DesiredStatefulSetAndDisruptionBudget_WithHAMode_CreateThreeAntiAffinePodsAndMinimumAvailability(
+	t *testing.T,
+) {
 	instance := completeAcceptedInstance()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA

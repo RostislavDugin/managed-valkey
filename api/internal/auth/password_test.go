@@ -10,23 +10,23 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 )
 
-func TestNormalizeEmail(t *testing.T) {
+func Test_NormalizeEmail_WithSpacesAndMixedCase_ReturnsTrimmedLowercaseAddress(t *testing.T) {
 	if got := auth.NormalizeEmail("  User@Example.COM \t"); got != "user@example.com" {
 		t.Errorf("почта %q, ожидалась нормализованная", got)
 	}
 }
 
-func TestValidateCredentials(t *testing.T) {
+func Test_ValidatePassword_WithByteLengthBoundaries_AcceptsOnlyValidValues(t *testing.T) {
 	cases := []struct {
 		name     string
 		password string
 		valid    bool
 	}{
-		{name: "восемь символов", password: "12345678", valid: true},
-		{name: "семь символов", password: "1234567", valid: false},
-		{name: "ровно 72 байта", password: string(make([]byte, 72)), valid: true},
+		{name: "пароль из восьми символов принимается", password: "12345678", valid: true},
+		{name: "пароль из семи символов отклоняется", password: "1234567", valid: false},
+		{name: "пароль длиной ровно 72 байта принимается", password: string(make([]byte, 72)), valid: true},
 		{
-			name:     "больше 72 байт UTF-8",
+			name:     "пароль длиннее 72 байт UTF-8 отклоняется",
 			password: "ёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжёжё",
 			valid:    false,
 		},
@@ -48,7 +48,7 @@ func TestValidateCredentials(t *testing.T) {
 	}
 }
 
-func TestPasswordHashUsesCost12(t *testing.T) {
+func Test_HashPassword_WithValidPassword_UsesConfiguredCostAndMatchesOnlyOriginal(t *testing.T) {
 	hash, err := auth.HashPassword("password1")
 	if err != nil {
 		t.Fatalf("создать хеш: %v", err)

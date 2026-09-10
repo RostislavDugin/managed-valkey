@@ -9,7 +9,7 @@ import (
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
 
-func TestSchemeIncludesGatewayResources(t *testing.T) {
+func Test_NewScheme_WhenCreated_IncludesGatewayAndEnvoyResources(t *testing.T) {
 	scheme := NewScheme()
 	objects := []runtime.Object{
 		&gatewayv1.Gateway{},

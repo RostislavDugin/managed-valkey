@@ -9,7 +9,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestParseAppPasswordHash(t *testing.T) {
+func Test_ParseAppPasswordHash_WithValidAndInvalidSecretData_ReturnsHashOrValidationError(t *testing.T) {
 	validHash := strings.Repeat("ab", 32)
 
 	tests := []struct {
@@ -20,31 +20,31 @@ func TestParseAppPasswordHash(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "valid",
+			name:    "при корректном хеше возвращает его без ошибки",
 			data:    map[string][]byte{"app-password-hash.2": []byte(validHash)},
 			version: 2,
 			want:    validHash,
 		},
 		{
-			name:    "missing",
+			name:    "при отсутствии хеша возвращает ошибку отсутствующего значения",
 			data:    map[string][]byte{},
 			version: 2,
 			wantErr: valkeyv1alpha1.ErrAppPasswordHashMissing,
 		},
 		{
-			name:    "uppercase",
+			name:    "при хеше в верхнем регистре возвращает ошибку неверного формата",
 			data:    map[string][]byte{"app-password-hash.2": []byte(strings.ToUpper(validHash))},
 			version: 2,
 			wantErr: valkeyv1alpha1.ErrAppPasswordHashInvalid,
 		},
 		{
-			name:    "short",
+			name:    "при слишком коротком хеше возвращает ошибку неверного формата",
 			data:    map[string][]byte{"app-password-hash.2": []byte("abcd")},
 			version: 2,
 			wantErr: valkeyv1alpha1.ErrAppPasswordHashInvalid,
 		},
 		{
-			name:    "invalid version",
+			name:    "при нулевой версии возвращает ошибку неверной версии",
 			data:    map[string][]byte{},
 			version: 0,
 			wantErr: valkeyv1alpha1.ErrInvalidPasswordVersion,
@@ -64,7 +64,9 @@ func TestParseAppPasswordHash(t *testing.T) {
 	}
 }
 
-func TestParseServiceCredentials(t *testing.T) {
+func Test_ParseServiceCredentials_WithCompleteEmptyPartialAndInvalidData_ReturnsIndependentCredentialsOrError(
+	t *testing.T,
+) {
 	password := []byte(base64.RawURLEncoding.EncodeToString(make([]byte, 24)))
 	complete := map[string][]byte{
 		valkeyv1alpha1.OperatorPasswordKey: password,

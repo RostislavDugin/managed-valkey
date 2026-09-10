@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe('страница аудита Valkey', () => {
-  it('показывает действие, автора и обновляет относительное время раз в минуту', async () => {
+  it('для события аудита показывает действие и автора, а относительное время обновляет раз в минуту', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(2026, 8, 9, 12, 0));
     const createdAt = new Date(2026, 8, 9, 11, 55).toISOString();
@@ -62,7 +62,7 @@ describe('страница аудита Valkey', () => {
     expect(screen.getByText('6 минут назад')).toBeVisible();
   });
 
-  it('добавляет следующую страницу один раз и удаляет повторы по id', async () => {
+  it('при загрузке следующей страницы добавляет её один раз и удаляет события с повторяющимся id', async () => {
     const nextPage = deferredPage();
     const first = auditEvent('event-1', 'instance.create', '2026-09-09T10:00:00Z');
     const second = auditEvent('event-2', 'instance.resize', '2026-09-08T10:00:00Z');
@@ -90,7 +90,7 @@ describe('страница аудита Valkey', () => {
     expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
   });
 
-  it('показывает пустое состояние и повторяет начальную загрузку после ошибки', async () => {
+  it('при пустом журнале показывает отдельное состояние, а после ошибки позволяет повторить начальную загрузку', async () => {
     const user = userEvent.setup();
     mocks.getAuditLogPage
       .mockRejectedValueOnce(new Error('network'))
@@ -105,7 +105,7 @@ describe('страница аудита Valkey', () => {
     expect(mocks.getAuditLogPage).toHaveBeenCalledTimes(2);
   });
 
-  it('отменяет запрос прежней базы и не показывает его поздний ответ', async () => {
+  it('после перехода к другой базе отменяет прежний запрос аудита и не показывает его поздний ответ', async () => {
     const oldPage = deferredPage();
     const oldEvent = auditEvent('old-event', 'instance.delete', '2026-09-08T10:00:00Z');
     const newEvent = auditEvent('new-event', 'instance.update', '2026-09-09T10:00:00Z');

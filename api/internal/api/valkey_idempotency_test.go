@@ -13,7 +13,7 @@ import (
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func TestValkeyCreateIdempotencyCanonicalizesAndExpires(t *testing.T) {
+func Test_CreateValkey_WithCanonicalReplayAndExpiredKey_ReplaysOrCreatesAsExpected(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	key := uuid.NewString()
@@ -94,7 +94,7 @@ func TestValkeyCreateIdempotencyCanonicalizesAndExpires(t *testing.T) {
 	assertStatus(t, newRequest, http.StatusAccepted)
 }
 
-func TestValkeyErrorsDoNotOccupyIdempotencyKey(t *testing.T) {
+func Test_CreateValkey_AfterValidationError_ReusesIdempotencyKeySuccessfully(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	key := uuid.NewString()
@@ -118,7 +118,7 @@ func TestValkeyErrorsDoNotOccupyIdempotencyKey(t *testing.T) {
 	)
 }
 
-func TestBlockedOwnerCannotReadIdempotentResponse(t *testing.T) {
+func Test_CreateValkey_WithBlockedOwner_DoesNotReplayIdempotentResponse(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 	key := uuid.NewString()

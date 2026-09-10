@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('управление базой Valkey', () => {
-  it('сохраняет имя и maintenance одним PATCH и перечитывает карточку', async () => {
+  it('при сохранении имени и окна обслуживания отправляет один PATCH и повторно загружает карточку базы', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi();
     const user = userEvent.setup();
@@ -59,7 +59,7 @@ describe('управление базой Valkey', () => {
     expect(api.requests.filter((request) => request.path === '/v1/me').length).toBeGreaterThan(1);
   });
 
-  it('отправляет whitelist с каноническим одиночным адресом', async () => {
+  it('при сохранении списка доступа преобразует одиночный IP-адрес в канонический CIDR и отправляет его серверу', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi();
     const user = userEvent.setup();
@@ -83,7 +83,7 @@ describe('управление базой Valkey', () => {
     expect(await screen.findByText('203.0.113.10/32', {}, WAIT)).toBeVisible();
   });
 
-  it('генерирует пароль только после подтверждения и очищает его по pagehide', async () => {
+  it('при ротации создаёт пароль только после подтверждения и очищает его после события pagehide', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi();
     const user = userEvent.setup();
@@ -122,7 +122,7 @@ describe('управление базой Valkey', () => {
     );
   });
 
-  it('показывает статус базы и блокирует новую конфигурацию', async () => {
+  it('пока сервер применяет конфигурацию, показывает статус базы и блокирует отправку следующего изменения', async () => {
     const session = seedSession();
     installStatefulValkeyApi([
       valkeyInstanceDto({
@@ -148,7 +148,7 @@ describe('управление базой Valkey', () => {
     expect(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT)).toBeDisabled();
   });
 
-  it('обновляет статус раз в 5 секунд без перекрытия запросов', async () => {
+  it('при открытой карточке обновляет статус каждые пять секунд и не запускает параллельные запросы', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const session = seedSession();
     installStatefulValkeyApi();
@@ -190,7 +190,7 @@ describe('управление базой Valkey', () => {
     expect(detailCalls).toBe(3);
   });
 
-  it('удерживает квоту и доступ к карточке, пока сервер подтверждает удаление', async () => {
+  it('после запроса удаления удерживает квоту и доступ к карточке, пока сервер не подтвердит удаление базы', async () => {
     const session = seedSession();
     installStatefulValkeyApi([
       valkeyInstanceDto({
@@ -210,7 +210,7 @@ describe('управление базой Valkey', () => {
     ).toHaveAttribute('data-disabled', 'true');
   });
 
-  it('сохраняет введённое имя после 409 и обновляет карточку', async () => {
+  it('после конфликта имени сохраняет введённое значение в форме и обновляет карточку данными сервера', async () => {
     const session = seedSession();
     installStatefulValkeyApi();
     const statefulFetch = window.fetch;
@@ -264,7 +264,7 @@ describe('управление базой Valkey', () => {
     expect(returnedRemoteState).toBe(true);
   });
 
-  it('игнорирует позднюю карточку после перехода к списку', async () => {
+  it('после перехода к списку баз игнорирует поздний ответ запроса прежней карточки', async () => {
     const session = seedSession();
     installStatefulValkeyApi();
     const statefulFetch = window.fetch;

@@ -7,7 +7,9 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestCT04NextAcceptedConfiguration(t *testing.T) {
+func Test_CT04_NextAcceptedConfiguration_WithSupportedAndInvalidIntent_AcceptsAllowedChangesAndDiagnosesRejections(
+	t *testing.T,
+) {
 	accepted := valkeyv1alpha1.AcceptedConfiguration{
 		InstanceID: "instance-1", Slug: "cache-a1b2c3", Mode: valkeyv1alpha1.ValkeyModeSingle,
 		VCPU: 1, RAMGB: 4, PublicPort: 41379, Whitelist: valkeyv1alpha1.WhitelistSpec{},
@@ -20,7 +22,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 		DesiredGeneration: accepted.DesiredGeneration + 1,
 	}
 
-	t.Run("size and password", func(t *testing.T) {
+	t.Run("при одновременном изменении размера и пароля принимает новое поколение", func(t *testing.T) {
 		spec := base
 		spec.VCPU = 2
 		spec.RAMGB = 8
@@ -40,7 +42,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 		reason        string
 	}{
 		{
-			name: "unsupported mixed fields",
+			name: "при смешанном изменении неподдерживаемых полей возвращает UnsupportedFields",
 			mutate: func(spec *valkeyv1alpha1.ValkeyInstanceSpec) {
 				spec.RAMGB = 8
 				spec.Whitelist = &valkeyv1alpha1.WhitelistSpec{
@@ -51,7 +53,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 			reason:        "UnsupportedFields",
 		},
 		{
-			name: "stale generation",
+			name: "при устаревшем поколении возвращает StaleDesiredGeneration",
 			mutate: func(spec *valkeyv1alpha1.ValkeyInstanceSpec) {
 				spec.DesiredGeneration = 6
 			},
@@ -59,7 +61,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 			reason:        "StaleDesiredGeneration",
 		},
 		{
-			name: "accepted generation changed in place",
+			name: "при изменении уже принятого поколения возвращает AcceptedGenerationChanged",
 			mutate: func(spec *valkeyv1alpha1.ValkeyInstanceSpec) {
 				spec.DesiredGeneration = 7
 				spec.RAMGB = 8
@@ -68,7 +70,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 			reason:        "AcceptedGenerationChanged",
 		},
 		{
-			name: "password rollback",
+			name: "при откате версии пароля возвращает PasswordVersionRollback",
 			mutate: func(spec *valkeyv1alpha1.ValkeyInstanceSpec) {
 				spec.PasswordVersion = 1
 			},
@@ -94,7 +96,7 @@ func TestCT04NextAcceptedConfiguration(t *testing.T) {
 	}
 }
 
-func TestAcceptedConfigurationCompleteRequiresAllOperations(t *testing.T) {
+func Test_AcceptedConfigurationComplete_WithPendingOperations_ReturnsTrueOnlyAfterAllOperationsComplete(t *testing.T) {
 	accepted := valkeyv1alpha1.AcceptedConfiguration{DesiredGeneration: 4}
 	status := valkeyv1alpha1.ValkeyInstanceStatus{ObservedGeneration: 4}
 	if !acceptedConfigurationComplete(status, accepted) {

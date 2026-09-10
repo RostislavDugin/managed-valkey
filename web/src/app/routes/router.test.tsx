@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 
 describe('маршруты раздела Valkey', () => {
-  it('перенаправляет корень на список баз', async () => {
+  it('при открытии корневого пути перенаправляет пользователя к списку баз Valkey', async () => {
     renderAt('/');
 
     expect(
@@ -33,7 +33,7 @@ describe('маршруты раздела Valkey', () => {
     ).toBeVisible();
   });
 
-  it('перенаправляет /valkey на список баз', async () => {
+  it('при открытии /valkey перенаправляет пользователя к списку баз Valkey', async () => {
     renderAt('/valkey');
 
     expect(
@@ -41,13 +41,13 @@ describe('маршруты раздела Valkey', () => {
     ).toBeVisible();
   });
 
-  it('открывает форму создания по прямой ссылке', async () => {
+  it('при прямом переходе на путь создания показывает форму новой базы Valkey', async () => {
     renderAt('/valkey/management/new');
 
     expect(await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT)).toBeVisible();
   });
 
-  it('открывает карточку базы по прямой ссылке', async () => {
+  it('при прямом переходе к существующей базе показывает её карточку и активную вкладку управления', async () => {
     seedOne();
 
     renderAt('/valkey/management/instance-1');
@@ -59,7 +59,7 @@ describe('маршруты раздела Valkey', () => {
     );
   });
 
-  it('открывает мониторинг базы по прямой ссылке', async () => {
+  it('при прямом переходе к мониторингу показывает пустое состояние, выбирает вкладку и запрашивает метрики', async () => {
     seedOne();
 
     renderAt('/valkey/management/instance-1/monitoring');
@@ -79,7 +79,7 @@ describe('маршруты раздела Valkey', () => {
     ).toBe(true);
   });
 
-  it('открывает аудит базы по прямой ссылке', async () => {
+  it('при прямом переходе к аудиту показывает пустое состояние, выбирает вкладку и запрашивает события', async () => {
     seedOne();
 
     renderAt('/valkey/management/instance-1/audit-logs');
@@ -95,7 +95,7 @@ describe('маршруты раздела Valkey', () => {
 });
 
 describe('вкладки принадлежат выбранной базе', () => {
-  it('не показывает вкладки в списке баз', async () => {
+  it('в списке баз не показывает вкладки, относящиеся к выбранной базе', async () => {
     seedOne();
     renderAt('/valkey/management');
 
@@ -103,14 +103,14 @@ describe('вкладки принадлежат выбранной базе', ()
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
   });
 
-  it('не показывает вкладки на создании базы', async () => {
+  it('на странице создания не показывает вкладки ещё не созданной базы', async () => {
     renderAt('/valkey/management/new');
 
     await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT);
     expect(screen.queryAllByRole('tab')).toHaveLength(0);
   });
 
-  it('мышь меняет вкладку и адрес, кнопка «назад» возвращает прежнюю', async () => {
+  it('после выбора вкладки мышью меняет адрес, а возврат в истории открывает прежнюю вкладку', async () => {
     seedOne();
     const user = userEvent.setup();
     const { router } = renderAt('/valkey/management/instance-1');
@@ -133,7 +133,7 @@ describe('вкладки принадлежат выбранной базе', ()
     expect(router.state.location.pathname).toBe('/valkey/management/instance-1');
   });
 
-  it('клавиатура открывает вкладку по Enter', async () => {
+  it('при нажатии Enter на вкладке открывает соответствующую страницу базы', async () => {
     seedOne();
     const user = userEvent.setup();
     renderAt('/valkey/management/instance-1');
@@ -149,7 +149,7 @@ describe('вкладки принадлежат выбранной базе', ()
 });
 
 describe('хлебные крошки', () => {
-  it('стоят в шапке каркаса, а не в содержимом страницы', async () => {
+  it('размещает хлебные крошки в шапке приложения вне содержимого страницы', async () => {
     seedOne();
 
     renderAt('/valkey/management');
@@ -158,21 +158,21 @@ describe('хлебные крошки', () => {
     expect(screen.getByRole('navigation', { name: 'Хлебные крошки' }).closest('main')).toBeNull();
   });
 
-  it('в списке баз состоят из одного раздела', async () => {
+  it('на странице списка показывает в хлебных крошках только раздел баз данных', async () => {
     renderAt('/valkey/management');
 
     await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
     expect(crumbText()).toBe('Базы данных');
   });
 
-  it('на создании ведут от раздела к форме', async () => {
+  it('на странице создания показывают путь от раздела баз данных к форме Valkey', async () => {
     renderAt('/valkey/management/new');
 
     await screen.findByRole('heading', { name: 'Новая Valkey база' }, WAIT);
     expect(crumbText()).toBe('Базы данных/Valkey/Создание БД');
   });
 
-  it('в карточке базы называют базу и сохраняются на её вкладках', async () => {
+  it('в карточке и на её вкладках сохраняют имя выбранной базы в хлебных крошках', async () => {
     seedOne();
     const user = userEvent.setup();
     renderAt('/valkey/management/instance-1');
@@ -188,7 +188,7 @@ describe('хлебные крошки', () => {
 });
 
 describe('завершение сессии', () => {
-  it('кнопка «Выйти» удаляет токен и открывает /auth', async () => {
+  it('после нажатия «Выйти» удаляет токен и открывает страницу /auth', async () => {
     const user = userEvent.setup();
     const { router } = renderAt('/valkey/management');
 
@@ -200,7 +200,7 @@ describe('завершение сессии', () => {
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
   });
 
-  it('заканчивает сессию после удаления токена в другой вкладке', async () => {
+  it('после удаления токена в другой вкладке завершает сессию и открывает страницу входа', async () => {
     const { router } = renderAt('/valkey/management');
 
     await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
@@ -216,7 +216,7 @@ describe('завершение сессии', () => {
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
   });
 
-  it('заканчивает сессию после 401 и по таймеру exp', async () => {
+  it('после ответа 401 или истечения JWT завершает сессию и открывает страницу входа', async () => {
     const first = renderAt('/valkey/management');
     await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
     window.dispatchEvent(new Event(AUTH_INVALIDATED_EVENT));
@@ -232,7 +232,7 @@ describe('завершение сессии', () => {
     vi.useRealTimers();
   });
 
-  it('не завершает десятилетнюю сессию из-за предела setTimeout', async () => {
+  it('при сроке JWT в десять лет не завершает сессию из-за ограничения setTimeout', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     seedSession(TEST_USER_ID, 'user@example.com', 10 * 365 * 24 * 60 * 60);
     const { router } = renderAt('/valkey/management');

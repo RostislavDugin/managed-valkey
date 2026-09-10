@@ -10,7 +10,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestLeaseScopeActivationAndLoss(t *testing.T) {
+func Test_LeaseScope_WhenLeaseStartsAndStops_RejectsEarlyDialAndClosesTrackedConnections(t *testing.T) {
 	scope := NewLeaseScope()
 	if scope.Active() {
 		t.Fatal("Lease активен до запуска lifecycle")
@@ -62,13 +62,13 @@ func TestLeaseScopeActivationAndLoss(t *testing.T) {
 	}
 }
 
-func TestLeaseScopeRequiresLeaderElection(t *testing.T) {
+func Test_LeaseScope_WhenRegistered_RequiresLeaderElection(t *testing.T) {
 	if !NewLeaseScope().NeedLeaderElection() {
 		t.Fatal("lifecycle запущен без владения Lease")
 	}
 }
 
-func TestLeaseScopeRemovesClosedConnection(t *testing.T) {
+func Test_LeaseScope_WhenConnectionCloses_RemovesTrackedConnection(t *testing.T) {
 	scope := NewLeaseScope()
 	connection := &trackedConnection{closed: make(chan struct{})}
 	scope.connections[connection] = struct{}{}

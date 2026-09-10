@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 describe('регистрация и вход', () => {
-  it('проверяет почту через API', async () => {
+  it('при проверке почты отправляет исходный адрес в API и возвращает признак существования аккаунта', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(jsonResponse({ exists: true }));
 
     await expect(checkEmail({ email: 'User@Example.com' })).resolves.toEqual({ exists: true });
@@ -34,7 +34,7 @@ describe('регистрация и вход', () => {
     expect(init?.body).toBe(JSON.stringify({ email: 'User@Example.com' }));
   });
 
-  it('повторяет регистрацию с тем же Idempotency-Key и сохраняет серверный JWT', async () => {
+  it('после временной ошибки повторяет регистрацию с теми же ключами и сохраняет выданный сервером JWT', async () => {
     const token = createToken();
     const fetchMock = vi
       .spyOn(window, 'fetch')
@@ -58,7 +58,7 @@ describe('регистрация и вход', () => {
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBe(token);
   });
 
-  it('передаёт CONFLICT и UNAUTHORIZED вызывающему коду', async () => {
+  it('при конфликте регистрации и неверном пароле передаёт ошибки CONFLICT и UNAUTHORIZED вызывающему коду', async () => {
     vi.spyOn(window, 'fetch')
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: 'CONFLICT', message: 'Аккаунт уже существует' } }, 409)
@@ -81,7 +81,7 @@ describe('регистрация и вход', () => {
 });
 
 describe('восстановление сессии', () => {
-  it('проверяет действующий токен через /me', async () => {
+  it('при действующем локальном токене проверяет его через /me и возвращает серверную сессию', async () => {
     const token = createToken();
     localStorage.setItem(AUTH_TOKEN_KEY, token);
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
@@ -101,7 +101,7 @@ describe('восстановление сессии', () => {
     expect(fetchMock).toHaveBeenCalledWith('/v1/me', expect.any(Object));
   });
 
-  it('удаляет истёкший токен без запроса', async () => {
+  it('при истёкшем локальном токене удаляет его и возвращает UNAUTHORIZED без запроса к серверу', async () => {
     localStorage.setItem(AUTH_TOKEN_KEY, createToken(Math.floor(Date.now() / 1000) - 1));
     const fetchMock = vi.spyOn(window, 'fetch');
 
@@ -110,7 +110,7 @@ describe('восстановление сессии', () => {
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
   });
 
-  it('удаляет токен после блокировки и передаёт временную ошибку после повторов', async () => {
+  it('после блокировки удаляет токен, а после исчерпания повторов передаёт временную ошибку', async () => {
     localStorage.setItem(AUTH_TOKEN_KEY, createToken());
     vi.spyOn(window, 'fetch').mockResolvedValueOnce(
       jsonResponse({ error: { code: 'UNAUTHORIZED', message: 'Сессия недействительна' } }, 401)
@@ -127,7 +127,7 @@ describe('восстановление сессии', () => {
     await expect(getSession()).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   });
 
-  it('без токена сессии нет', async () => {
+  it('при отсутствии локального токена возвращает пустую сессию без обращения к серверу', async () => {
     await expect(getSession()).resolves.toBeNull();
   });
 });

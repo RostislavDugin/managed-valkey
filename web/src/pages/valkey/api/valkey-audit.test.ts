@@ -9,7 +9,7 @@ beforeEach(() => {
 });
 
 describe('клиент аудита Valkey', () => {
-  it('передаёт параметры и преобразует серверный ответ', async () => {
+  it('при запросе аудита передаёт фильтры в URL и преобразует серверные события в клиентскую модель', async () => {
     const controller = new AbortController();
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
       new Response(
@@ -54,7 +54,7 @@ describe('клиент аудита Valkey', () => {
     expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
   });
 
-  it('не передаёт пустые необязательные параметры', async () => {
+  it('при отсутствии необязательных фильтров не добавляет их в URL запроса аудита', async () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ items: [], next_cursor: null }), {
         status: 200,

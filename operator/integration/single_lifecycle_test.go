@@ -50,7 +50,7 @@ const (
 	userIDLabel     = "valkey.h3llo-demo.com/user-id"
 )
 
-func TestSingleLifecycle(t *testing.T) {
+func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })

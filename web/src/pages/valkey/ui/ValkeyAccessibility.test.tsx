@@ -13,7 +13,7 @@ function expectNamedControls() {
 }
 
 describe('доступность управления Valkey', () => {
-  it('даёт имена всем кнопкам формы и связывает ошибку с полем', async () => {
+  it('на форме создания даёт доступные имена всем кнопкам и связывает сообщение об ошибке с полем', async () => {
     const session = seedSession();
     installStatefulValkeyApi([]);
     const user = userEvent.setup();
@@ -30,7 +30,7 @@ describe('доступность управления Valkey', () => {
     expect(name).toHaveAccessibleDescription('Введите имя базы');
   });
 
-  it('оставляет вкладки и действия карточки доступными с клавиатуры', async () => {
+  it('в карточке базы позволяет с клавиатуры выбрать вкладку и выполнить каждое доступное действие', async () => {
     const session = seedSession();
     installStatefulValkeyApi();
     const user = userEvent.setup();

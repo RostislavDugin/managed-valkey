@@ -16,7 +16,7 @@ import (
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestHA02InitialPrimaryTargetSurvivesRestartAndLostResponse(t *testing.T) {
+func Test_HA02_ReconcileInitialPrimary_AfterRestartAndLostResponse_PreservesPersistedTarget(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, node, secret := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -78,7 +78,7 @@ func TestHA02InitialPrimaryTargetSurvivesRestartAndLostResponse(t *testing.T) {
 	}
 }
 
-func TestHA02InitialPrimaryDoesNotMoveToUnprovenReplacement(t *testing.T) {
+func Test_HA02_ReconcileInitialPrimary_WhenTargetIsReplaced_DoesNotMoveToUnprovenProcess(t *testing.T) {
 	instance, pod, _, _ := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -116,7 +116,7 @@ func TestHA02InitialPrimaryDoesNotMoveToUnprovenReplacement(t *testing.T) {
 	}
 }
 
-func TestEmptyPrimaryAssignmentPreservesInitializedHistory(t *testing.T) {
+func Test_ReconcileInitialPrimary_WhenAssignmentStartsFromEmptyProcesses_PreservesInitializedHistory(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.Initialized = true
@@ -169,7 +169,7 @@ func TestEmptyPrimaryAssignmentPreservesInitializedHistory(t *testing.T) {
 	}
 }
 
-func TestHA01ReplicasFollowPrimaryPodIP(t *testing.T) {
+func Test_HA01_ReconcileReplicas_WhenPrimaryIsKnown_ConfiguresReplicasToFollowPrimaryPodIP(t *testing.T) {
 	ctx := context.Background()
 	instance, basePod, _, secret := processObservationObjects()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA

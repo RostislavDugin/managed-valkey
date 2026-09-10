@@ -21,7 +21,7 @@ type emailExistsResponse struct {
 	Exists bool `json:"exists"`
 }
 
-func TestAuthFlowUsesHTTPAndPostgreSQL(t *testing.T) {
+func Test_CompleteAuthenticationFlow_WithHttpAndPostgreSql_ReturnsAccountAndSafeLogs(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	email := "  User-" + uuid.NewString() + "@Example.COM "
 	normalizedEmail := auth.NormalizeEmail(email)
@@ -77,7 +77,7 @@ func TestAuthFlowUsesHTTPAndPostgreSQL(t *testing.T) {
 	}
 }
 
-func TestRegistrationIdempotencyUsesHTTP(t *testing.T) {
+func Test_RegisterUser_WithRepeatedIdempotencyKey_ReplaysOnePersistedResult(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	email := "idempotency-" + uuid.NewString() + "@example.com"
 	password := "password1"
@@ -128,7 +128,7 @@ func TestRegistrationIdempotencyUsesHTTP(t *testing.T) {
 	}
 }
 
-func TestExpiredRegistrationKeyReturnsConflictOverHTTP(t *testing.T) {
+func Test_RegisterUser_WithExpiredIdempotencyKey_ReturnsConflict(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	email := "expired-" + uuid.NewString() + "@example.com"
 	key := uuid.NewString()
@@ -149,7 +149,7 @@ func TestExpiredRegistrationKeyReturnsConflictOverHTTP(t *testing.T) {
 	assertError(t, replayed, http.StatusConflict, string(apierr.CodeConflict))
 }
 
-func TestConcurrentRegistrationUsesHTTP(t *testing.T) {
+func Test_RegisterUser_WithConcurrentRequests_CreatesOneAccountAndReturnsConflict(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	email := "concurrent-" + uuid.NewString() + "@example.com"
 	app.cleanupUser(t, email)
@@ -204,7 +204,7 @@ func TestConcurrentRegistrationUsesHTTP(t *testing.T) {
 	)
 }
 
-func TestLoginAndBlockedAccountUseHTTP(t *testing.T) {
+func Test_LoginUser_WithInvalidCredentialsOrBlockedAccount_EnforcesAuthentication(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
 
@@ -254,7 +254,7 @@ func TestLoginAndBlockedAccountUseHTTP(t *testing.T) {
 	)
 }
 
-func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
+func Test_HandleAuthenticationRequest_WithInvalidInputs_ReturnsCommonHttpErrorFormat(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	userID, err := uuid.NewV7()
 	if err != nil {
@@ -273,7 +273,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 		code    apierr.Code
 	}{
 		{
-			name:   "повреждённый JSON",
+			name:   "повреждённый JSON возвращает общую ошибку валидации",
 			method: http.MethodPost,
 			path:   "/v1/auth/check-email",
 			body:   "{",
@@ -281,7 +281,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:   apierr.CodeValidationFailed,
 		},
 		{
-			name:   "неверная почта",
+			name:   "недопустимый адрес почты возвращает общую ошибку валидации",
 			method: http.MethodPost,
 			path:   "/v1/auth/check-email",
 			body:   `{"email":"bad"}`,
@@ -289,7 +289,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:   apierr.CodeValidationFailed,
 		},
 		{
-			name:   "нет ключа регистрации",
+			name:   "отсутствующий ключ регистрации возвращает общую ошибку валидации",
 			method: http.MethodPost,
 			path:   "/v1/auth/register",
 			body:   `{}`,
@@ -297,7 +297,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:   apierr.CodeValidationFailed,
 		},
 		{
-			name:    "повреждённый ключ регистрации",
+			name:    "повреждённый ключ регистрации возвращает общую ошибку валидации",
 			method:  http.MethodPost,
 			path:    "/v1/auth/register",
 			body:    `{}`,
@@ -306,16 +306,22 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:    apierr.CodeValidationFailed,
 		},
 		{
-			name:   "ошибка входа",
+			name:   "неверные данные входа возвращают общую ошибку авторизации",
 			method: http.MethodPost,
 			path:   "/v1/auth/login",
 			body:   `{"email":"missing@example.com","password":"password1"}`,
 			status: 401,
 			code:   apierr.CodeUnauthorized,
 		},
-		{name: "нет Bearer", method: http.MethodGet, path: "/v1/me", status: 401, code: apierr.CodeUnauthorized},
 		{
-			name:    "повреждённый JWT",
+			name:   "отсутствующий Bearer-токен возвращает общую ошибку авторизации",
+			method: http.MethodGet,
+			path:   "/v1/me",
+			status: 401,
+			code:   apierr.CodeUnauthorized,
+		},
+		{
+			name:    "повреждённый JWT возвращает общую ошибку авторизации",
 			method:  http.MethodGet,
 			path:    "/v1/me",
 			headers: bearer("damaged"),
@@ -323,7 +329,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:    apierr.CodeUnauthorized,
 		},
 		{
-			name:    "просроченный JWT",
+			name:    "просроченный JWT возвращает общую ошибку авторизации",
 			method:  http.MethodGet,
 			path:    "/v1/me",
 			headers: bearer(expired),
@@ -331,14 +337,20 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 			code:    apierr.CodeUnauthorized,
 		},
 		{
-			name:    "другой алгоритм JWT",
+			name:    "JWT с другим алгоритмом возвращает общую ошибку авторизации",
 			method:  http.MethodGet,
 			path:    "/v1/me",
 			headers: bearer(wrongAlgorithm),
 			status:  401,
 			code:    apierr.CodeUnauthorized,
 		},
-		{name: "нет маршрута", method: http.MethodGet, path: "/v1/missing", status: 404, code: apierr.CodeNotFound},
+		{
+			name:   "отсутствующий маршрут возвращает общую ошибку NotFound",
+			method: http.MethodGet,
+			path:   "/v1/missing",
+			status: 404,
+			code:   apierr.CodeNotFound,
+		},
 	}
 
 	for _, testCase := range tests {
@@ -349,7 +361,7 @@ func TestAuthErrorsUseCommonFormatOverHTTP(t *testing.T) {
 	}
 }
 
-func TestAuthRoutesShareRateLimitOverHTTP(t *testing.T) {
+func Test_CallAuthenticationRoutes_WithSameClient_SharesSlidingRateLimit(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 
 	for index := range api.AuthRateLimit {

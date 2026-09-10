@@ -20,7 +20,7 @@ function event(id: string, createdAt: string): AuditLogEntry {
 }
 
 describe('модель аудита Valkey', () => {
-  it('задаёт подписи для всех действий', () => {
+  it('для каждого действия аудита возвращает понятную русскую подпись и подходящую пиктограмму', () => {
     expect(AUDIT_ACTION_LABELS).toEqual({
       'instance.create': 'Создана база',
       'instance.update': 'Изменены настройки',
@@ -31,7 +31,7 @@ describe('модель аудита Valkey', () => {
     });
   });
 
-  it('группирует события по местной дате на границе дня', () => {
+  it('для событий по разные стороны полуночи создаёт группы по местной календарной дате', () => {
     const now = new Date(2026, 8, 8, 0, 5);
     const today = event('today', localIso(2026, 9, 8, 0));
     const yesterday = event('yesterday', localIso(2026, 9, 7, 23));
@@ -42,7 +42,7 @@ describe('модель аудита Valkey', () => {
     ]);
   });
 
-  it('добавляет год только для события из другого года', () => {
+  it('при форматировании группы добавляет год только для события не из текущего года', () => {
     const now = new Date(2026, 8, 8, 12);
 
     expect(getAuditGroupLabel(localIso(2026, 8, 20), now)).not.toContain('2026');
