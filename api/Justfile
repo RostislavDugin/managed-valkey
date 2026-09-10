@@ -4,11 +4,25 @@ set dotenv-path := "../.env"
 export GOTOOLCHAIN := "auto"
 
 root := justfile_directory() / ".."
+
 run: migration-up
     cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/api.kubeconfig") }} go run ./api/cmd/api
 
+format:
+    cd {{ root }} && find api internal -type f -name '*.go' -print0 | \
+        xargs -0 --no-run-if-empty go tool golangci-lint fmt --config .golangci.yml
+    cd {{ root }} && git add -- api internal
+
+lint:
+    cd {{ root }} && go tool golangci-lint run --config .golangci.yml ./api/... ./internal/...
+    cd {{ root }} && go build ./api/... ./internal/...
+    cd {{ root }} && go mod tidy -diff
+
 test:
-    cd {{ root }} && scripts/test_environment.sh exec api -- scripts/test_api.sh
+    cd {{ root }} && MV_TEST_K3S_ENABLED=0 scripts/test_environment.sh exec api -- scripts/test_api.sh fast
+
+test-full:
+    cd {{ root }} && MV_TEST_K3S_ENABLED=1 scripts/test_environment.sh exec api -- scripts/test_api.sh full
 
 migration-up:
     cd {{ root }} && go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" up

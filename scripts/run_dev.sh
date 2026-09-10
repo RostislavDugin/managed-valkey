@@ -197,7 +197,7 @@ run() {
     setsid env HTTP_ADDR=":$dev_api_port" just --justfile "$repo_root/api/Justfile" run &
     child_pids+=("$!")
     setsid env API_PROXY_TARGET="http://127.0.0.1:$dev_api_port" \
-        pnpm --dir "$repo_root/web" dev --host 127.0.0.1 --port "$dev_web_port" &
+        just --justfile "$repo_root/web/Justfile" run 127.0.0.1 "$dev_web_port" &
     child_pids+=("$!")
 
     wait_http operator "http://127.0.0.1:$dev_operator_port/readyz"

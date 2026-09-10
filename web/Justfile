@@ -1,4 +1,19 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+root := justfile_directory() / ".."
+
+run host="127.0.0.1" port="5173":
+    pnpm dev --host {{ quote(host) }} --port {{ quote(port) }}
+
+format:
+    pnpm format
+    cd {{ root }} && git add -- web
+
+lint:
+    pnpm lint
+    pnpm typecheck
+
 test:
     pnpm test
+
+test-full: test

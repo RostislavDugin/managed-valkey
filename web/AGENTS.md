@@ -31,6 +31,11 @@ React 19, TypeScript, Vite, React Router, Mantine 9 (`core`, `hooks`, `form`,
 
 | Команда | Что делает |
 |---|---|
+| `just run` | запускает сервер разработки с настраиваемыми адресом и портом |
+| `just format` | форматирует web и добавляет изменения каталога в индекс Git |
+| `just lint` | запускает Oxlint, Steiger и проверку типов |
+| `just test` | запускает быстрый набор Vitest для корневого запуска и CI |
+| `just test-full` | запускает тот же Vitest, пока медленных тестов web нет |
 | `pnpm dev` | сервер разработки, запросы на `/v1` проксируются в api |
 | `pnpm build` | производственная сборка в `dist` |
 | `pnpm preview` | раздача собранного `dist` |
@@ -39,14 +44,16 @@ React 19, TypeScript, Vite, React Router, Mantine 9 (`core`, `hooks`, `form`,
 | `pnpm lint:fsd` | Steiger: границы и структура FSD |
 | `pnpm lint` | обе проверки |
 | `pnpm test` | Vitest: модель, временный клиент и экраны раздела |
-| `just test` | тот же полный набор Vitest для корневого запуска и CI |
 | `pnpm format` / `pnpm format:check` | Oxfmt |
 | `pnpm check` | форматирование, обе проверки, типы, тесты и сборка подряд |
 
 Адрес api для прокси задаётся переменной окружения `API_PROXY_TARGET`
 (в оболочке или в `.env.local`), по умолчанию `http://127.0.0.1:8080`.
 
-Перед завершением задачи `pnpm check` должен проходить с нулевым кодом.
+Перед завершением задачи выполняй `just format`, `just lint` и `just test`.
+`just format` добавляет изменения `web` в индекс, поэтому сначала проверь, что
+другой агент не меняет эти файлы. `pnpm check` остаётся полной последовательной
+проверкой frontend.
 
 ## Структура src
 

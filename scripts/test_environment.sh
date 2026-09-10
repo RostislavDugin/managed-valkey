@@ -79,6 +79,16 @@ validate_suite() {
     esac
 }
 
+configure_environment_mode() {
+    local suite=$1
+
+    MV_TEST_K3S_ENABLED=${MV_TEST_K3S_ENABLED:-1}
+    [[ "$MV_TEST_K3S_ENABLED" =~ ^[01]$ ]] || fail "MV_TEST_K3S_ENABLED должно быть 0 или 1"
+    if [[ "$suite" != api && "$MV_TEST_K3S_ENABLED" == 0 ]]; then
+        fail "окружение без k3s поддерживает только профиль api"
+    fi
+}
+
 validate_cluster_profile() {
     if [[ ! "$MANAGED_VALKEY_K3S_NODES" =~ ^[1-4]$ ]]; then
         fail "MANAGED_VALKEY_K3S_NODES должно быть от 1 до 4"
@@ -273,6 +283,7 @@ allocate_environment() {
     write_value MV_SUITE "$suite"
     write_value MV_RUN_ID "$run_id"
     write_value MV_STATE_DIR "$state_dir"
+    write_value MV_TEST_K3S_ENABLED "$MV_TEST_K3S_ENABLED"
     write_value MANAGED_VALKEY_COMPOSE_PROJECT "$MANAGED_VALKEY_COMPOSE_PROJECT"
     write_value K3S_DOCKER_SUBNET "$K3S_DOCKER_SUBNET"
     write_value K3S_DOCKER_GATEWAY "$K3S_DOCKER_GATEWAY"
@@ -422,8 +433,8 @@ reserve_environment_resources() {
     [[ "${MV_TEST_RESOURCE_RESERVED:-0}" != 1 ]] || return 0
     memory_mib=${MV_TEST_MEMORY_MIB:-}
     if [[ -z "$memory_mib" ]]; then
-        if [[ "$suite" == api ]]; then
-            memory_mib=3072
+        if [[ "$suite" == api && "${MV_TEST_K3S_ENABLED:-1}" == 0 ]]; then
+            memory_mib=512
         else
             memory_mib=3072
         fi
@@ -468,9 +479,13 @@ prepare() {
 
     validate_suite "$suite"
     validate_run_id "$run_id"
+    configure_environment_mode "$suite"
     configure_cluster_profile "$suite"
-    require_command docker flock ip kubectl openssl python3 rg
-    "$repo_root/scripts/k3s_host_prerequisites.sh"
+    require_command docker flock ip openssl python3 rg
+    if [[ "$MV_TEST_K3S_ENABLED" == 1 ]]; then
+        require_command kubectl
+        "$repo_root/scripts/k3s_host_prerequisites.sh"
+    fi
     load_local_env
     mkdir -p "$state_root"
     trap 'handle_prepare_failure $?' ERR
@@ -488,9 +503,11 @@ prepare() {
         source "$environment_file"
         set +a
     fi
-    acquire_bootstrap_slot
-    prepare_cluster >&2
-    release_bootstrap_slot
+    if [[ "$MV_TEST_K3S_ENABLED" == 1 ]]; then
+        acquire_bootstrap_slot
+        prepare_cluster >&2
+        release_bootstrap_slot
+    fi
     printf 'ready\n' >"$state_dir/status"
     trap - ERR
     log "$suite готов: $state_dir"

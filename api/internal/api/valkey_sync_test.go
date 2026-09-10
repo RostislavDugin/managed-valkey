@@ -1,3 +1,5 @@
+//go:build k3s
+
 package api_test
 
 import (

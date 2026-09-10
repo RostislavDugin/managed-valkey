@@ -8,5 +8,5 @@ test:
 test-headed:
     cd {{ root }} && MANAGED_VALKEY_E2E_HEADED=1 scripts/test_environment.sh exec e2e -- scripts/test_e2e.sh
 
-test-prod:
+test-e2e-prod:
     @cd {{ root }} && PLAYWRIGHT_BASE_URL=https://app.h3llo-demo.com scripts/run_playwright_e2e.sh prod

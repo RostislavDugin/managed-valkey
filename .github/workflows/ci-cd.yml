@@ -110,7 +110,7 @@ jobs:
           just-version: 1.43.0
       - name: Запустить ограниченный набор unit/envtest
         working-directory: operator
-        run: just test-ci
+        run: just test
       - name: Сохранить результаты и диагностику
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

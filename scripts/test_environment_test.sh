@@ -127,6 +127,23 @@ rg -q "остаток process: pid=$remaining_pid command=sleep" "$temporary/cle
 
 export MV_TEST_STATE_ROOT=$temporary/wait-state
 source <(sed '/^command_name=/,$d' "$repo_root/scripts/test_environment.sh")
+
+(
+    unset MV_TEST_K3S_ENABLED
+    configure_environment_mode api
+    [[ "$MV_TEST_K3S_ENABLED" == 1 ]]
+)
+(
+    MV_TEST_K3S_ENABLED=0
+    configure_environment_mode api
+    [[ "$MV_TEST_K3S_ENABLED" == 0 ]]
+)
+if (MV_TEST_K3S_ENABLED=0; configure_environment_mode operator) 2>"$temporary/mode.err"; then
+    echo "режим без k3s был разрешён оператору" >&2
+    exit 1
+fi
+rg -q 'окружение без k3s поддерживает только профиль api' "$temporary/mode.err"
+
 reserve_environment_resources() { :; }
 release_environment_resources() { :; }
 prepare() {

@@ -13,11 +13,22 @@ run: _check-generated
     set -a && source {{ quote(root / "tmp/k3s/dev/operator.env") }} && set +a && \
         cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} go run ./operator/cmd/operator
 
-test:
-    cd {{ root }} && scripts/test_operator.sh
+format:
+    cd {{ root }} && find operator internal -type f -name '*.go' -print0 | \
+        xargs -0 --no-run-if-empty go tool golangci-lint fmt --config .golangci.yml
+    cd {{ root }} && git add -- operator internal
 
-test-ci:
+lint:
+    cd {{ root }} && go tool golangci-lint run --config .golangci.yml ./operator/... ./internal/...
+    cd {{ root }} && scripts/check_operator_generated.sh
+    cd {{ root }} && go build ./operator/... ./internal/...
+    cd {{ root }} && go mod tidy -diff
+
+test:
     cd {{ root }} && scripts/test_operator_ci.sh
+
+test-full:
+    cd {{ root }} && scripts/test_operator.sh
 
 _generate:
     cd {{ root }} && go tool controller-gen object paths=./operator/api/v1alpha1/...
