@@ -245,6 +245,57 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              credentialRotation:
+                properties:
+                  confirmations:
+                    items:
+                      properties:
+                        process:
+                          properties:
+                            containerID:
+                              type: string
+                            nodeName:
+                              type: string
+                            nodeUID:
+                              type: string
+                            podUID:
+                              type: string
+                            runId:
+                              type: string
+                          required:
+                          - containerID
+                          - nodeName
+                          - nodeUID
+                          - podUID
+                          - runId
+                          type: object
+                        version:
+                          format: int64
+                          type: integer
+                      required:
+                      - process
+                      - version
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  previousVersion:
+                    format: int64
+                    type: integer
+                  stage:
+                    enum:
+                    - preparing
+                    - updatingReplicas
+                    - updatingPrimary
+                    - cleaningSecret
+                    type: string
+                  targetVersion:
+                    format: int64
+                    type: integer
+                required:
+                - previousVersion
+                - stage
+                - targetVersion
+                type: object
               credentialsInitialized:
                 type: boolean
               deletion:
@@ -260,6 +311,88 @@ spec:
                     format: date-time
                     type: string
                 required:
+                - stage
+                - startedAt
+                type: object
+              failover:
+                properties:
+                  candidate:
+                    properties:
+                      containerID:
+                        type: string
+                      nodeName:
+                        type: string
+                      nodeUID:
+                        type: string
+                      podUID:
+                        type: string
+                      runId:
+                        type: string
+                    required:
+                    - containerID
+                    - nodeName
+                    - nodeUID
+                    - podUID
+                    - runId
+                    type: object
+                  candidateAppDisabled:
+                    type: boolean
+                  candidateClientsKilled:
+                    type: boolean
+                  candidateMayBePrimary:
+                    type: boolean
+                  controlOffset:
+                    format: int64
+                    type: integer
+                  emptySince:
+                    format: date-time
+                    type: string
+                  offsetDeadline:
+                    format: date-time
+                    type: string
+                  reason:
+                    enum:
+                    - failure
+                    - resize
+                    type: string
+                  replicationId:
+                    type: string
+                  source:
+                    properties:
+                      containerID:
+                        type: string
+                      nodeName:
+                        type: string
+                      nodeUID:
+                        type: string
+                      podUID:
+                        type: string
+                      runId:
+                        type: string
+                    required:
+                    - containerID
+                    - nodeName
+                    - nodeUID
+                    - podUID
+                    - runId
+                    type: object
+                  sourceAppDisabled:
+                    type: boolean
+                  sourceClientsKilled:
+                    type: boolean
+                  stage:
+                    enum:
+                    - fencing
+                    - choosing
+                    - promoting
+                    - reconfiguring
+                    type: string
+                  startedAt:
+                    format: date-time
+                    type: string
+                required:
+                - reason
+                - source
                 - stage
                 - startedAt
                 type: object
@@ -385,12 +518,43 @@ spec:
               nodes:
                 items:
                   properties:
+                    appEnabled:
+                      type: boolean
+                    appPasswordVersion:
+                      format: int64
+                      type: integer
                     containerID:
                       type: string
                     nodeName:
                       type: string
                     nodeUID:
                       type: string
+                    observation:
+                      properties:
+                        busySince:
+                          format: date-time
+                          type: string
+                        consecutiveTransportErrors:
+                          format: int32
+                          type: integer
+                        kind:
+                          enum:
+                          - transportError
+                          - busy
+                          - loading
+                          - authError
+                          - serverError
+                          type: string
+                        observedAt:
+                          format: date-time
+                          type: string
+                        transportErrorSince:
+                          format: date-time
+                          type: string
+                      required:
+                      - kind
+                      - observedAt
+                      type: object
                     ordinal:
                       format: int32
                       type: integer
@@ -398,6 +562,60 @@ spec:
                       type: string
                     readiness:
                       type: boolean
+                    recovery:
+                      properties:
+                        deleteRequestedAt:
+                          format: date-time
+                          type: string
+                        reason:
+                          enum:
+                          - unresponsive
+                          - busy
+                          type: string
+                        stage:
+                          enum:
+                          - killingBusy
+                          - deleting
+                          - waitingForTermination
+                          type: string
+                        startedAt:
+                          format: date-time
+                          type: string
+                      required:
+                      - reason
+                      - stage
+                      - startedAt
+                      type: object
+                    replication:
+                      properties:
+                        linkUp:
+                          type: boolean
+                        observedAt:
+                          format: date-time
+                          type: string
+                        offset:
+                          format: int64
+                          type: integer
+                        replicationId:
+                          type: string
+                        secondaryOffset:
+                          format: int64
+                          type: integer
+                        secondaryReplicationId:
+                          type: string
+                        syncInProgress:
+                          type: boolean
+                        syncedAt:
+                          format: date-time
+                          type: string
+                        upstreamHost:
+                          type: string
+                        upstreamPort:
+                          format: int32
+                          type: integer
+                      required:
+                      - observedAt
+                      type: object
                     role:
                       enum:
                       - primary
@@ -446,20 +664,215 @@ spec:
                 enum:
                 - provisioning
                 - running
-                - updating
                 - degraded
+                - updating
                 - unavailable
                 - error
                 type: string
+              previousProcesses:
+                items:
+                  properties:
+                    appEnabled:
+                      type: boolean
+                    appPasswordVersion:
+                      format: int64
+                      type: integer
+                    containerID:
+                      type: string
+                    nodeName:
+                      type: string
+                    nodeUID:
+                      type: string
+                    observation:
+                      properties:
+                        busySince:
+                          format: date-time
+                          type: string
+                        consecutiveTransportErrors:
+                          format: int32
+                          type: integer
+                        kind:
+                          enum:
+                          - transportError
+                          - busy
+                          - loading
+                          - authError
+                          - serverError
+                          type: string
+                        observedAt:
+                          format: date-time
+                          type: string
+                        transportErrorSince:
+                          format: date-time
+                          type: string
+                      required:
+                      - kind
+                      - observedAt
+                      type: object
+                    ordinal:
+                      format: int32
+                      type: integer
+                    podUID:
+                      type: string
+                    readiness:
+                      type: boolean
+                    recovery:
+                      properties:
+                        deleteRequestedAt:
+                          format: date-time
+                          type: string
+                        reason:
+                          enum:
+                          - unresponsive
+                          - busy
+                          type: string
+                        stage:
+                          enum:
+                          - killingBusy
+                          - deleting
+                          - waitingForTermination
+                          type: string
+                        startedAt:
+                          format: date-time
+                          type: string
+                      required:
+                      - reason
+                      - stage
+                      - startedAt
+                      type: object
+                    replication:
+                      properties:
+                        linkUp:
+                          type: boolean
+                        observedAt:
+                          format: date-time
+                          type: string
+                        offset:
+                          format: int64
+                          type: integer
+                        replicationId:
+                          type: string
+                        secondaryOffset:
+                          format: int64
+                          type: integer
+                        secondaryReplicationId:
+                          type: string
+                        syncInProgress:
+                          type: boolean
+                        syncedAt:
+                          format: date-time
+                          type: string
+                        upstreamHost:
+                          type: string
+                        upstreamPort:
+                          format: int32
+                          type: integer
+                      required:
+                      - observedAt
+                      type: object
+                    role:
+                      enum:
+                      - primary
+                      - replica
+                      type: string
+                    runId:
+                      type: string
+                    termination:
+                      properties:
+                        evidence:
+                          type: string
+                        exitCode:
+                          format: int32
+                          type: integer
+                        finishedAt:
+                          format: date-time
+                          type: string
+                        reason:
+                          type: string
+                      required:
+                      - evidence
+                      - exitCode
+                      - finishedAt
+                      - reason
+                      type: object
+                  required:
+                  - containerID
+                  - nodeName
+                  - nodeUID
+                  - ordinal
+                  - podUID
+                  - readiness
+                  - runId
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
               primaryContainerID:
+                type: string
+              primaryNodeName:
+                type: string
+              primaryNodeUID:
                 type: string
               primaryOrdinal:
                 format: int32
                 type: integer
               primaryPodUID:
                 type: string
+              primaryRunId:
+                type: string
               reason:
                 type: string
+              rollout:
+                properties:
+                  accessClosed:
+                    type: boolean
+                  desiredGeneration:
+                    format: int64
+                    type: integer
+                  image:
+                    type: string
+                  process:
+                    properties:
+                      containerID:
+                        type: string
+                      nodeName:
+                        type: string
+                      nodeUID:
+                        type: string
+                      podUID:
+                        type: string
+                      runId:
+                        type: string
+                    required:
+                    - containerID
+                    - nodeName
+                    - nodeUID
+                    - podUID
+                    - runId
+                    type: object
+                  ramGb:
+                    format: int32
+                    type: integer
+                  stage:
+                    enum:
+                    - preparing
+                    - stopping
+                    - updatingTemplate
+                    - replacingReplicas
+                    - switchingPrimary
+                    - replacingPrimary
+                    - starting
+                    - verifying
+                    type: string
+                  vcpu:
+                    format: int32
+                    type: integer
+                required:
+                - desiredGeneration
+                - image
+                - ramGb
+                - stage
+                - vcpu
+                type: object
             type: object
         required:
         - spec

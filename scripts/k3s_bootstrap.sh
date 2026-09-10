@@ -79,8 +79,11 @@ wait_for_api() {
 
 expected_nodes() {
     printf '%s\n' k3s-server
-    if ((K3S_EXPECTED_NODES == 3)); then
+    if ((K3S_EXPECTED_NODES >= 3)); then
         printf '%s\n' k3s-agent-1 k3s-agent-2
+    fi
+    if ((K3S_EXPECTED_NODES == 4)); then
+        printf '%s\n' k3s-agent-3
     fi
 }
 
@@ -100,8 +103,8 @@ remove_stale_nodes() {
 repair_rejected_agents() {
     local container node running
 
-    ((K3S_EXPECTED_NODES == 3)) || return 0
-    for node in k3s-agent-1 k3s-agent-2; do
+    ((K3S_EXPECTED_NODES >= 3)) || return 0
+    for node in $(expected_nodes | sed '1d'); do
         container=$(docker ps -aq \
             --filter "label=com.docker.compose.project=$project" \
             --filter "label=com.docker.compose.service=$node" | head -n 1)

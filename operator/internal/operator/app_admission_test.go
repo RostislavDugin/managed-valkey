@@ -91,6 +91,11 @@ func TestAppAdmissionWaitsForCurrentPrimaryEndpoint(t *testing.T) {
 		instance.Status.Applied == nil || instance.Status.ObservedAt == nil {
 		t.Fatalf("неполный status после допуска: %+v", instance.Status)
 	}
+	result, err = reconciler.reconcileAppAdmission(ctx, instance)
+	if err != nil || !result.IsZero() || enableCalls != 1 {
+		t.Fatalf("готовый primary повторно принял управление: result=%+v calls=%d error=%v",
+			result, enableCalls, err)
+	}
 }
 
 func TestAppAdmissionRechecksStateAfterLostEnableResponse(t *testing.T) {
@@ -143,6 +148,65 @@ func TestAppAdmissionRechecksStateAfterLostEnableResponse(t *testing.T) {
 	}
 }
 
+func TestCT04AppAdmissionDoesNotConfirmPendingMutations(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, _, secret := processObservationObjects()
+	pod.Labels = workloadLabels(instance.Name)
+	pod.Labels[applicationRoleLabel] = string(valkeyv1alpha1.NodeRolePrimary)
+	instance.Status.Initialized = true
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseUpdating
+	instance.Status.ObservedGeneration = 1
+	instance.Status.AppliedPasswordVersion = 1
+	instance.Status.Applied = &valkeyv1alpha1.AppliedConfiguration{
+		Mode: valkeyv1alpha1.ValkeyModeSingle, VCPU: 1, RAMGB: 4,
+	}
+	instance.Status.AcceptedConfiguration.VCPU = 2
+	instance.Status.AcceptedConfiguration.RAMGB = 8
+	instance.Status.AcceptedConfiguration.PasswordVersion = 2
+	instance.Status.AcceptedConfiguration.DesiredGeneration = 2
+	instance.Status.Rollout = &valkeyv1alpha1.RolloutStatus{
+		DesiredGeneration: 2, VCPU: 2, RAMGB: 8, Stage: valkeyv1alpha1.RolloutStagePreparing,
+	}
+	instance.Status.CredentialRotation = &valkeyv1alpha1.CredentialRotationStatus{
+		TargetVersion: 2, PreviousVersion: 1,
+		Stage: valkeyv1alpha1.CredentialRotationStagePreparing,
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{testObservedNode(pod)}
+	secret.Data[valkeyv1alpha1.AppPasswordHashKeyPrefix+"2"] = []byte(strings.Repeat("cd", 32))
+	endpointSlice := testPrimaryEndpointSlice(instance, pod)
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, pod, secret, endpointSlice).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{
+		Client: k8s,
+		UpdateAppAccess: func(
+			_ context.Context,
+			_ string,
+			_ string,
+			hash string,
+			enabled bool,
+		) (operatorvalkey.ProcessState, error) {
+			return operatorvalkey.ProcessState{
+				Role: "primary", RunID: "run-1", AppEnabled: enabled,
+				AppPasswordHashes: []string{hash},
+			}, nil
+		},
+	}
+
+	if _, err := reconciler.reconcileAppAdmission(ctx, instance); err != nil {
+		t.Fatalf("повторно проверить публичный доступ: %v", err)
+	}
+	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseUpdating ||
+		instance.Status.ObservedGeneration != 1 || instance.Status.Applied == nil ||
+		instance.Status.Applied.VCPU != 1 || instance.Status.Applied.RAMGB != 4 ||
+		instance.Status.AppliedPasswordVersion != 1 || instance.Status.Rollout == nil ||
+		instance.Status.CredentialRotation == nil {
+		t.Fatalf("допуск преждевременно подтвердил поколение: %+v", instance.Status)
+	}
+}
+
 func TestPrimaryLabelRequiresSavedCurrentProcess(t *testing.T) {
 	ctx := context.Background()
 	instance, pod, _, _ := processObservationObjects()
@@ -188,7 +252,7 @@ func TestProcessDisablesEarlyAppAccess(t *testing.T) {
 	disableCalls := 0
 	reconciler := &ValkeyInstanceReconciler{
 		Client: k8s,
-		InspectProcess: func(context.Context, string, string, string) (operatorvalkey.ProcessState, error) {
+		InspectProcess: func(context.Context, string, string, string, bool) (operatorvalkey.ProcessState, error) {
 			return operatorvalkey.ProcessState{
 				Role: "primary", RunID: "run-1", AppEnabled: true,
 				AppPasswordHashes: []string{hash},
@@ -229,6 +293,138 @@ func TestEndpointSliceRequestsPrimaryInstance(t *testing.T) {
 	if len(requests) != 1 || requests[0].Namespace != endpointSlice.Namespace ||
 		requests[0].Name != "cache-a1b2c3" {
 		t.Fatalf("неверная очередь EndpointSlice: %+v", requests)
+	}
+}
+
+func TestHAReplicaLabelRequiresCurrentSynchronizedProcess(t *testing.T) {
+	instance, pod, _, _ := processObservationObjects()
+	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	syncedAt := metav1.Now()
+	replica := testObservedNode(pod)
+	replica.Role = valkeyv1alpha1.NodeRoleReplica
+	replica.AppPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
+	replica.Replication = &valkeyv1alpha1.ReplicationStatus{
+		LinkUp: true, SyncedAt: &syncedAt, UpstreamHost: "10.42.0.20", UpstreamPort: valkeyPort,
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{replica}
+	if role := currentProcessRoleLabel(instance, pod, 0); role != string(valkeyv1alpha1.NodeRoleReplica) {
+		t.Fatalf("синхронизированная реплика получила метку %q", role)
+	}
+
+	checks := []struct {
+		name   string
+		mutate func(*valkeyv1alpha1.NodeStatus)
+	}{
+		{name: "sync in progress", mutate: func(node *valkeyv1alpha1.NodeStatus) {
+			node.Replication.SyncInProgress = true
+		}},
+		{name: "link down", mutate: func(node *valkeyv1alpha1.NodeStatus) {
+			node.Replication.LinkUp = false
+		}},
+		{name: "no synchronization proof", mutate: func(node *valkeyv1alpha1.NodeStatus) {
+			node.Replication.SyncedAt = nil
+		}},
+		{name: "old password", mutate: func(node *valkeyv1alpha1.NodeStatus) {
+			node.AppPasswordVersion = 0
+		}},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			changed := *replica.DeepCopy()
+			check.mutate(&changed)
+			instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{changed}
+			if role := currentProcessRoleLabel(instance, pod, 0); role != "" {
+				t.Fatalf("непригодная реплика получила метку %q", role)
+			}
+		})
+	}
+}
+
+func TestHA01ReplicaAdmissionChecksRoleACLAndUpstream(t *testing.T) {
+	ctx := context.Background()
+	instance, primaryPod, _, secret := processObservationObjects()
+	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.Initialized = true
+	primary := testObservedNode(primaryPod)
+	primary.AppEnabled = true
+	primary.AppPasswordVersion = 1
+	primaryOrdinal := int32(0)
+	instance.Status.PrimaryOrdinal = &primaryOrdinal
+	instance.Status.PrimaryPodUID = primary.PodUID
+	instance.Status.PrimaryContainerID = primary.ContainerID
+	instance.Status.PrimaryRunID = primary.RunID
+	instance.Status.PrimaryNodeName = primary.NodeName
+	instance.Status.PrimaryNodeUID = primary.NodeUID
+
+	replicaPod := primaryPod.DeepCopy()
+	replicaPod.Name = instance.Name + "-1"
+	replicaPod.UID = "pod-2"
+	replicaPod.Status.PodIP = "10.42.0.11"
+	replicaPod.Status.ContainerStatuses[0].ContainerID = "containerd://2"
+	replicaPod.Labels = map[string]string{applicationRoleLabel: string(valkeyv1alpha1.NodeRoleReplica)}
+	syncedAt := metav1.Now()
+	replica := valkeyv1alpha1.NodeStatus{
+		Ordinal: 1, PodUID: string(replicaPod.UID),
+		ContainerID: replicaPod.Status.ContainerStatuses[0].ContainerID,
+		RunID:       "run-2", NodeName: "worker-2", NodeUID: "node-2",
+		Role: valkeyv1alpha1.NodeRoleReplica, Readiness: true, AppPasswordVersion: 1,
+		Replication: &valkeyv1alpha1.ReplicationStatus{
+			UpstreamHost: primaryPod.Status.PodIP, UpstreamPort: valkeyPort,
+			LinkUp: true, SyncedAt: &syncedAt,
+		},
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{primary, replica}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, primaryPod, replicaPod, secret).
+		Build()
+	updates := 0
+	reconciler := &ValkeyInstanceReconciler{
+		Client: k8s,
+		UpdateAppAccess: func(
+			_ context.Context,
+			address string,
+			_ string,
+			hash string,
+			enabled bool,
+		) (operatorvalkey.ProcessState, error) {
+			updates++
+			if address != "10.42.0.11:6379" || !enabled {
+				t.Fatalf("неверная цель допуска реплики: %s enabled=%t", address, enabled)
+			}
+			return operatorvalkey.ProcessState{
+				Role: "replica", RunID: "run-2", AppEnabled: true,
+				AppPasswordHashes: []string{hash},
+				Replication: &operatorvalkey.ReplicationState{
+					UpstreamHost: primaryPod.Status.PodIP, UpstreamPort: valkeyPort, LinkUp: true,
+				},
+			}, nil
+		},
+	}
+	instance.Status.CredentialRotation = &valkeyv1alpha1.CredentialRotationStatus{
+		TargetVersion: 2, PreviousVersion: 1,
+		Stage: valkeyv1alpha1.CredentialRotationStageUpdatingReplicas,
+	}
+	result, err := reconciler.reconcileReplicaAdmission(ctx, instance)
+	if err != nil || !result.IsZero() || updates != 0 {
+		t.Fatalf("реплика допущена посреди ротации: result=%+v updates=%d error=%v", result, updates, err)
+	}
+	instance.Status.CredentialRotation = nil
+
+	result, err = reconciler.reconcileReplicaAdmission(ctx, instance)
+	if err != nil || result.IsZero() || updates != 1 {
+		t.Fatalf("допустить реплику: result=%+v updates=%d error=%v", result, updates, err)
+	}
+	observed := &valkeyv1alpha1.ValkeyInstance{}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), observed); err != nil {
+		t.Fatalf("прочитать подтверждение реплики: %v", err)
+	}
+	node, found := nodeStatusAtOrdinal(observed.Status.Nodes, 1)
+	if !found || !node.AppEnabled || node.AppPasswordVersion != 1 {
+		t.Fatalf("допуск реплики не сохранён: %+v", observed.Status.Nodes)
 	}
 }
 

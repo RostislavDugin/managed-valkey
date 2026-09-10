@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -28,6 +29,12 @@ func TestSingleStatefulSetContract(t *testing.T) {
 	}
 	if len(statefulSet.Spec.VolumeClaimTemplates) != 0 {
 		t.Fatal("StatefulSet создаёт постоянное хранилище")
+	}
+	if statefulSet.Spec.Selector == nil ||
+		!maps.Equal(statefulSet.Spec.Selector.MatchLabels, workloadLabels(instance.Name)) ||
+		!maps.Equal(statefulSet.Spec.Template.Labels, statefulSet.Spec.Selector.MatchLabels) {
+		t.Fatalf("селектор single изменён: selector=%+v labels=%v",
+			statefulSet.Spec.Selector, statefulSet.Spec.Template.Labels)
 	}
 	if statefulSet.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyAlways ||
 		!slices.Equal(statefulSet.Spec.Template.Finalizers, []string{processFinalizer}) {
@@ -111,7 +118,7 @@ func TestValkeyImageChangePreservesStatefulSetTemplate(t *testing.T) {
 	reconciler.SystemNamespace = "valkey-system"
 	reconciler.ValkeyImage = "valkey/valkey:9.0.0"
 
-	if _, err := reconciler.reconcileSingleResources(ctx, instance); err != nil {
+	if _, err := reconciler.reconcileWorkloadResources(ctx, instance); err != nil {
 		t.Fatalf("reconcile со сменившимся образом: %v", err)
 	}
 	observedStatefulSet := &appsv1.StatefulSet{}
@@ -131,7 +138,7 @@ func TestValkeyImageChangePreservesStatefulSetTemplate(t *testing.T) {
 	}
 
 	reconciler.ValkeyImage = originalImage
-	if _, err := reconciler.reconcileSingleResources(ctx, observedInstance); err != nil {
+	if _, err := reconciler.reconcileWorkloadResources(ctx, observedInstance); err != nil {
 		t.Fatalf("reconcile после возврата образа: %v", err)
 	}
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), observedInstance); err != nil {
@@ -142,6 +149,59 @@ func TestValkeyImageChangePreservesStatefulSetTemplate(t *testing.T) {
 		conditionTypeRecoveryRequired,
 	); condition != nil {
 		t.Fatalf("RecoveryRequired сохранился после возврата образа: %+v", condition)
+	}
+}
+
+func TestStatefulSetServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	desired := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
+	current := desired.DeepCopy()
+	current.Spec.RevisionHistoryLimit = ptr.To[int32](10)
+	scheme := NewScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(current).Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, Scheme: scheme}
+
+	changed, err := reconciler.ensureStatefulSet(ctx, desired)
+	if err != nil || changed {
+		t.Fatalf("серверное значение StatefulSet вызвало повторный PATCH: changed=%t error=%v", changed, err)
+	}
+}
+
+func TestHAStatefulSetAndDisruptionBudgetContract(t *testing.T) {
+	instance := completeAcceptedInstance()
+	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
+
+	container := statefulSet.Spec.Template.Spec.Containers[0]
+	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 3 ||
+		statefulSet.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType ||
+		statefulSet.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyAlways ||
+		container.RestartPolicy == nil || *container.RestartPolicy != corev1.ContainerRestartPolicyNever {
+		t.Fatalf("неверная политика HA StatefulSet: %+v", statefulSet.Spec)
+	}
+	affinity := statefulSet.Spec.Template.Spec.Affinity
+	if affinity == nil || affinity.PodAntiAffinity == nil ||
+		len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+		t.Fatalf("HA не требует разнесения процессов: %+v", affinity)
+	}
+	term := affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
+	if term.TopologyKey != corev1.LabelHostname || term.LabelSelector == nil ||
+		!maps.Equal(term.LabelSelector.MatchLabels, workloadLabels(instance.Name)) {
+		t.Fatalf("неверное правило anti-affinity: %+v", term)
+	}
+
+	pdb := desiredPodDisruptionBudget(instance)
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntVal != 2 ||
+		pdb.Spec.Selector == nil ||
+		!maps.Equal(pdb.Spec.Selector.MatchLabels, workloadLabels(instance.Name)) {
+		t.Fatalf("неверный PDB HA: %+v", pdb.Spec)
+	}
+	services := desiredServices(instance)
+	if len(services) != 3 || services[2].Name != instance.Name+"-replicas" ||
+		services[2].Spec.Selector[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) {
+		t.Fatalf("неверный Service реплик: %+v", services)
 	}
 }
 

@@ -21,6 +21,16 @@ type connectionCloser interface {
 	Close()
 }
 
+func (r *ValkeyInstanceReconciler) dialValkey(
+	ctx context.Context,
+	cfg operatorvalkey.ClientConfig,
+) (*operatorvalkey.Client, error) {
+	if r.Lease != nil {
+		return r.Lease.DialValkey(ctx, cfg)
+	}
+	return operatorvalkey.Dial(ctx, cfg)
+}
+
 func NewLeaseScope() *LeaseScope {
 	return &LeaseScope{connections: make(map[connectionCloser]struct{})}
 }
@@ -62,7 +72,16 @@ func (s *LeaseScope) DialValkey(
 	s.mu.Unlock()
 
 	cfg.LeaseContext = lease
-	connection, err := operatorvalkey.Dial(ctx, cfg)
+	previousOnClose := cfg.OnClose
+	var connection *operatorvalkey.Client
+	cfg.OnClose = func() {
+		if previousOnClose != nil {
+			previousOnClose()
+		}
+		s.removeConnection(connection)
+	}
+	var err error
+	connection, err = operatorvalkey.Dial(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +97,16 @@ func (s *LeaseScope) DialValkey(
 	s.mu.Unlock()
 
 	return connection, nil
+}
+
+func (s *LeaseScope) removeConnection(connection connectionCloser) {
+	if connection == nil {
+		return
+	}
+
+	s.mu.Lock()
+	delete(s.connections, connection)
+	s.mu.Unlock()
 }
 
 func (s *LeaseScope) closeConnections() {

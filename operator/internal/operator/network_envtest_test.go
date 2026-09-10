@@ -26,7 +26,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
+func TestEnvtestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
 	environment := &envtest.Environment{CRDs: []*apiextensionsv1.CustomResourceDefinition{
 		networkTestCRD(gatewayv1.GroupName, "v1", "Gateway", "gateways"),
 		networkTestCRD(gatewayv1.GroupName, "v1alpha2", "TCPRoute", "tcproutes"),
@@ -61,6 +61,7 @@ func TestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
 	}
 
 	allow := networkTestInstance("allow-a1b2c3", true, []string{"192.0.2.0/24"})
+	allow.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
 	denyAll := networkTestInstance("denyall-b2c3d4", true, nil)
 	open := networkTestInstance("open-c3d4e5", false, nil)
 	for _, instance := range []*valkeyv1alpha1.ValkeyInstance{allow, denyAll, open} {
@@ -107,7 +108,9 @@ func TestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(gateway), gateway); err != nil {
 		t.Fatalf("прочитать Gateway: %v", err)
 	}
-	wantListeners := []gatewayv1.SectionName{"neighbor", "allow-a1b2c3", "denyall-b2c3d4", "open-c3d4e5"}
+	wantListeners := []gatewayv1.SectionName{
+		"neighbor", "allow-a1b2c3", "allow-a1b2c3-ro", "denyall-b2c3d4", "open-c3d4e5",
+	}
 	for _, name := range wantListeners {
 		if !slices.ContainsFunc(gateway.Spec.Listeners, func(listener gatewayv1.Listener) bool {
 			return listener.Name == name
@@ -127,18 +130,19 @@ func TestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
 	if err := k8s.List(ctx, routes); err != nil {
 		t.Fatalf("прочитать TCPRoute: %v", err)
 	}
-	if len(routes.Items) != 3 {
+	if len(routes.Items) != 4 {
 		t.Fatalf("создано TCPRoute: %d", len(routes.Items))
 	}
 	for _, route := range routes.Items {
+		backendName := route.Name + "-primary"
+		if strings.HasSuffix(route.Name, "-ro") {
+			backendName = strings.TrimSuffix(route.Name, "-ro") + "-replicas"
+		}
 		if len(route.Spec.ParentRefs) != 1 || route.Spec.ParentRefs[0].SectionName == nil ||
 			string(*route.Spec.ParentRefs[0].SectionName) != route.Name ||
 			len(route.Spec.Rules) != 1 || len(route.Spec.Rules[0].BackendRefs) != 1 ||
-			string(route.Spec.Rules[0].BackendRefs[0].Name) != route.Name+"-primary" {
+			string(route.Spec.Rules[0].BackendRefs[0].Name) != backendName {
 			t.Errorf("неверный TCPRoute %s: %+v", route.Name, route.Spec)
-		}
-		if strings.HasSuffix(route.Name, "-ro") {
-			t.Errorf("для single создан маршрут -ro: %s", route.Name)
 		}
 	}
 
@@ -152,6 +156,20 @@ func TestNetworkResourcesPreserveConcurrentGatewayListeners(t *testing.T) {
 			[]envoyv1alpha1.CIDR{"192.0.2.0/24"},
 		) {
 		t.Fatalf("неверная allow SecurityPolicy: %+v", allowPolicy.Spec)
+	}
+	allowReadOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
+	if err := k8s.Get(ctx, client.ObjectKey{
+		Namespace: allow.Namespace, Name: allow.Name + "-ro",
+	}, allowReadOnlyPolicy); err != nil {
+		t.Fatalf("прочитать allow SecurityPolicy реплик: %v", err)
+	}
+	if allowReadOnlyPolicy.Spec.Authorization == nil ||
+		len(allowReadOnlyPolicy.Spec.Authorization.Rules) != 1 ||
+		!slices.Equal(
+			allowReadOnlyPolicy.Spec.Authorization.Rules[0].Principal.ClientCIDRs,
+			[]envoyv1alpha1.CIDR{"192.0.2.0/24"},
+		) {
+		t.Fatalf("неверная allow SecurityPolicy реплик: %+v", allowReadOnlyPolicy.Spec)
 	}
 	denyPolicy := &envoyv1alpha1.SecurityPolicy{}
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(denyAll), denyPolicy); err != nil {

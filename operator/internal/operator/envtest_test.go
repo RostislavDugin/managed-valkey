@@ -37,7 +37,7 @@ import (
 	valkeyclient "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
-func TestManagerStartsAndStopsOnContext(t *testing.T) {
+func TestEnvtestManagerStartsAndStopsOnContext(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	probeAddr := freeAddress(t)
@@ -78,7 +78,7 @@ func TestManagerStartsAndStopsOnContext(t *testing.T) {
 	}
 }
 
-func TestValkeyInstanceContract(t *testing.T) {
+func TestEnvtestValkeyInstanceContract(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx := context.Background()
 
@@ -197,6 +197,157 @@ func TestValkeyInstanceContract(t *testing.T) {
 	}
 }
 
+func TestEnvtestCT03OperationStatusContract(t *testing.T) {
+	restConfig := startEnvironment(t)
+	ctx := context.Background()
+
+	k8s, err := client.New(restConfig, client.Options{Scheme: operator.NewScheme()})
+	if err != nil {
+		t.Fatalf("создать клиент: %v", err)
+	}
+
+	instance := newCompleteInstance("operations-a1b2c3")
+	instance.Spec.DesiredGeneration = 17
+	if err := k8s.Create(ctx, instance); err != nil {
+		t.Fatalf("создать CR: %v", err)
+	}
+	if instance.Generation == instance.Spec.DesiredGeneration {
+		t.Fatalf("metadata.generation подменяет desiredGeneration: %d", instance.Generation)
+	}
+
+	now := metav1.Now()
+	deadline := metav1.NewTime(now.Add(5 * time.Second))
+	source := valkeyv1alpha1.ProcessIdentity{
+		PodUID:      "source-pod",
+		ContainerID: "containerd://source",
+		RunID:       "source-run",
+		NodeName:    "worker-0",
+		NodeUID:     "source-node",
+	}
+	candidate := valkeyv1alpha1.ProcessIdentity{
+		PodUID:      "candidate-pod",
+		ContainerID: "containerd://candidate",
+		RunID:       "candidate-run",
+		NodeName:    "worker-1",
+		NodeUID:     "candidate-node",
+	}
+	instance.Status = valkeyv1alpha1.ValkeyInstanceStatus{
+		Phase: valkeyv1alpha1.InstancePhaseUpdating,
+		Nodes: []valkeyv1alpha1.NodeStatus{{
+			Ordinal: 1, PodUID: candidate.PodUID, ContainerID: candidate.ContainerID,
+			RunID: candidate.RunID, NodeName: candidate.NodeName, NodeUID: candidate.NodeUID,
+			Role: valkeyv1alpha1.NodeRoleReplica,
+			Replication: &valkeyv1alpha1.ReplicationStatus{
+				ReplicationID: "replication-id", Offset: 41, ObservedAt: now,
+			},
+		}},
+		PreviousProcesses: []valkeyv1alpha1.NodeStatus{{
+			Ordinal: 0, PodUID: source.PodUID, ContainerID: source.ContainerID,
+			RunID: source.RunID, NodeName: source.NodeName, NodeUID: source.NodeUID,
+			Role: valkeyv1alpha1.NodeRolePrimary,
+		}},
+		Failover: &valkeyv1alpha1.FailoverStatus{
+			Reason:                 valkeyv1alpha1.FailoverReasonResize,
+			Stage:                  valkeyv1alpha1.FailoverStagePromoting,
+			StartedAt:              now,
+			Source:                 source,
+			Candidate:              &candidate,
+			SourceAppDisabled:      true,
+			SourceClientsKilled:    true,
+			CandidateAppDisabled:   true,
+			CandidateClientsKilled: true,
+			CandidateMayBePrimary:  true,
+			ReplicationID:          "replication-id",
+			ControlOffset:          42,
+			OffsetDeadline:         &deadline,
+		},
+		Rollout: &valkeyv1alpha1.RolloutStatus{
+			DesiredGeneration: 17,
+			VCPU:              2,
+			RAMGB:             8,
+			Image:             "valkey.example/operator:run-17",
+			Stage:             valkeyv1alpha1.RolloutStageReplacingReplicas,
+			Process:           &candidate,
+		},
+		CredentialRotation: &valkeyv1alpha1.CredentialRotationStatus{
+			TargetVersion:   3,
+			PreviousVersion: 2,
+			Stage:           valkeyv1alpha1.CredentialRotationStageUpdatingPrimary,
+			Confirmations: []valkeyv1alpha1.CredentialRotationConfirmation{{
+				Process: candidate,
+				Version: 3,
+			}},
+		},
+	}
+	if err := k8s.Status().Update(ctx, instance); err != nil {
+		t.Fatalf("сохранить стадии операций: %v", err)
+	}
+
+	observed := &valkeyv1alpha1.ValkeyInstance{}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), observed); err != nil {
+		t.Fatalf("прочитать стадии операций: %v", err)
+	}
+	if observed.Status.Phase != valkeyv1alpha1.InstancePhaseUpdating {
+		t.Fatalf("фаза не сохранилась: %q", observed.Status.Phase)
+	}
+	if observed.Status.Failover == nil || observed.Status.Failover.Candidate == nil ||
+		observed.Status.Failover.Candidate.ContainerID != candidate.ContainerID ||
+		observed.Status.Failover.OffsetDeadline == nil ||
+		observed.Status.Failover.OffsetDeadline.Time.Unix() != deadline.Time.Unix() {
+		t.Fatalf("failover не сохранился: %+v", observed.Status.Failover)
+	}
+	if observed.Status.Rollout == nil || observed.Status.Rollout.Image != "valkey.example/operator:run-17" {
+		t.Fatalf("rollout не сохранился: %+v", observed.Status.Rollout)
+	}
+	if observed.Status.CredentialRotation == nil ||
+		len(observed.Status.CredentialRotation.Confirmations) != 1 ||
+		observed.Status.CredentialRotation.Confirmations[0].Process.RunID != candidate.RunID {
+		t.Fatalf("ротация не сохранилась: %+v", observed.Status.CredentialRotation)
+	}
+	if len(observed.Status.Nodes) != 1 || observed.Status.Nodes[0].Replication == nil ||
+		observed.Status.Nodes[0].Replication.Offset != 41 ||
+		len(observed.Status.PreviousProcesses) != 1 ||
+		observed.Status.PreviousProcesses[0].RunID != source.RunID {
+		t.Fatalf("история процессов не сохранилась: nodes=%+v previous=%+v",
+			observed.Status.Nodes, observed.Status.PreviousProcesses)
+	}
+
+	observed.Status.Phase = valkeyv1alpha1.InstancePhaseDegraded
+	if err := k8s.Status().Update(ctx, observed); err != nil {
+		t.Fatalf("сохранить degraded: %v", err)
+	}
+
+	tests := map[string]func(*valkeyv1alpha1.ValkeyInstanceStatus){
+		"phase": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.Phase = valkeyv1alpha1.InstancePhase("invalid")
+		},
+		"failover reason": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.Failover.Reason = valkeyv1alpha1.FailoverReason("invalid")
+		},
+		"failover stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.Failover.Stage = valkeyv1alpha1.FailoverStage("invalid")
+		},
+		"rollout stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.Rollout.Stage = valkeyv1alpha1.RolloutStage("invalid")
+		},
+		"credential rotation stage": func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.CredentialRotation.Stage = valkeyv1alpha1.CredentialRotationStage("invalid")
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			current := &valkeyv1alpha1.ValkeyInstance{}
+			if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), current); err != nil {
+				t.Fatalf("прочитать CR: %v", err)
+			}
+			mutate(&current.Status)
+			if err := k8s.Status().Update(ctx, current); !apierrors.IsInvalid(err) {
+				t.Fatalf("некорректное значение принято: %v", err)
+			}
+		})
+	}
+}
+
 func assertImmutableIdentity(
 	t *testing.T,
 	ctx context.Context,
@@ -246,7 +397,7 @@ func newCompleteInstance(name string) *valkeyv1alpha1.ValkeyInstance {
 	}
 }
 
-func TestReconcileDiagnosesIncompleteResource(t *testing.T) {
+func TestEnvtestReconcileDiagnosesIncompleteResource(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	mgr, err := operator.NewManager(restConfig, config.Config{
@@ -316,7 +467,7 @@ func TestReconcileDiagnosesIncompleteResource(t *testing.T) {
 	assertNoDependents(ctx, t, k8s, namespace.Name)
 }
 
-func TestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
+func TestEnvtestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 	restConfig := startEnvironment(t)
 
 	mgr, err := operator.NewManager(restConfig, config.Config{
@@ -351,7 +502,9 @@ func TestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 		instance.Spec.RAMGB = 8
 		instance.Spec.DesiredGeneration = 2
 	})
-	creating = waitForUnsupportedChange(t, ctx, k8s, creating)
+	creating = waitForConditionReason(
+		t, ctx, k8s, creating, "ConfigurationPending", "CurrentGenerationIncomplete",
+	)
 	if creating.Status.AcceptedConfiguration.RAMGB != 4 ||
 		creating.Status.AcceptedConfiguration.DesiredGeneration != 1 ||
 		creating.Status.ObservedGeneration != 0 {
@@ -367,7 +520,7 @@ func TestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 	waitForInstanceStatus(t, ctx, k8s, client.ObjectKeyFromObject(creating), func(
 		status valkeyv1alpha1.ValkeyInstanceStatus,
 	) bool {
-		return apimeta.FindStatusCondition(status.Conditions, "UnsupportedChange") == nil
+		return apimeta.FindStatusCondition(status.Conditions, "ConfigurationPending") == nil
 	})
 
 	running := createCompleteInstance(t, ctx, k8s, "cache-b2c3d4", valkeyv1alpha1.ValkeyModeSingle)
@@ -408,14 +561,9 @@ func TestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 	}
 
 	ha := createCompleteInstance(t, ctx, k8s, "queue-c3d4e5", valkeyv1alpha1.ValkeyModeHA)
-	ha = waitForInstanceStatus(t, ctx, k8s, client.ObjectKeyFromObject(ha), func(
-		status valkeyv1alpha1.ValkeyInstanceStatus,
-	) bool {
-		condition := apimeta.FindStatusCondition(status.Conditions, "Accepted")
-		return condition != nil && condition.Reason == "UnsupportedMode"
-	})
-	if ha.Status.AcceptedConfiguration != nil {
-		t.Fatalf("ha получил принятый снимок: %+v", ha.Status.AcceptedConfiguration)
+	ha = waitForAcceptedConfiguration(t, ctx, k8s, ha)
+	if ha.Status.AcceptedConfiguration.Mode != valkeyv1alpha1.ValkeyModeHA {
+		t.Fatalf("HA принят с неверным режимом: %+v", ha.Status.AcceptedConfiguration)
 	}
 
 	assertNoDependents(ctx, t, k8s, creating.Namespace)
@@ -423,7 +571,7 @@ func TestReconcileAcceptsStableInitialConfiguration(t *testing.T) {
 	assertNoDependents(ctx, t, k8s, ha.Namespace)
 }
 
-func TestCredentialsInitializationSurvivesRestartBoundary(t *testing.T) {
+func TestEnvtestCredentialsInitializationSurvivesRestartBoundary(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -520,7 +668,7 @@ func TestCredentialsInitializationSurvivesRestartBoundary(t *testing.T) {
 	assertCredentialsPrecedeStatefulSet(ctx, t, k8s, persisted)
 }
 
-func TestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
+func TestEnvtestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -591,6 +739,39 @@ func TestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
 		t.Fatalf("single получил PDB: %v", pdbs.Items)
 	}
 
+	haNamespace := createInstanceNamespace(t, ctx, k8s, "objects-ha-k1l2m3")
+	haSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: valkeyv1alpha1.AuthSecretName("objects-ha-k1l2m3"), Namespace: haNamespace.Name,
+		},
+		Data: map[string][]byte{
+			valkeyv1alpha1.AppPasswordHashKeyPrefix + "1": []byte(strings.Repeat("cd", 32)),
+		},
+	}
+	if err := k8s.Create(ctx, haSecret); err != nil {
+		t.Fatalf("создать Secret HA: %v", err)
+	}
+	ha := newCompleteInstance("objects-ha-k1l2m3")
+	ha.Namespace = haNamespace.Name
+	ha.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
+	if err := k8s.Create(ctx, ha); err != nil {
+		t.Fatalf("создать HA: %v", err)
+	}
+	haStatefulSet := waitForStatefulSet(t, ctx, k8s, client.ObjectKeyFromObject(ha))
+	if haStatefulSet.Spec.Replicas == nil || *haStatefulSet.Spec.Replicas != 3 ||
+		haStatefulSet.Spec.Template.Spec.Affinity == nil ||
+		haStatefulSet.Spec.Template.Spec.Affinity.PodAntiAffinity == nil ||
+		len(
+			haStatefulSet.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
+		) != 1 {
+		t.Fatalf("неверный StatefulSet HA: %+v", haStatefulSet.Spec)
+	}
+	haPDB := waitForPodDisruptionBudget(t, ctx, k8s, client.ObjectKeyFromObject(ha))
+	if haPDB.Spec.MinAvailable == nil || haPDB.Spec.MinAvailable.IntVal != 2 {
+		t.Fatalf("неверный PDB HA: %+v", haPDB.Spec)
+	}
+	assertOwnedBy(t, haPDB, ha.UID)
+
 	cancel()
 	select {
 	case err := <-stopped:
@@ -626,15 +807,18 @@ func TestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
 	}
 	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}}
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
-		t.Fatalf("первый неизменный reconcile: %v", err)
+		t.Fatalf("создать сетевые ресурсы перед проверкой: %v", err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("зафиксировать состояние сети перед проверкой: %v", err)
 	}
 	currentInstance := &valkeyv1alpha1.ValkeyInstance{}
 	if err := k8s.Get(context.Background(), client.ObjectKeyFromObject(instance), currentInstance); err != nil {
-		t.Fatalf("прочитать CR после первого reconcile: %v", err)
+		t.Fatalf("прочитать CR перед неизменным reconcile: %v", err)
 	}
 	instanceVersion := currentInstance.ResourceVersion
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
-		t.Fatalf("второй неизменный reconcile: %v", err)
+		t.Fatalf("неизменный reconcile: %v", err)
 	}
 
 	assertResourceVersion(t, context.Background(), k8s, currentInstance, instanceVersion)
@@ -652,7 +836,7 @@ func TestSingleResourcesAreOwnedAndIdempotent(t *testing.T) {
 	assertResourceVersion(t, context.Background(), k8s, &policies.Items[0], policies.Items[0].ResourceVersion)
 }
 
-func TestCredentialFailuresDoNotRegenerateOrExposeSecrets(t *testing.T) {
+func TestEnvtestCredentialFailuresDoNotRegenerateOrExposeSecrets(t *testing.T) {
 	restConfig := startEnvironment(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -785,6 +969,31 @@ func waitForStatefulSet(
 	}
 
 	t.Fatalf("StatefulSet %s не появился", key)
+	return nil
+}
+
+func waitForPodDisruptionBudget(
+	t *testing.T,
+	ctx context.Context,
+	k8s client.Client,
+	key client.ObjectKey,
+) *policyv1.PodDisruptionBudget {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		pdb := &policyv1.PodDisruptionBudget{}
+		err := k8s.Get(ctx, key, pdb)
+		if err == nil {
+			return pdb
+		}
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("прочитать PodDisruptionBudget: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("PodDisruptionBudget %s не появился", key)
+
 	return nil
 }
 

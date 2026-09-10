@@ -17,7 +17,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func TestCredentialsUpdateRetriesWithoutLosingDeliveredHash(t *testing.T) {
+func TestEnvtestCredentialsUpdateRetriesWithoutLosingDeliveredHash(t *testing.T) {
 	environment := &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd")},
 		ErrorIfCRDPathMissing: true,

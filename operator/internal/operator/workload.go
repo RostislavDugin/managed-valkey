@@ -10,6 +10,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
+	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
 const (
@@ -30,11 +33,12 @@ const (
 	envoyNamespace       = "envoy-gateway-system"
 )
 
-func (r *ValkeyInstanceReconciler) reconcileSingleResources(
+func (r *ValkeyInstanceReconciler) reconcileWorkloadResources(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	configMap, err := r.desiredConfigMap(instance)
+	workloadInstance := rolloutWorkloadInstance(instance)
+	configMap, err := r.desiredConfigMap(workloadInstance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -43,9 +47,22 @@ func (r *ValkeyInstanceReconciler) reconcileSingleResources(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	statefulSetChanged, err := r.ensureStatefulSet(ctx, desiredStatefulSet(instance, configMap.Name, valkeyImage))
+	if instance.Status.Rollout != nil && instance.Status.Rollout.Image != "" {
+		valkeyImage = instance.Status.Rollout.Image
+	}
+	desiredWorkload := desiredStatefulSet(workloadInstance, configMap.Name, valkeyImage)
+	desiredWorkload.Spec.Replicas = new(rolloutWorkloadReplicas(instance, *desiredWorkload.Spec.Replicas))
+	if err := runRolloutActionControl(ctx, "before-statefulset-update", instance, desiredWorkload); err != nil {
+		return ctrl.Result{}, err
+	}
+	statefulSetChanged, err := r.ensureStatefulSet(ctx, desiredWorkload)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if statefulSetChanged {
+		if err := runRolloutActionControl(ctx, "after-statefulset-update", instance, desiredWorkload); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	changed = changed || statefulSetChanged
 
@@ -65,8 +82,62 @@ func (r *ValkeyInstanceReconciler) reconcileSingleResources(
 		return ctrl.Result{}, err
 	}
 	changed = changed || networkPolicyChanged
+	if instance.Status.AcceptedConfiguration.Mode == valkeyv1alpha1.ValkeyModeHA {
+		pdbChanged, err := r.ensurePodDisruptionBudget(ctx, desiredPodDisruptionBudget(instance))
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		changed = changed || pdbChanged
+	}
 
 	return requeueIf(changed), nil
+}
+
+func rolloutWorkloadInstance(instance *valkeyv1alpha1.ValkeyInstance) *valkeyv1alpha1.ValkeyInstance {
+	workloadInstance := instance.DeepCopy()
+	rollout := instance.Status.Rollout
+	if rollout == nil || instance.Status.Applied == nil || rolloutUsesTargetTemplate(rollout.Stage) {
+		return workloadInstance
+	}
+	accepted := *workloadInstance.Status.AcceptedConfiguration
+	accepted.VCPU = instance.Status.Applied.VCPU
+	accepted.RAMGB = instance.Status.Applied.RAMGB
+	workloadInstance.Status.AcceptedConfiguration = &accepted
+	return workloadInstance
+}
+
+func rolloutUsesTargetTemplate(stage valkeyv1alpha1.RolloutStage) bool {
+	switch stage {
+	case valkeyv1alpha1.RolloutStageUpdatingTemplate,
+		valkeyv1alpha1.RolloutStageReplacingReplicas,
+		valkeyv1alpha1.RolloutStageSwitchingPrimary,
+		valkeyv1alpha1.RolloutStageReplacingPrimary,
+		valkeyv1alpha1.RolloutStageStarting,
+		valkeyv1alpha1.RolloutStageVerifying:
+		return true
+	default:
+		return false
+	}
+}
+
+func rolloutWorkloadReplicas(instance *valkeyv1alpha1.ValkeyInstance, normal int32) int32 {
+	rollout := instance.Status.Rollout
+	if rollout == nil || !rolloutRequiresFullStop(instance) {
+		return normal
+	}
+	if rollout.Stage == valkeyv1alpha1.RolloutStageStopping && rollout.AccessClosed ||
+		rollout.Stage == valkeyv1alpha1.RolloutStageUpdatingTemplate {
+		return 0
+	}
+	return normal
+}
+
+func rolloutRequiresFullStop(instance *valkeyv1alpha1.ValkeyInstance) bool {
+	if instance.Status.Rollout == nil || instance.Status.Applied == nil {
+		return false
+	}
+	return instance.Status.AcceptedConfiguration.Mode == valkeyv1alpha1.ValkeyModeSingle ||
+		instance.Status.Rollout.RAMGB < instance.Status.Applied.RAMGB
 }
 
 func (r *ValkeyInstanceReconciler) protectedValkeyImage(
@@ -142,9 +213,9 @@ func desiredStatefulSet(
 		Command: []string{"/bin/sh", "/etc/valkey-config/readiness.sh"},
 	}
 	readinessProbe.InitialDelaySeconds = 1
-	readinessProbe.PeriodSeconds = 5
-	readinessProbe.TimeoutSeconds = 3
-	readinessProbe.FailureThreshold = 3
+	readinessProbe.PeriodSeconds = config.ReadinessProbePeriod
+	readinessProbe.TimeoutSeconds = config.ReadinessProbeTimeout
+	readinessProbe.FailureThreshold = config.ReadinessProbeFailures
 	configVolume := corev1.Volume{
 		Name: "config",
 		VolumeSource: corev1.VolumeSource{
@@ -166,10 +237,21 @@ func desiredStatefulSet(
 			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
 		},
 	}
+	replicas := int32(1)
+	var affinity *corev1.Affinity
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		replicas = 3
+		affinity = &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+				TopologyKey:   corev1.LabelHostname,
+			}},
+		}}
+	}
 
 	statefulSet := &appsv1.StatefulSet{
 		Spec: appsv1.StatefulSetSpec{
-			Replicas:            ptr.To[int32](1),
+			Replicas:            new(replicas),
 			ServiceName:         accepted.Slug + "-hl",
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
@@ -182,6 +264,7 @@ func desiredStatefulSet(
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyAlways,
 					TerminationGracePeriodSeconds: &terminationGracePeriod,
+					Affinity:                      affinity,
 					Containers: []corev1.Container{{
 						Name:            "valkey",
 						Image:           image,
@@ -214,6 +297,18 @@ func desiredStatefulSet(
 	return statefulSet
 }
 
+func desiredPodDisruptionBudget(instance *valkeyv1alpha1.ValkeyInstance) *policyv1.PodDisruptionBudget {
+	labels := workloadLabels(instance.Status.AcceptedConfiguration.Slug)
+
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: ownedObjectMeta(instance, instance.Status.AcceptedConfiguration.Slug, labels),
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &intstr.IntOrString{Type: intstr.Int, IntVal: 2},
+			Selector:     &metav1.LabelSelector{MatchLabels: maps.Clone(labels)},
+		},
+	}
+}
+
 func desiredServices(instance *valkeyv1alpha1.ValkeyInstance) []*corev1.Service {
 	accepted := instance.Status.AcceptedConfiguration
 	labels := workloadLabels(accepted.Slug)
@@ -238,6 +333,22 @@ func desiredServices(instance *valkeyv1alpha1.ValkeyInstance) []*corev1.Service 
 				Name: "valkey", Port: valkeyPort, TargetPort: intstr.FromString("valkey"), Protocol: corev1.ProtocolTCP,
 			}},
 		},
+	}
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		replicaSelector := maps.Clone(labels)
+		replicaSelector[applicationRoleLabel] = string(valkeyv1alpha1.NodeRoleReplica)
+		replicas := &corev1.Service{
+			ObjectMeta: ownedObjectMeta(instance, accepted.Slug+"-replicas", labels),
+			Spec: corev1.ServiceSpec{
+				Selector: replicaSelector,
+				Ports: []corev1.ServicePort{{
+					Name: "valkey", Port: valkeyPort,
+					TargetPort: intstr.FromString("valkey"), Protocol: corev1.ProtocolTCP,
+				}},
+			},
+		}
+
+		return []*corev1.Service{headless, primary, replicas}
 	}
 
 	return []*corev1.Service{headless, primary}
@@ -319,6 +430,11 @@ func (r *ValkeyInstanceReconciler) ensureStatefulSet(
 	}
 
 	before := current.DeepCopy()
+	if maps.Equal(current.Labels, desired.Labels) &&
+		reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) &&
+		apiequality.Semantic.DeepDerivative(desired.Spec, current.Spec) {
+		return false, nil
+	}
 	current.Labels = maps.Clone(desired.Labels)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec.Replicas = new(*desired.Spec.Replicas)
@@ -327,9 +443,6 @@ func (r *ValkeyInstanceReconciler) ensureStatefulSet(
 	current.Spec.UpdateStrategy = desired.Spec.UpdateStrategy
 	current.Spec.Selector = desired.Spec.Selector.DeepCopy()
 	current.Spec.Template = *desired.Spec.Template.DeepCopy()
-	if reflect.DeepEqual(before, current) {
-		return false, nil
-	}
 	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
 		return false, fmt.Errorf("обновить StatefulSet: %w", err)
 	}
@@ -395,6 +508,36 @@ func (r *ValkeyInstanceReconciler) ensureNetworkPolicy(
 	}
 	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
 		return false, fmt.Errorf("обновить NetworkPolicy: %w", err)
+	}
+
+	return current.ResourceVersion != before.ResourceVersion, nil
+}
+
+func (r *ValkeyInstanceReconciler) ensurePodDisruptionBudget(
+	ctx context.Context,
+	desired *policyv1.PodDisruptionBudget,
+) (bool, error) {
+	current := &policyv1.PodDisruptionBudget{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("прочитать PodDisruptionBudget: %w", err)
+		}
+		if err := r.Create(ctx, desired); err != nil {
+			return false, fmt.Errorf("создать PodDisruptionBudget: %w", err)
+		}
+
+		return true, nil
+	}
+
+	before := current.DeepCopy()
+	current.Labels = maps.Clone(desired.Labels)
+	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
+	current.Spec = *desired.Spec.DeepCopy()
+	if reflect.DeepEqual(before, current) {
+		return false, nil
+	}
+	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
+		return false, fmt.Errorf("обновить PodDisruptionBudget: %w", err)
 	}
 
 	return current.ResourceVersion != before.ResourceVersion, nil

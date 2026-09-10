@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	envoyv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
@@ -28,26 +29,50 @@ func (r *ValkeyInstanceReconciler) reconcileNetworkResources(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	listenerChanged, err := r.reconcileGatewayListener(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
+	changed := false
+	for _, endpoint := range networkEndpoints(instance) {
+		listenerChanged, err := r.reconcileGatewayListener(ctx, instance, endpoint)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		routeChanged, err := r.ensureTCPRoute(
+			ctx,
+			desiredTCPRoute(instance, r.SystemNamespace, endpoint),
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		policyChanged, err := r.reconcileSecurityPolicy(ctx, instance, endpoint)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		changed = changed || listenerChanged || routeChanged || policyChanged
 	}
-	routeChanged, err := r.ensureTCPRoute(ctx, desiredTCPRoute(instance, r.SystemNamespace))
-	if err != nil {
-		return ctrl.Result{}, err
+
+	return requeueIf(changed), nil
+}
+
+type networkEndpoint struct {
+	suffix        string
+	backendSuffix string
+}
+
+func networkEndpoints(instance *valkeyv1alpha1.ValkeyInstance) []networkEndpoint {
+	result := []networkEndpoint{{backendSuffix: "-primary"}}
+	if instance.Status.AcceptedConfiguration != nil &&
+		instance.Status.AcceptedConfiguration.Mode == valkeyv1alpha1.ValkeyModeHA {
+		result = append(result, networkEndpoint{suffix: "-ro", backendSuffix: "-replicas"})
 	}
-	policyChanged, err := r.reconcileSecurityPolicy(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	return requeueIf(listenerChanged || routeChanged || policyChanged), nil
+
+	return result
 }
 
 func (r *ValkeyInstanceReconciler) reconcileGatewayListener(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
+	endpoint networkEndpoint,
 ) (bool, error) {
-	desired := desiredGatewayListener(instance, r.BaseDomain)
+	desired := desiredGatewayListener(instance, r.BaseDomain, endpoint)
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
@@ -94,6 +119,7 @@ func (r *ValkeyInstanceReconciler) reconcileGatewayListener(
 func (r *ValkeyInstanceReconciler) removeGatewayListener(
 	ctx context.Context,
 	slug string,
+	suffix string,
 ) (bool, error) {
 	reader := r.APIReader
 	if reader == nil {
@@ -110,7 +136,7 @@ func (r *ValkeyInstanceReconciler) removeGatewayListener(
 			return err
 		}
 		listeners := slices.DeleteFunc(slices.Clone(gateway.Spec.Listeners), func(listener gatewayv1.Listener) bool {
-			return listener.Name == gatewayv1.SectionName(slug)
+			return listener.Name == gatewayv1.SectionName(slug+suffix)
 		})
 		if len(listeners) == len(gateway.Spec.Listeners) {
 			return nil
@@ -135,14 +161,21 @@ func (r *ValkeyInstanceReconciler) removeNetworkResources(
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (bool, error) {
 	slug := instance.Spec.Slug
-	listenerChanged, err := r.removeGatewayListener(ctx, slug)
-	if err != nil {
-		return false, err
-	}
-	changed := listenerChanged
-	objects := []client.Object{
-		&gatewayv1alpha2.TCPRoute{ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: instance.Namespace}},
-		&envoyv1alpha1.SecurityPolicy{ObjectMeta: metav1.ObjectMeta{Name: slug, Namespace: instance.Namespace}},
+	changed := false
+	endpoints := networkEndpoints(instance)
+	objects := make([]client.Object, 0, len(endpoints)*2)
+	for _, endpoint := range endpoints {
+		listenerChanged, err := r.removeGatewayListener(ctx, slug, endpoint.suffix)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || listenerChanged
+		name := slug + endpoint.suffix
+		objects = append(
+			objects,
+			&gatewayv1alpha2.TCPRoute{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.Namespace}},
+			&envoyv1alpha1.SecurityPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: instance.Namespace}},
+		)
 	}
 	for _, object := range objects {
 		if err := r.Delete(ctx, object); err != nil {
@@ -160,9 +193,11 @@ func (r *ValkeyInstanceReconciler) removeNetworkResources(
 func desiredGatewayListener(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	baseDomain string,
+	endpoint networkEndpoint,
 ) gatewayv1.Listener {
 	accepted := instance.Status.AcceptedConfiguration
-	hostname := gatewayv1.Hostname(accepted.Slug + "." + baseDomain)
+	name := accepted.Slug + endpoint.suffix
+	hostname := gatewayv1.Hostname(name + "." + baseDomain)
 	mode := gatewayv1.TLSModeTerminate
 	secretGroup := gatewayv1.Group("")
 	secretKind := gatewayv1.Kind("Secret")
@@ -170,7 +205,7 @@ func desiredGatewayListener(
 	routeGroup := gatewayv1.Group(gatewayv1.GroupName)
 
 	return gatewayv1.Listener{
-		Name:     gatewayv1.SectionName(accepted.Slug),
+		Name:     gatewayv1.SectionName(name),
 		Hostname: &hostname,
 		Port:     accepted.PublicPort,
 		Protocol: gatewayv1.TLSProtocolType,
@@ -200,18 +235,20 @@ func desiredGatewayListener(
 func desiredTCPRoute(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	systemNamespace string,
+	endpoint networkEndpoint,
 ) *gatewayv1alpha2.TCPRoute {
 	accepted := instance.Status.AcceptedConfiguration
 	gatewayGroup := gatewayv1.Group(gatewayv1.GroupName)
 	gatewayKind := gatewayv1.Kind("Gateway")
 	gatewayNamespace := gatewayv1.Namespace(systemNamespace)
-	sectionName := gatewayv1.SectionName(accepted.Slug)
+	name := accepted.Slug + endpoint.suffix
+	sectionName := gatewayv1.SectionName(name)
 	serviceGroup := gatewayv1.Group("")
 	serviceKind := gatewayv1.Kind("Service")
 	servicePort := valkeyPort
 
 	return &gatewayv1alpha2.TCPRoute{
-		ObjectMeta: ownedObjectMeta(instance, accepted.Slug, workloadLabels(accepted.Slug)),
+		ObjectMeta: ownedObjectMeta(instance, name, workloadLabels(accepted.Slug)),
 		Spec: gatewayv1alpha2.TCPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{
 				Group:       &gatewayGroup,
@@ -225,7 +262,7 @@ func desiredTCPRoute(
 					BackendObjectReference: gatewayv1.BackendObjectReference{
 						Group: &serviceGroup,
 						Kind:  &serviceKind,
-						Name:  gatewayv1.ObjectName(accepted.Slug + "-primary"),
+						Name:  gatewayv1.ObjectName(accepted.Slug + endpoint.backendSuffix),
 						Port:  &servicePort,
 					},
 				}},
@@ -252,12 +289,14 @@ func (r *ValkeyInstanceReconciler) ensureTCPRoute(
 	}
 
 	before := current.DeepCopy()
+	if maps.Equal(current.Labels, desired.Labels) &&
+		reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) &&
+		apiequality.Semantic.DeepDerivative(desired.Spec, current.Spec) {
+		return false, nil
+	}
 	current.Labels = maps.Clone(desired.Labels)
 	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
 	current.Spec = *desired.Spec.DeepCopy()
-	if reflect.DeepEqual(before, current) {
-		return false, nil
-	}
 	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
 		return false, fmt.Errorf("обновить TCPRoute: %w", err)
 	}
@@ -268,11 +307,15 @@ func (r *ValkeyInstanceReconciler) ensureTCPRoute(
 func (r *ValkeyInstanceReconciler) reconcileSecurityPolicy(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
+	endpoint networkEndpoint,
 ) (bool, error) {
-	desired := desiredSecurityPolicy(instance)
+	desired := desiredSecurityPolicy(instance, endpoint)
 	if desired == nil {
 		current := &envoyv1alpha1.SecurityPolicy{}
-		key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Status.AcceptedConfiguration.Slug}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      instance.Status.AcceptedConfiguration.Slug + endpoint.suffix,
+		}
 		if err := r.Get(ctx, key, current); err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil
@@ -313,7 +356,10 @@ func (r *ValkeyInstanceReconciler) reconcileSecurityPolicy(
 	return current.ResourceVersion != before.ResourceVersion, nil
 }
 
-func desiredSecurityPolicy(instance *valkeyv1alpha1.ValkeyInstance) *envoyv1alpha1.SecurityPolicy {
+func desiredSecurityPolicy(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	endpoint networkEndpoint,
+) *envoyv1alpha1.SecurityPolicy {
 	accepted := instance.Status.AcceptedConfiguration
 	if !accepted.Whitelist.IsEnabled {
 		return nil
@@ -322,14 +368,14 @@ func desiredSecurityPolicy(instance *valkeyv1alpha1.ValkeyInstance) *envoyv1alph
 	targetGroup := gatewayv1.Group(gatewayv1.GroupName)
 	defaultAction := envoyv1alpha1.AuthorizationActionDeny
 	policy := &envoyv1alpha1.SecurityPolicy{
-		ObjectMeta: ownedObjectMeta(instance, accepted.Slug, workloadLabels(accepted.Slug)),
+		ObjectMeta: ownedObjectMeta(instance, accepted.Slug+endpoint.suffix, workloadLabels(accepted.Slug)),
 		Spec: envoyv1alpha1.SecurityPolicySpec{
 			PolicyTargetReferences: envoyv1alpha1.PolicyTargetReferences{
 				TargetRefs: []gatewayv1.LocalPolicyTargetReferenceWithSectionName{{
 					LocalPolicyTargetReference: gatewayv1.LocalPolicyTargetReference{
 						Group: targetGroup,
 						Kind:  gatewayv1.Kind("TCPRoute"),
-						Name:  gatewayv1.ObjectName(accepted.Slug),
+						Name:  gatewayv1.ObjectName(accepted.Slug + endpoint.suffix),
 					},
 				}},
 			},

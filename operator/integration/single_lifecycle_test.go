@@ -71,6 +71,7 @@ func TestSingleLifecycle(t *testing.T) {
 	h.startOperator(t)
 	firstStatus := h.waitRunning(t, first)
 	assertAppliedStatus(t, firstStatus)
+	servicePasswords := h.servicePasswords(t, first)
 
 	firstClient := openPersistentConnection(t, h.publicAddr, first, h.caFile, false, func() {})
 	defer closeConnections([]*persistentConnection{firstClient})
@@ -161,6 +162,10 @@ func TestSingleLifecycle(t *testing.T) {
 		t.Fatal("завершённый процесс не заменён")
 	}
 	replacementClient := openPersistentConnection(t, h.publicAddr, first, h.caFile, false, func() {})
+	if replacementPasswords := h.servicePasswords(t, first); replacementPasswords != servicePasswords {
+		closeConnections([]*persistentConnection{replacementClient})
+		t.Fatal("служебные пароли изменились при восстановлении single")
+	}
 	writeRESP(t, replacementClient, "GET", "instance-key")
 	if value := readRESP(t, replacementClient); value != nil {
 		closeConnections([]*persistentConnection{replacementClient})
@@ -411,16 +416,49 @@ func (h *harness) waitRunning(t *testing.T, instance *testInstance) *valkeyv1alp
 	}, "фазы running")
 }
 
+func (h *harness) servicePasswords(t *testing.T, instance *testInstance) [3]string {
+	t.Helper()
+
+	secret := &corev1.Secret{}
+	if err := h.k8s.Get(t.Context(), client.ObjectKey{
+		Name: valkeyv1alpha1.AuthSecretName(instance.slug), Namespace: instance.namespace,
+	}, secret); err != nil {
+		t.Fatalf("прочитать служебные пароли %s: %v", instance.slug, err)
+	}
+	passwords := [3]string{
+		string(secret.Data[valkeyv1alpha1.OperatorPasswordKey]),
+		string(secret.Data[valkeyv1alpha1.ReplicaPasswordKey]),
+		string(secret.Data[valkeyv1alpha1.HealthPasswordKey]),
+	}
+	for _, password := range passwords {
+		if password == "" {
+			t.Fatalf("Secret %s не содержит полный комплект служебных паролей", instance.slug)
+		}
+	}
+
+	return passwords
+}
+
 func (h *harness) waitFor(
 	t *testing.T,
 	instance *testInstance,
 	condition func(*valkeyv1alpha1.ValkeyInstance) bool,
 	description string,
 ) *valkeyv1alpha1.ValkeyInstance {
+	return h.waitForWithin(t, instance, 5*time.Minute, condition, description)
+}
+
+func (h *harness) waitForWithin(
+	t *testing.T,
+	instance *testInstance,
+	timeout time.Duration,
+	condition func(*valkeyv1alpha1.ValkeyInstance) bool,
+	description string,
+) *valkeyv1alpha1.ValkeyInstance {
 	t.Helper()
 	var current valkeyv1alpha1.ValkeyInstance
 	err := wait.PollUntilContextTimeout(
-		t.Context(), 500*time.Millisecond, 5*time.Minute, true,
+		t.Context(), 500*time.Millisecond, timeout, true,
 		func(ctx context.Context) (bool, error) {
 			err := h.k8s.Get(ctx, client.ObjectKey{Name: instance.slug, Namespace: instance.namespace}, &current)
 			if err != nil {
@@ -581,8 +619,19 @@ func (h *harness) dockerCLI(
 	password string,
 	command ...string,
 ) (string, error) {
+	return h.dockerCLIWithTimeout(t, 12*time.Second, instance, address, password, command...)
+}
+
+func (h *harness) dockerCLIWithTimeout(
+	t *testing.T,
+	timeout time.Duration,
+	instance *testInstance,
+	address string,
+	password string,
+	command ...string,
+) (string, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	containerName := "managed-valkey-test-" + uuid.NewString()
 	defer func() {
@@ -878,8 +927,9 @@ func assertWrongSNIRejected(t *testing.T, h *harness, instance *testInstance) {
 	t.Helper()
 	wrongHost := *instance
 	wrongHost.hostname = "missing." + h.baseDomain
-	if output, err := h.dockerCLI(
+	if output, err := h.dockerCLIWithTimeout(
 		t,
+		3*time.Second,
 		&wrongHost,
 		h.clientWrongSNI,
 		instance.password,
@@ -929,9 +979,19 @@ func execInPod(
 	command []string,
 ) (string, error) {
 	t.Helper()
+	return execInPodContext(t.Context(), config, namespace, pod, command)
+}
+
+func execInPodContext(
+	ctx context.Context,
+	config *rest.Config,
+	namespace string,
+	pod string,
+	command []string,
+) (string, error) {
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		t.Fatalf("создать клиент exec: %v", err)
+		return "", fmt.Errorf("создать клиент exec: %w", err)
 	}
 	request := clientset.CoreV1().RESTClient().Post().Resource("pods").
 		Namespace(namespace).Name(pod).SubResource("exec")
@@ -940,10 +1000,10 @@ func execInPod(
 	}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(config, http.MethodPost, request.URL())
 	if err != nil {
-		t.Fatalf("создать exec для Pod: %v", err)
+		return "", fmt.Errorf("создать exec для Pod: %w", err)
 	}
 	var output strings.Builder
-	err = executor.StreamWithContext(t.Context(), remotecommand.StreamOptions{
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &output, Stderr: &output,
 	})
 	return output.String(), err

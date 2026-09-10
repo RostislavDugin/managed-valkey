@@ -138,6 +138,42 @@ write_value() {
     printf '%s=%q\n' "$1" "$2" >>"$environment_file"
 }
 
+replace_value() {
+    local name=$1 value=$2 temporary line
+
+    temporary=$(mktemp "${environment_file}.XXXXXX")
+    while IFS= read -r line; do
+        [[ "$line" == "$name="* ]] || printf '%s\n' "$line" >>"$temporary"
+    done <"$environment_file"
+    printf '%s=%q\n' "$name" "$value" >>"$temporary"
+    chmod 0600 "$temporary"
+    mv "$temporary" "$environment_file"
+}
+
+validate_environment_addresses() {
+    python3 - \
+        "$K3S_DOCKER_SUBNET" \
+        "$K3S_DOCKER_GATEWAY" \
+        "$K3S_SERVER_IP" \
+        "$K3S_AGENT_1_IP" \
+        "$K3S_AGENT_2_IP" \
+        "$K3S_AGENT_3_IP" \
+        "$MANAGED_VALKEY_CLIENT_ALLOWED" \
+        "$MANAGED_VALKEY_CLIENT_BLOCKED" \
+        "$MANAGED_VALKEY_CLIENT_WRONG_SNI" \
+        "$MANAGED_VALKEY_CLIENT_PRE_READY" <<'PY'
+import ipaddress
+import sys
+
+network = ipaddress.ip_network(sys.argv[1])
+addresses = [ipaddress.ip_address(value) for value in sys.argv[2:]]
+if len(set(addresses)) != len(addresses):
+    raise SystemExit("адреса тестового окружения пересекаются")
+if any(address not in network for address in addresses):
+    raise SystemExit("адрес тестового окружения находится вне выделенной подсети")
+PY
+}
+
 allocate_environment() {
     local suite=$1 run_id=$2 slot short_id checksum
 
@@ -174,6 +210,7 @@ allocate_environment() {
     K3S_SERVER_IP="172.28.${slot}.10"
     K3S_AGENT_1_IP="172.28.${slot}.11"
     K3S_AGENT_2_IP="172.28.${slot}.12"
+    K3S_AGENT_3_IP="172.28.${slot}.13"
     short_id=${run_id:0:24}
     checksum=$(printf '%s' "$run_id" | cksum | awk '{ print $1 }')
     MANAGED_VALKEY_COMPOSE_PROJECT="managed-valkey-${suite}-${short_id}-${checksum}"
@@ -184,6 +221,8 @@ allocate_environment() {
     OPERATOR_KUBECONFIG="$state_dir/operator.kubeconfig"
     OPERATOR_ENV="$state_dir/operator.env"
     ROUTES_FILE="$state_dir/routes.tsv"
+    NETWORK_FAULTS_FILE="$state_dir/network-faults.tsv"
+    FAULT_EVENTS_FILE="$state_dir/fault-events.tsv"
     DIAGNOSTICS_DIR="$state_dir/diagnostics"
     K3S_API_BINDING="127.0.0.1::6443"
     K3S_PUBLIC_BINDING="127.0.0.1::31379"
@@ -193,6 +232,7 @@ allocate_environment() {
     MANAGED_VALKEY_CLIENT_WRONG_SNI="172.28.${slot}.103"
     MANAGED_VALKEY_CLIENT_PRE_READY="172.28.${slot}.104"
     MANAGED_VALKEY_CA_FILE="$state_dir/ca.crt"
+    validate_environment_addresses
     if [[ "$suite" == api ]]; then
         BOOTSTRAP_PROFILE=api
         K3S_EXPECTED_NODES=1
@@ -215,6 +255,7 @@ allocate_environment() {
     write_value K3S_SERVER_IP "$K3S_SERVER_IP"
     write_value K3S_AGENT_1_IP "$K3S_AGENT_1_IP"
     write_value K3S_AGENT_2_IP "$K3S_AGENT_2_IP"
+    write_value K3S_AGENT_3_IP "$K3S_AGENT_3_IP"
     write_value K3S_TOKEN "$K3S_TOKEN"
     write_value K3S_API_BINDING "$K3S_API_BINDING"
     write_value K3S_PUBLIC_BINDING "$K3S_PUBLIC_BINDING"
@@ -225,6 +266,8 @@ allocate_environment() {
     write_value OPERATOR_KUBECONFIG "$OPERATOR_KUBECONFIG"
     write_value OPERATOR_ENV "$OPERATOR_ENV"
     write_value ROUTES_FILE "$ROUTES_FILE"
+    write_value NETWORK_FAULTS_FILE "$NETWORK_FAULTS_FILE"
+    write_value FAULT_EVENTS_FILE "$FAULT_EVENTS_FILE"
     write_value DIAGNOSTICS_DIR "$DIAGNOSTICS_DIR"
     write_value VALKEY_BASE_DOMAIN "$VALKEY_BASE_DOMAIN"
     write_value MANAGED_VALKEY_CLIENT_ALLOWED "$MANAGED_VALKEY_CLIENT_ALLOWED"
@@ -283,6 +326,8 @@ prepare_cluster() {
 
     if ((K3S_EXPECTED_NODES == 3)); then
         services+=(k3s-agent-1 k3s-agent-2)
+    elif ((K3S_EXPECTED_NODES == 4)); then
+        services+=(k3s-agent-1 k3s-agent-2 k3s-agent-3)
     fi
     compose up -d --wait "${services[@]}"
 
@@ -294,6 +339,7 @@ prepare_cluster() {
     write_value MANAGED_VALKEY_DOCKER_NETWORK "$MANAGED_VALKEY_DOCKER_NETWORK"
 
     export ADMIN_KUBECONFIG API_KUBECONFIG OPERATOR_KUBECONFIG OPERATOR_ENV ROUTES_FILE
+    export NETWORK_FAULTS_FILE FAULT_EVENTS_FILE
     export BOOTSTRAP_PROFILE K3S_EXPECTED_NODES KUBERNETES_SERVER
     export MANAGED_VALKEY_COMPOSE_PROJECT MANAGED_VALKEY_DOCKER_NETWORK
     export MANAGED_VALKEY_CA_FILE VALKEY_BASE_DOMAIN
@@ -305,7 +351,7 @@ prepare_cluster() {
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].spec.nodeName}')
         case "$public_node" in
-        k3s-server | k3s-agent-1 | k3s-agent-2) ;;
+        k3s-server | k3s-agent-1 | k3s-agent-2 | k3s-agent-3) ;;
         *) fail "не найдена нода с готовым Envoy" ;;
         esac
     fi
@@ -332,7 +378,7 @@ prepare() {
 
     validate_suite "$suite"
     validate_run_id "$run_id"
-    require_command docker flock ip kubectl openssl python3
+    require_command docker flock ip kubectl openssl python3 rg
     "$repo_root/scripts/k3s_host_prerequisites.sh"
     load_local_env
     mkdir -p "$state_root"
@@ -357,8 +403,106 @@ prepare() {
     printf '%s\n' "$state_dir"
 }
 
+wait_operator_node_ready() {
+    local node=$1
+
+    for _ in {1..90}; do
+        if KUBECONFIG="$ADMIN_KUBECONFIG" kubectl wait \
+            --for=condition=Ready "node/$node" --timeout=1s >/dev/null 2>&1 &&
+            KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get "node/$node" \
+            -o jsonpath='{.spec.podCIDR}{"\t"}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}' |
+            awk -F '\t' 'NF == 2 && $1 != "" && $2 != "" { found = 1 } END { exit !found }'; then
+            return 0
+        fi
+        sleep 1
+    done
+    fail "у Node $node отсутствует Pod CIDR или InternalIP"
+}
+
+configure_operator_node_route() {
+    local node=$1 route node_ip pod_cidr current temporary
+
+    route=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get "node/$node" \
+        -o jsonpath='{.spec.podCIDR}{"\t"}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}')
+    IFS=$'\t' read -r pod_cidr node_ip <<<"$route"
+    [[ -n "$pod_cidr" && -n "$node_ip" ]] || fail "у Node $node отсутствует маршрут"
+    current=$(ip route show exact "$pod_cidr" 2>/dev/null || true)
+    if [[ -n "$current" && "$current" != *"via $node_ip"* ]]; then
+        fail "маршрут $pod_cidr уже принадлежит другому gateway"
+    fi
+    sudo ip route replace "$pod_cidr" via "$node_ip"
+
+    temporary=$(mktemp "${ROUTES_FILE}.XXXXXX")
+    if [[ -f "$ROUTES_FILE" ]]; then
+        awk -F '\t' -v destination="$pod_cidr" '$1 != destination' \
+            "$ROUTES_FILE" >"$temporary"
+    fi
+    printf '%s\t%s\n' "$pod_cidr" "$node_ip" >>"$temporary"
+    chmod 0600 "$temporary"
+    mv "$temporary" "$ROUTES_FILE"
+}
+
+expand_operator_cluster() {
+    local target=$1 operator_image=$2 valkey_image=$3 actual_gateway
+
+    [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
+    state_dir=$target
+    environment_file="$target/environment.env"
+    set -a
+    source "$environment_file"
+    set +a
+    require_command docker ip kubectl sudo
+    [[ "$MV_SUITE" == operator ]] || fail "дополнительный agent разрешён только стенду оператора"
+    [[ "$(cat "$target/status")" == ready ]] || fail "стенд оператора не готов"
+    actual_gateway=$(docker network inspect "$MANAGED_VALKEY_DOCKER_NETWORK" \
+        --format '{{(index .IPAM.Config 0).Gateway}}')
+    [[ "$actual_gateway" == "$K3S_DOCKER_GATEWAY" ]] ||
+        fail "gateway сети изменился до добавления agent"
+
+    K3S_EXPECTED_NODES=4
+    export K3S_EXPECTED_NODES
+    replace_value K3S_EXPECTED_NODES "$K3S_EXPECTED_NODES"
+    compose up -d --wait k3s-agent-3
+    "$repo_root/scripts/load_k3s_image.sh" \
+        "$MANAGED_VALKEY_COMPOSE_PROJECT" "$operator_image" k3s-agent-3
+    "$repo_root/scripts/load_k3s_image.sh" \
+        "$MANAGED_VALKEY_COMPOSE_PROJECT" "$valkey_image" k3s-agent-3
+    wait_operator_node_ready k3s-agent-3
+    configure_operator_node_route k3s-agent-3
+
+    actual_gateway=$(docker network inspect "$MANAGED_VALKEY_DOCKER_NETWORK" \
+        --format '{{(index .IPAM.Config 0).Gateway}}')
+    [[ "$actual_gateway" == "$K3S_DOCKER_GATEWAY" ]] ||
+        fail "gateway сети изменился после добавления agent"
+    log "четвёртая нода оператора готова: $target"
+}
+
+refresh_operator_public_address() {
+    local target=$1 public_node public_address
+
+    [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
+    state_dir=$target
+    environment_file="$target/environment.env"
+    set -a
+    source "$environment_file"
+    set +a
+    [[ "$MV_SUITE" == operator ]] || fail "публичный адрес обновляется только для стенда оператора"
+    public_node=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl -n envoy-gateway-system get pods \
+        -l gateway.envoyproxy.io/owning-gateway-name=valkey \
+        -o jsonpath='{range .items[*]}{.spec.nodeName}{"\t"}{.status.phase}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' |
+        awk '$2 == "Running" && $3 == "True" { print $1; exit }')
+    case "$public_node" in
+    k3s-server | k3s-agent-1 | k3s-agent-2 | k3s-agent-3) ;;
+    *) fail "не найдена нода с готовым Envoy" ;;
+    esac
+    public_address=$(compose port "$public_node" 31379)
+    replace_value MANAGED_VALKEY_PUBLIC_ADDRESS "$public_address"
+    replace_value MANAGED_VALKEY_DOCKER_HOST "$public_node"
+    printf '%s\t%s\n' "$public_address" "$public_node"
+}
+
 collect_diagnostics() {
-    local target=$1
+    local target=$1 diagnostic_kubeconfig kubernetes_status=0
 
     [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
     set -a
@@ -366,17 +510,49 @@ collect_diagnostics() {
     set +a
     mkdir -p "$DIAGNOSTICS_DIR"
     chmod 0700 "$DIAGNOSTICS_DIR"
+    rm -f \
+        "$DIAGNOSTICS_DIR/compose-ps.txt" \
+        "$DIAGNOSTICS_DIR/k3s.log" \
+        "$DIAGNOSTICS_DIR/kubernetes-unavailable.txt" \
+        "$DIAGNOSTICS_DIR/operator.log" \
+        "$DIAGNOSTICS_DIR/resources.yaml" \
+        "$DIAGNOSTICS_DIR/events.yaml" \
+        "$DIAGNOSTICS_DIR/metadata.tsv"
 
-    compose ps --all >"$DIAGNOSTICS_DIR/compose-ps.txt" 2>&1 || true
-    compose logs --no-color --tail 500 k3s-server k3s-agent-1 k3s-agent-2 \
+    printf '%(%Y-%m-%dT%H:%M:%SZ)T\t%s\t%s\n' \
+        -1 "$MV_RUN_ID" "${MV_DIAGNOSTIC_SCENARIO:-environment}" \
+        >"$DIAGNOSTICS_DIR/metadata.tsv"
+
+    timeout 10s docker compose -f "$compose_file" -f "$test_compose_file" \
+        -p "$MANAGED_VALKEY_COMPOSE_PROJECT" ps --all \
+        >"$DIAGNOSTICS_DIR/compose-ps.txt" 2>&1 || true
+    timeout 10s docker compose -f "$compose_file" -f "$test_compose_file" \
+        -p "$MANAGED_VALKEY_COMPOSE_PROJECT" logs --no-color --tail 500 \
+        k3s-server k3s-agent-1 k3s-agent-2 k3s-agent-3 \
         >"$DIAGNOSTICS_DIR/k3s.log" 2>&1 || true
-    if [[ -f "$ADMIN_KUBECONFIG" ]]; then
-        KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get nodes -o wide \
-            >"$DIAGNOSTICS_DIR/nodes.txt" 2>&1 || true
-        KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get namespaces,pods,services,statefulsets,deployments \
-            -A -o wide >"$DIAGNOSTICS_DIR/resources.txt" 2>&1 || true
-        KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get events -A --sort-by=.metadata.creationTimestamp \
-            >"$DIAGNOSTICS_DIR/events.txt" 2>&1 || true
+    diagnostic_kubeconfig=${MANAGED_VALKEY_DIAGNOSTICS_KUBECONFIG:-$ADMIN_KUBECONFIG}
+    if [[ -f "$diagnostic_kubeconfig" ]]; then
+        timeout 5s env KUBECONFIG="$diagnostic_kubeconfig" \
+            kubectl --request-timeout=3s get \
+            nodes,pods,services,statefulsets,deployments,endpointslices,valkeyinstances.valkey.h3llo-demo.com \
+            -A -o yaml >"$DIAGNOSTICS_DIR/resources.yaml" 2>/dev/null || kubernetes_status=$?
+        if ((kubernetes_status == 0)); then
+            timeout 5s env KUBECONFIG="$diagnostic_kubeconfig" \
+                kubectl --request-timeout=3s get events -A -o yaml \
+                >"$DIAGNOSTICS_DIR/events.yaml" 2>/dev/null || true
+            timeout 5s env KUBECONFIG="$diagnostic_kubeconfig" \
+                kubectl --request-timeout=3s logs -n valkey-system \
+                -l 'app.kubernetes.io/name in (managed-valkey-operator,operator-integration)' \
+                --all-containers --prefix --tail=500 \
+                >"$DIAGNOSTICS_DIR/operator.log" 2>/dev/null || true
+        else
+            rm -f "$DIAGNOSTICS_DIR/resources.yaml"
+            printf 'Kubernetes API недоступен; снимок не сохранён; status=%d\n' "$kubernetes_status" \
+                >"$DIAGNOSTICS_DIR/kubernetes-unavailable.txt"
+        fi
+    else
+        printf 'Kubeconfig диагностики отсутствует; снимок не сохранён\n' \
+            >"$DIAGNOSTICS_DIR/kubernetes-unavailable.txt"
     fi
     log "диагностика: $DIAGNOSTICS_DIR"
 }
@@ -417,15 +593,22 @@ drop_test_database() {
 
 cleanup() {
     local target=$1 cleanup_status=0 network
+    local -a compose_options=()
 
     [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
     set -a
     source "$target/environment.env"
     set +a
 
+    if [[ "$MV_SUITE" == operator ]]; then
+        "$repo_root/scripts/operator_network_fault.sh" cleanup "$target" || cleanup_status=1
+    fi
     cleanup_routes || cleanup_status=1
     remove_test_clients || cleanup_status=1
-    compose down --volumes --remove-orphans || cleanup_status=1
+    if [[ "$MV_SUITE" == operator ]]; then
+        compose_options+=(--profile operator-four-node)
+    fi
+    compose "${compose_options[@]}" down --volumes --remove-orphans || cleanup_status=1
     network=${MANAGED_VALKEY_DOCKER_NETWORK:-${MANAGED_VALKEY_COMPOSE_PROJECT}_default}
     if docker network inspect "$network" >/dev/null 2>&1; then
         docker network rm "$network" >/dev/null || cleanup_status=1
@@ -467,7 +650,7 @@ run_in_environment() {
 
     setsid "$@" &
     child_pid=$!
-    printf '%s\t%s\n' "$child_pid" "$*" >>"$state/processes.tsv"
+    printf '%s\t%s\n' "$child_pid" "${1##*/}" >>"$state/processes.tsv"
     wait "$child_pid" || command_status=$?
     ((signal_status == 0)) || command_status=$signal_status
     trap - INT TERM
@@ -486,6 +669,8 @@ run_in_environment() {
 
 usage() {
     echo "usage: $0 prepare <api|operator|integration|e2e> [run-id]" >&2
+    echo "       $0 expand-operator <state-dir> <operator-image> <valkey-image>" >&2
+    echo "       $0 refresh-operator-public <state-dir>" >&2
     echo "       $0 cleanup|diagnostics <state-dir>" >&2
     echo "       $0 exec <api|operator|integration|e2e> [run-id] -- <command>" >&2
     exit 2
@@ -498,6 +683,14 @@ prepare)
     suite=$2
     run_id=${3:-${MANAGED_VALKEY_RUN_ID:-$(new_run_id "$suite")}}
     prepare "$suite" "$run_id"
+    ;;
+expand-operator)
+    (($# == 4)) || usage
+    expand_operator_cluster "$2" "$3" "$4"
+    ;;
+refresh-operator-public)
+    (($# == 2)) || usage
+    refresh_operator_public_address "$2"
     ;;
 cleanup)
     (($# == 2)) || usage

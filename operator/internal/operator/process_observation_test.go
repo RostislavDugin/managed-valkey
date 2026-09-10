@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"net"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -35,6 +39,7 @@ func TestReconcileProcessSavesFinalizerBeforeIdentity(t *testing.T) {
 			_ string,
 			_ string,
 			_ string,
+			_ bool,
 		) (operatorvalkey.ProcessState, error) {
 			inspections++
 			observedPod := &corev1.Pod{}
@@ -45,8 +50,12 @@ func TestReconcileProcessSavesFinalizerBeforeIdentity(t *testing.T) {
 				t.Fatal("клиент Valkey вызван до сохранения finalizer Pod")
 			}
 
+			syncedAt := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
 			return operatorvalkey.ProcessState{
 				Role: "primary", RunID: "run-1", AppPasswordHashes: []string{strings.Repeat("ab", 32)},
+				Replication: &operatorvalkey.ReplicationState{
+					ReplicationID: "replication-1", Offset: 42, SyncedAt: &syncedAt,
+				},
 			}, nil
 		},
 	}
@@ -92,7 +101,9 @@ func TestReconcileProcessSavesFinalizerBeforeIdentity(t *testing.T) {
 		nodeStatus.NodeName != node.Name ||
 		nodeStatus.NodeUID != string(node.UID) ||
 		nodeStatus.Role != valkeyv1alpha1.NodeRolePrimary ||
-		!nodeStatus.Readiness {
+		!nodeStatus.Readiness || nodeStatus.Replication == nil ||
+		nodeStatus.Replication.ReplicationID != "replication-1" ||
+		nodeStatus.Replication.Offset != 42 || nodeStatus.Replication.SyncedAt == nil {
 		t.Fatalf("сохранена неверная идентичность: %+v", nodeStatus)
 	}
 }
@@ -104,9 +115,12 @@ func TestProcessIdentityChangeRequiresRecovery(t *testing.T) {
 	}
 
 	tests := map[string]func(*valkeyv1alpha1.NodeStatus){
+		"ordinal":      func(status *valkeyv1alpha1.NodeStatus) { status.Ordinal = 1 },
 		"pod UID":      func(status *valkeyv1alpha1.NodeStatus) { status.PodUID = "pod-2" },
 		"container ID": func(status *valkeyv1alpha1.NodeStatus) { status.ContainerID = "containerd://2" },
 		"run_id":       func(status *valkeyv1alpha1.NodeStatus) { status.RunID = "run-2" },
+		"node name":    func(status *valkeyv1alpha1.NodeStatus) { status.NodeName = "worker-2" },
+		"node UID":     func(status *valkeyv1alpha1.NodeStatus) { status.NodeUID = "node-2" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -119,6 +133,272 @@ func TestProcessIdentityChangeRequiresRecovery(t *testing.T) {
 	}
 	if !sameProcess(base, base) {
 		t.Fatal("неизменный процесс распознан как замена")
+	}
+}
+
+func TestProcessInspectionTakesControlOncePerManagerStart(t *testing.T) {
+	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	before := metav1.NewTime(startedAt.Add(-time.Second))
+	after := metav1.NewTime(startedAt.Add(time.Second))
+	process := valkeyv1alpha1.NodeStatus{Replication: &valkeyv1alpha1.ReplicationStatus{ObservedAt: before}}
+	if !processNeedsControl(process, true, startedAt) {
+		t.Fatal("первое наблюдение после запуска manager не приняло управление")
+	}
+	process.Replication.ObservedAt = after
+	if processNeedsControl(process, true, startedAt) {
+		t.Fatal("повторное наблюдение снова закрыло административные соединения")
+	}
+	if !processNeedsControl(valkeyv1alpha1.NodeStatus{}, false, startedAt) {
+		t.Fatal("новый процесс не потребовал приёма управления")
+	}
+}
+
+func TestCT06ProcessHistoryPreservesUnconfirmedIncarnations(t *testing.T) {
+	process := func(id string) valkeyv1alpha1.NodeStatus {
+		return valkeyv1alpha1.NodeStatus{
+			Ordinal:     0,
+			PodUID:      "pod-1",
+			ContainerID: "containerd://" + id,
+			RunID:       "run-" + id,
+			NodeName:    "worker-1",
+			NodeUID:     "node-1",
+		}
+	}
+	status := valkeyv1alpha1.ValkeyInstanceStatus{Nodes: []valkeyv1alpha1.NodeStatus{process("a")}}
+
+	recordCurrentProcess(&status, process("b"), nil)
+	proofB := &valkeyv1alpha1.ProcessTermination{
+		Reason: "Completed", Evidence: "container_status", FinishedAt: metav1.Now(),
+	}
+	recordCurrentProcess(&status, process("c"), proofB)
+
+	if len(status.Nodes) != 1 || status.Nodes[0].RunID != "run-c" {
+		t.Fatalf("текущий ordinal не указывает на C: %+v", status.Nodes)
+	}
+	if len(status.PreviousProcesses) != 2 || status.PreviousProcesses[0].RunID != "run-a" ||
+		status.PreviousProcesses[0].Termination != nil ||
+		status.PreviousProcesses[1].RunID != "run-b" ||
+		status.PreviousProcesses[1].Termination == nil {
+		t.Fatalf("история A/B повреждена: %+v", status.PreviousProcesses)
+	}
+	if !hasUnterminatedPreviousProcess(status.PreviousProcesses) {
+		t.Fatal("доказательство остановки B ошибочно закрыло обязательство A")
+	}
+}
+
+func TestCT07RunIDChangeKeepsReplicationHistory(t *testing.T) {
+	now := metav1.Now()
+	old := valkeyv1alpha1.NodeStatus{
+		Ordinal: 0, PodUID: "pod-1", ContainerID: "containerd://1", RunID: "run-a",
+		NodeName: "worker-1", NodeUID: "node-1",
+		Replication: &valkeyv1alpha1.ReplicationStatus{
+			ReplicationID: "history-a", Offset: 75, ObservedAt: now,
+		},
+	}
+	current := *old.DeepCopy()
+	current.RunID = "run-b"
+	current.Replication = &valkeyv1alpha1.ReplicationStatus{
+		ReplicationID: "history-b", Offset: 1, ObservedAt: now,
+	}
+	status := valkeyv1alpha1.ValkeyInstanceStatus{Nodes: []valkeyv1alpha1.NodeStatus{old}}
+
+	recordCurrentProcess(&status, current, nil)
+
+	if len(status.Nodes) != 1 || status.Nodes[0].RunID != "run-b" ||
+		status.Nodes[0].Replication == nil || status.Nodes[0].Replication.ReplicationID != "history-b" {
+		t.Fatalf("новая история репликации не сохранена: %+v", status.Nodes)
+	}
+	if len(status.PreviousProcesses) != 1 || status.PreviousProcesses[0].RunID != "run-a" ||
+		status.PreviousProcesses[0].Replication == nil ||
+		status.PreviousProcesses[0].Replication.ReplicationID != "history-a" ||
+		status.PreviousProcesses[0].Termination != nil {
+		t.Fatalf("история прежнего run ID потеряна: %+v", status.PreviousProcesses)
+	}
+}
+
+func TestConfirmedProcessHistoryIsReleasedAfterObligationsClose(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	stale := valkeyv1alpha1.NodeStatus{
+		Ordinal: 0, PodUID: "pod-stale", ContainerID: "containerd://stale", RunID: "run-stale",
+		NodeName: "worker-1", NodeUID: "node-1",
+		Termination: &valkeyv1alpha1.ProcessTermination{
+			Reason: "Completed", Evidence: "container_status", FinishedAt: metav1.Now(),
+		},
+	}
+	primary := *stale.DeepCopy()
+	primary.PodUID = "pod-primary"
+	primary.ContainerID = "containerd://primary"
+	primary.RunID = "run-primary"
+	unknown := *stale.DeepCopy()
+	unknown.PodUID = "pod-unknown"
+	unknown.ContainerID = "containerd://unknown"
+	unknown.RunID = "run-unknown"
+	unknown.Termination = nil
+	instance.Status.PreviousProcesses = []valkeyv1alpha1.NodeStatus{stale, primary, unknown}
+	setPrimaryIdentity(&instance.Status, primary)
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s}
+
+	result, err := reconciler.reconcileProcessHistory(ctx, instance)
+	if err != nil || result.IsZero() || len(instance.Status.PreviousProcesses) != 2 {
+		t.Fatalf("закрытая история не очищена: result=%+v history=%+v error=%v",
+			result, instance.Status.PreviousProcesses, err)
+	}
+	if instance.Status.PreviousProcesses[0].RunID != primary.RunID ||
+		instance.Status.PreviousProcesses[1].RunID != unknown.RunID {
+		t.Fatalf("нужная история удалена: %+v", instance.Status.PreviousProcesses)
+	}
+}
+
+func TestReplicaSynchronizationBelongsToCurrentHistory(t *testing.T) {
+	firstTime := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	first := mergeObservedReplication(nil, &valkeyv1alpha1.ReplicationStatus{
+		ReplicationID: "history-a", UpstreamHost: "10.42.0.1", UpstreamPort: 6379, LinkUp: true,
+	}, valkeyv1alpha1.NodeRoleReplica, firstTime)
+	if first.SyncedAt == nil || !first.SyncedAt.Time.Equal(firstTime) {
+		t.Fatalf("первая синхронизация не подтверждена: %+v", first)
+	}
+
+	disconnected := mergeObservedReplication(first, &valkeyv1alpha1.ReplicationStatus{
+		ReplicationID: "history-a", UpstreamHost: "10.42.0.1", UpstreamPort: 6379,
+	}, valkeyv1alpha1.NodeRoleReplica, firstTime.Add(time.Minute))
+	if disconnected.SyncedAt == nil || !disconnected.SyncedAt.Equal(first.SyncedAt) {
+		t.Fatalf("подтверждение текущей истории потеряно после разрыва: %+v", disconnected)
+	}
+
+	foreign := mergeObservedReplication(disconnected, &valkeyv1alpha1.ReplicationStatus{
+		ReplicationID: "history-b", UpstreamHost: "10.42.0.2", UpstreamPort: 6379,
+	}, valkeyv1alpha1.NodeRoleReplica, firstTime.Add(2*time.Minute))
+	if foreign.SyncedAt != nil {
+		t.Fatalf("подтверждение перенесено на чужую историю: %+v", foreign)
+	}
+	foreign.LinkUp = true
+	resynced := mergeObservedReplication(
+		foreign,
+		foreign.DeepCopy(),
+		valkeyv1alpha1.NodeRoleReplica,
+		firstTime.Add(3*time.Minute),
+	)
+	if resynced.SyncedAt == nil || !resynced.SyncedAt.Time.Equal(firstTime.Add(3*time.Minute)) {
+		t.Fatalf("новая история не получила своё подтверждение: %+v", resynced)
+	}
+}
+
+func TestCT10HAObservesOtherProcessesWhileOneCallIsBlocked(t *testing.T) {
+	ctx := context.Background()
+	instance, basePod, _, secret := processObservationObjects()
+	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.Initialized = true
+	primaryOrdinal := int32(0)
+	instance.Status.PrimaryOrdinal = &primaryOrdinal
+	objects := []client.Object{instance, secret}
+	for ordinal := range int32(3) {
+		pod := basePod.DeepCopy()
+		pod.Name = instance.Name + "-" + string(rune('0'+ordinal))
+		pod.UID = types.UID("pod-" + string(rune('0'+ordinal)))
+		pod.Spec.NodeName = "worker-" + string(rune('0'+ordinal))
+		pod.Status.PodIP = "10.42.0." + string(rune('1'+ordinal))
+		pod.Status.ContainerStatuses[0].ContainerID = "containerd://" + string(rune('0'+ordinal))
+		pod.Finalizers = []string{processFinalizer}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+			Name: pod.Spec.NodeName, UID: types.UID("node-" + string(rune('0'+ordinal))),
+		}}
+		role := valkeyv1alpha1.NodeRoleReplica
+		if ordinal == 0 {
+			role = valkeyv1alpha1.NodeRolePrimary
+		}
+		instance.Status.Nodes = append(instance.Status.Nodes, valkeyv1alpha1.NodeStatus{
+			Ordinal: ordinal, PodUID: string(pod.UID),
+			ContainerID: pod.Status.ContainerStatuses[0].ContainerID,
+			RunID:       "run-" + string(rune('0'+ordinal)),
+			NodeName:    node.Name, NodeUID: string(node.UID), Role: role, Readiness: true,
+		})
+		objects = append(objects, pod, node)
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(objects...).
+		Build()
+	blocked := make(chan struct{})
+	observed := make(chan string, 2)
+	var calls atomic.Int32
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	reconciler := &ValkeyInstanceReconciler{
+		Client: k8s, APIReader: k8s,
+		InspectProcess: func(_ context.Context, address, _, _ string, _ bool) (operatorvalkey.ProcessState, error) {
+			calls.Add(1)
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return operatorvalkey.ProcessState{}, err
+			}
+			if host == "10.42.0.3" {
+				<-blocked
+				return operatorvalkey.ProcessState{}, operatorvalkey.ErrTransportFailure
+			}
+			observed <- host
+			ordinal := host[len(host)-1] - '1'
+			role := "replica"
+			if ordinal == 0 {
+				role = "primary"
+			}
+			return operatorvalkey.ProcessState{
+				Role: role, RunID: "run-" + string(rune('0'+ordinal)),
+			}, nil
+		},
+		Clock: clocktesting.NewFakeClock(now),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := reconciler.reconcileProcess(ctx, instance)
+		done <- err
+	}()
+
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case host := <-observed:
+			seen[host] = true
+		case <-time.After(time.Second):
+			t.Fatal("исправный процесс не наблюдался из-за зависшей реплики")
+		}
+	}
+	if !seen["10.42.0.1"] || !seen["10.42.0.2"] {
+		t.Fatalf("наблюдались не все исправные процессы: %v", seen)
+	}
+	deadline := time.Now().Add(time.Second)
+	heartbeatSaved := false
+	for time.Now().Before(deadline) {
+		current := &valkeyv1alpha1.ValkeyInstance{}
+		if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), current); err != nil {
+			t.Fatalf("прочитать heartbeat HA: %v", err)
+		}
+		if current.Status.ObservedAt != nil && current.Status.ObservedAt.Time.Equal(now) {
+			heartbeatSaved = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !heartbeatSaved {
+		t.Fatal("исправные процессы не сохранили heartbeat до ответа зависшей реплики")
+	}
+	close(blocked)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("завершить наблюдение HA: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("наблюдение HA не завершилось после снятия блокировки")
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("выполнено %d наблюдений вместо 3", calls.Load())
 	}
 }
 

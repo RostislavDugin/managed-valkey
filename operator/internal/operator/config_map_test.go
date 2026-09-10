@@ -91,4 +91,33 @@ func TestConfigMapContainsNoSecretsAndReadinessUsesRoleAndInfo(t *testing.T) {
 	if strings.Contains(data[valkeyConfigKey], "replicaof") {
 		t.Fatal("single запускается как replica")
 	}
+	for _, fragment := range []string{
+		"valkey-server /run/valkey/valkey.conf &",
+		"trap 'kill -TERM \"$valkey_pid\" 2>/dev/null || true' TERM INT",
+		"wait \"$valkey_pid\"",
+	} {
+		if !strings.Contains(data[startScriptKey], fragment) {
+			t.Fatalf("стартовый скрипт не управляет дочерним Valkey: %q", fragment)
+		}
+	}
+}
+
+func TestHAConfigStartsAsReplicaAndAcceptsSyncedReplicaReadiness(t *testing.T) {
+	accepted := valkeyv1alpha1.AcceptedConfiguration{
+		Slug: "cache-a1b2c3", Mode: valkeyv1alpha1.ValkeyModeHA, VCPU: 1, RAMGB: 1,
+	}
+	data := configMapData(accepted)
+	configuration := data[valkeyConfigKey]
+	if !strings.Contains(
+		configuration,
+		"replicaof cache-a1b2c3-primary.valkey-cache-a1b2c3.svc 6379\n",
+	) {
+		t.Fatalf("HA не стартует репликой: %s", configuration)
+	}
+	readiness := data[readinessScriptKey]
+	for _, check := range []string{"master_link_status:up", "master_sync_in_progress:0", "role:slave"} {
+		if !strings.Contains(readiness, check) {
+			t.Fatalf("readiness HA не проверяет %s: %s", check, readiness)
+		}
+	}
 }

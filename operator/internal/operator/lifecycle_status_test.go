@@ -11,9 +11,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/events"
 	clocktesting "k8s.io/utils/clock/testing"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
@@ -39,7 +42,7 @@ func TestProvisionTimeoutUsesCreationTimestampAcrossRestart(t *testing.T) {
 		t.Fatalf("таймаут создания: changed=%t error=%v", changed, err)
 	}
 	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseError ||
-		instance.Status.Reason != "PROVISION_TIMEOUT" || instance.Status.Initialized {
+		instance.Status.Reason != "PROVISIONING_TIMEOUT" || instance.Status.Initialized {
 		t.Fatalf("неверный status таймаута: %+v", instance.Status)
 	}
 
@@ -78,7 +81,7 @@ func TestHeartbeatAdvancesWhenEnvoyVerificationIsUnknown(t *testing.T) {
 	reconciler := &ValkeyInstanceReconciler{
 		Client: k8s,
 		Clock:  clocktesting.NewFakeClock(now),
-		InspectProcess: func(context.Context, string, string, string) (operatorvalkey.ProcessState, error) {
+		InspectProcess: func(context.Context, string, string, string, bool) (operatorvalkey.ProcessState, error) {
 			return operatorvalkey.ProcessState{
 				Role: "primary", RunID: "run-1", AppEnabled: true,
 				AppPasswordHashes: []string{strings.Repeat("ab", 32)},
@@ -97,6 +100,51 @@ func TestHeartbeatAdvancesWhenEnvoyVerificationIsUnknown(t *testing.T) {
 		!instance.Status.Network.VerifiedAt.Equal(&verifiedAt) ||
 		instance.Status.Phase != valkeyv1alpha1.InstancePhaseRunning {
 		t.Fatalf("unknown Envoy повредил рабочий status: %+v", instance.Status)
+	}
+}
+
+func TestCT01SecondObservationSchedule(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	clock := clocktesting.NewFakeClock(now)
+	observedAt := metav1.NewTime(clock.Now())
+	if heartbeatDue(&observedAt, clock.Now()) {
+		t.Fatal("heartbeat повторён без нового секундного наблюдения")
+	}
+
+	clock.Step(config.HealthCheckInterval - time.Millisecond)
+	if heartbeatDue(&observedAt, clock.Now()) {
+		t.Fatal("heartbeat обновлён раньше секунды")
+	}
+	clock.Step(time.Millisecond)
+	if !heartbeatDue(&observedAt, clock.Now()) {
+		t.Fatal("heartbeat не готов через секунду")
+	}
+
+	if result := requeueForObservation(ctrl.Result{}); result.RequeueAfter != config.HealthCheckInterval {
+		t.Fatalf("пустое ожидание назначено через %s", result.RequeueAfter)
+	}
+	if result := requeueForObservation(ctrl.Result{
+		RequeueAfter: config.NetworkVerifyInterval,
+	}); result.RequeueAfter != config.HealthCheckInterval {
+		t.Fatalf("Envoy задержал наблюдение до %s", result.RequeueAfter)
+	}
+	if result := requeueForObservation(ctrl.Result{
+		RequeueAfter: time.Nanosecond,
+	}); result.RequeueAfter != time.Nanosecond {
+		t.Fatalf("немедленный переход задержан до %s", result.RequeueAfter)
+	}
+
+	clock.Step(10 * time.Second)
+	if result := requeueForObservation(ctrl.Result{}); result.RequeueAfter != config.HealthCheckInterval {
+		t.Fatalf("пропущенные тики накопились: %+v", result)
+	}
+}
+
+func TestCT10IndependentInstancesHaveBoundedConcurrency(t *testing.T) {
+	options := valkeyInstanceControllerOptions()
+	if options.MaxConcurrentReconciles != config.MaxConcurrentReconciles ||
+		options.MaxConcurrentReconciles <= 1 {
+		t.Fatalf("неверный параллелизм контроллера: %d", options.MaxConcurrentReconciles)
 	}
 }
 
@@ -139,6 +187,26 @@ func TestUnchangedStatusDoesNotWriteAndConflictPreservesConcurrentFields(t *test
 	if observed.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
 		observed.Status.Reason != "CONCURRENT_OBSERVATION" {
 		t.Fatalf("конкурентное поле потеряно: %+v", observed.Status)
+	}
+}
+
+func TestUnchangedRecoveryConditionDoesNotDuplicateEvent(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	recorder := events.NewFakeRecorder(2)
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, Recorder: recorder}
+	for range 2 {
+		if _, err := reconciler.credentialsFailure(ctx, instance, "SecretNotFound", true); err != nil {
+			t.Fatalf("сохранить состояние восстановления: %v", err)
+		}
+	}
+	if count := len(recorder.Events); count != 1 {
+		t.Fatalf("одно состояние создало %d Events", count)
 	}
 }
 
@@ -210,5 +278,30 @@ func TestProcessMissingMovesInitializedInstanceToUnavailable(t *testing.T) {
 	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseUnavailable ||
 		instance.Status.Reason != "PRIMARY_NOT_READY" {
 		t.Fatalf("потеря primary не отражена: %+v", instance.Status)
+	}
+}
+
+func TestValkeyInstancePredicateIgnoresStatusEcho(t *testing.T) {
+	filter := valkeyInstancePredicate()
+	before := completeAcceptedInstance()
+	after := before.DeepCopy()
+	after.Status.Reason = "OBSERVED"
+	if filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Fatal("собственная запись status запустила второй reconcile")
+	}
+	after.Generation++
+	if !filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Fatal("новое поколение spec отфильтровано")
+	}
+	after = before.DeepCopy()
+	after.Annotations = map[string]string{manualFencingAnnotation: "{}"}
+	if !filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Fatal("ручное fencing отфильтровано")
+	}
+	after = before.DeepCopy()
+	deletedAt := metav1.Now()
+	after.DeletionTimestamp = &deletedAt
+	if !filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: after}) {
+		t.Fatal("начало удаления отфильтровано")
 	}
 }

@@ -56,6 +56,9 @@ func (r *ValkeyInstanceReconciler) reconcileDeletion(
 				"инстанс удаляется",
 			)
 		})
+		if err == nil && changed {
+			err = runDeletionActionControl(ctx, "stage-saved", instance)
+		}
 
 		return requeueIf(changed), err
 	}
@@ -65,6 +68,9 @@ func (r *ValkeyInstanceReconciler) reconcileDeletion(
 		if _, err := r.removeNetworkResources(ctx, instance); err != nil {
 			return ctrl.Result{}, err
 		}
+		if err := runDeletionActionControl(ctx, "action-completed", instance); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return r.advanceDeletion(ctx, instance, valkeyv1alpha1.DeletionStageDisablingApp)
 	case valkeyv1alpha1.DeletionStageDisablingApp:
@@ -72,12 +78,22 @@ func (r *ValkeyInstanceReconciler) reconcileDeletion(
 		if err != nil || changed {
 			return requeueIf(changed), err
 		}
+		if err := runDeletionActionControl(ctx, "action-completed", instance); err != nil {
+			return ctrl.Result{}, err
+		}
 
 		return r.advanceDeletion(ctx, instance, valkeyv1alpha1.DeletionStageStopping)
 	case valkeyv1alpha1.DeletionStageStopping:
 		changed, err := r.stopStatefulSet(ctx, instance)
-		if err != nil || changed {
-			return requeueIf(changed), err
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if changed {
+			if err := runDeletionActionControl(ctx, "action-completed", instance); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			return requeueIf(true), nil
 		}
 
 		return r.advanceDeletion(ctx, instance, valkeyv1alpha1.DeletionStageVerifying)
@@ -96,6 +112,9 @@ func (r *ValkeyInstanceReconciler) advanceDeletion(
 	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 		status.Deletion.Stage = stage
 	})
+	if err == nil && changed {
+		err = runDeletionActionControl(ctx, "stage-saved", instance)
+	}
 
 	return requeueIf(changed), err
 }
@@ -104,46 +123,85 @@ func (r *ValkeyInstanceReconciler) disableAppForDeletion(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (bool, error) {
-	pod := &corev1.Pod{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Spec.Slug + "-0"}
-	if err := r.Get(ctx, key, pod); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-
-		return false, fmt.Errorf("прочитать Pod при удалении: %w", err)
-	}
-	if _, exists := pod.Labels[applicationRoleLabel]; exists {
-		before := pod.DeepCopy()
-		pod.Labels = cloneWithoutKey(pod.Labels, applicationRoleLabel)
-		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
-			return false, fmt.Errorf("закрыть primary Service при удалении: %w", err)
-		}
-
-		return true, nil
-	}
-	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
-	if pod.Status.PodIP == "" || container == nil || container.State.Running == nil {
-		return false, nil
-	}
 	credentials, appHash, err := r.processCredentials(ctx, instance)
 	if err != nil {
-		return false, nil
+		if !deletionHasProcesses(instance.Status) {
+			exists, checkErr := r.deletionProcessExists(ctx, instance)
+			if checkErr != nil {
+				return false, checkErr
+			}
+			if !exists {
+				return false, nil
+			}
+		}
+		return false, err
 	}
 	update := r.UpdateAppAccess
 	if update == nil {
 		update = r.updateAppAccess
 	}
-	if _, err := update(
-		ctx,
-		net.JoinHostPort(pod.Status.PodIP, "6379"),
-		string(credentials.OperatorPassword),
-		appHash,
-		false,
-	); err != nil {
-		return false, nil
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+
+			return false, fmt.Errorf("прочитать Pod при удалении: %w", err)
+		}
+		if _, exists := pod.Labels[applicationRoleLabel]; exists {
+			before := pod.DeepCopy()
+			pod.Labels = cloneWithoutKey(pod.Labels, applicationRoleLabel)
+			if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
+				return false, fmt.Errorf("закрыть Service при удалении: %w", err)
+			}
+
+			return true, nil
+		}
+		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
+		if pod.Status.PodIP == "" || container == nil || container.State.Running == nil {
+			continue
+		}
+		if _, err := update(
+			ctx,
+			net.JoinHostPort(pod.Status.PodIP, "6379"),
+			string(credentials.OperatorPassword),
+			appHash,
+			false,
+		); err != nil {
+			continue
+		}
 	}
 
+	return false, nil
+}
+
+func deletionHasProcesses(status valkeyv1alpha1.ValkeyInstanceStatus) bool {
+	return len(status.Nodes) > 0 || len(status.PreviousProcesses) > 0 || status.Initialized
+}
+
+func (r *ValkeyInstanceReconciler) deletionProcessExists(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (bool, error) {
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, fmt.Errorf("проверить Pod перед удалением без Secret: %w", err)
+		}
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -188,42 +246,118 @@ func (r *ValkeyInstanceReconciler) verifyDeletion(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	pod := &corev1.Pod{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Spec.Slug + "-0"}
-	if err := r.Get(ctx, key, pod); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("проверить Pod при удалении: %w", err)
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
 		}
-		if len(instance.Status.Nodes) > 0 && instance.Status.Nodes[0].Termination == nil {
-			deleted, checkErr := r.previousNodeDeleted(ctx, instance.Status.Nodes[0])
-			if checkErr != nil {
-				return ctrl.Result{}, checkErr
+		if err := r.Get(ctx, key, pod); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("проверить Pod при удалении: %w", err)
+			}
+			current, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+			if found && current.Termination == nil {
+				deleted, checkErr := r.previousNodeDeleted(ctx, current)
+				if checkErr != nil {
+					return ctrl.Result{}, checkErr
+				}
+				if deleted {
+					return r.saveNodeDeletionTermination(ctx, instance, current)
+				}
+
+				return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
+			}
+			continue
+		}
+		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
+		if container != nil && container.State.Terminated != nil {
+			return r.saveContainerTermination(ctx, instance, pod, container, ordinal)
+		}
+		current, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+		if found && current.Termination != nil && current.PodUID == string(pod.UID) {
+			return r.releaseTerminatedPod(ctx, instance, pod, current)
+		}
+		if found && current.Termination == nil && current.PodUID == string(pod.UID) {
+			deleted, err := r.previousNodeDeleted(ctx, current)
+			if err != nil {
+				return ctrl.Result{}, err
 			}
 			if deleted {
-				return r.saveNodeDeletionTermination(ctx, instance, instance.Status.Nodes[0])
+				return r.saveNodeDeletionTermination(ctx, instance, current)
 			}
-
-			return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 		}
 
-		return r.finishDeletion(ctx, instance)
+		return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 	}
-	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
-	if container != nil && container.State.Terminated != nil {
-		return r.saveContainerTermination(ctx, instance, pod, container)
-	}
-	if len(instance.Status.Nodes) > 0 && instance.Status.Nodes[0].Termination != nil &&
-		instance.Status.Nodes[0].PodUID == string(pod.UID) {
-		return r.releaseTerminatedPod(ctx, instance, pod, instance.Status.Nodes[0])
+	for _, previous := range instance.Status.PreviousProcesses {
+		if previous.Termination != nil {
+			continue
+		}
+		current, found := nodeStatusAtOrdinal(instance.Status.Nodes, previous.Ordinal)
+		if found && current.Termination != nil && sameContainerProcess(previous, current) {
+			return r.copyPreviousProcessTermination(ctx, instance, previous, current.Termination)
+		}
+		deleted, err := r.previousNodeDeleted(ctx, previous)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if deleted {
+			return r.savePreviousNodeDeletionTermination(ctx, instance, previous)
+		}
+
+		return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
+	return r.finishDeletion(ctx, instance)
+}
+
+func (r *ValkeyInstanceReconciler) copyPreviousProcessTermination(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	process valkeyv1alpha1.NodeStatus,
+	termination *valkeyv1alpha1.ProcessTermination,
+) (ctrl.Result, error) {
+	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		for index := range status.PreviousProcesses {
+			if sameContainerProcess(status.PreviousProcesses[index], process) &&
+				status.PreviousProcesses[index].Termination == nil {
+				status.PreviousProcesses[index].Readiness = false
+				status.PreviousProcesses[index].Termination = termination.DeepCopy()
+			}
+		}
+	})
+
+	return requeueIf(changed), err
+}
+
+func (r *ValkeyInstanceReconciler) savePreviousNodeDeletionTermination(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	process valkeyv1alpha1.NodeStatus,
+) (ctrl.Result, error) {
+	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		for index := range status.PreviousProcesses {
+			if !sameProcess(status.PreviousProcesses[index], process) {
+				continue
+			}
+			status.PreviousProcesses[index].Readiness = false
+			status.PreviousProcesses[index].Termination = &valkeyv1alpha1.ProcessTermination{
+				Reason: "NodeDeleted", FinishedAt: metav1.NewTime(r.now()), Evidence: "node_deleted",
+			}
+		}
+	})
+
+	return requeueIf(changed), err
 }
 
 func (r *ValkeyInstanceReconciler) finishDeletion(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
+	if err := runDeletionActionControl(ctx, "before-finalizer-removal", instance); err != nil {
+		return ctrl.Result{}, err
+	}
 	before := instance.DeepCopy()
 	instance.Finalizers = slices.DeleteFunc(instance.Finalizers, func(value string) bool {
 		return value == instanceFinalizer

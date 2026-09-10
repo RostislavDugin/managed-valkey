@@ -98,7 +98,7 @@ jobs:
     name: Тесты оператора
     needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
@@ -110,7 +110,15 @@ jobs:
           just-version: 1.43.0
       - name: Запустить тесты
         working-directory: operator
-        run: just test
+        run: timeout --signal=TERM --kill-after=30s 140m just test
+      - name: Сохранить результаты и длительности
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: operator-test-results-${{ github.sha }}
+          path: tmp/k3s/operator/*/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
       - name: Сохранить диагностику
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

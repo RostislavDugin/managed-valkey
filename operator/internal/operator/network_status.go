@@ -38,6 +38,7 @@ var (
 
 type networkPrerequisites struct {
 	Hostname          string
+	RouteName         string
 	BackendNamespace  string
 	BackendService    string
 	BackendPort       int32
@@ -49,6 +50,7 @@ type networkPrerequisites struct {
 	CertificateSerial string
 	CertificateExpiry time.Time
 	IdleTimeout       string
+	ReadOnly          *networkPrerequisites
 }
 
 type networkCheckError struct {
@@ -67,7 +69,7 @@ func (e *networkCheckError) Unwrap() error {
 func (r *ValkeyInstanceReconciler) reconcileNetworkPrerequisites(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
-) (ctrl.Result, error) {
+) (ctrl.Result, bool, error) {
 	expected, checkErr := r.inspectNetworkPrerequisites(ctx, instance)
 	desiredFingerprint := ""
 	if expected.Hostname != "" {
@@ -110,10 +112,33 @@ func (r *ValkeyInstanceReconciler) reconcileNetworkPrerequisites(
 		)
 	})
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, false, err
 	}
 
-	return ctrl.Result{RequeueAfter: config.NetworkVerifyInterval}, nil
+	return ctrl.Result{RequeueAfter: config.NetworkVerifyInterval},
+		networkVerificationAllowsOperations(instance.Status.Network, verification, desiredFingerprint), nil
+}
+
+func networkVerificationAllowsOperations(
+	status *valkeyv1alpha1.NetworkStatus,
+	verification envoyVerification,
+	desiredFingerprint string,
+) bool {
+	if status == nil || desiredFingerprint == "" {
+		return false
+	}
+	if verification.status == valkeyv1alpha1.NetworkVerificationVerified {
+		return true
+	}
+	previousVerificationReusable :=
+		(verification.status == valkeyv1alpha1.NetworkVerificationUnknown &&
+			verification.reason == "EnvoyAdminUnavailable") ||
+			(verification.status == valkeyv1alpha1.NetworkVerificationPending &&
+				verification.reason == "EnvoyRefreshPending")
+	return previousVerificationReusable &&
+		status.VerifiedFingerprint == desiredFingerprint &&
+		len(verification.processes) == 2 &&
+		sameEnvoyProcesses(status.EnvoyProcesses, verification.processes)
 }
 
 func applyNetworkVerification(
@@ -133,10 +158,15 @@ func applyNetworkVerification(
 	conditionStatus := metav1.ConditionFalse
 	switch verification.status {
 	case valkeyv1alpha1.NetworkVerificationVerified:
-		if verification.fresh || status.Network.VerifiedAt == nil ||
+		if status.Network.VerifiedAt == nil ||
 			status.Network.VerifiedFingerprint != desiredFingerprint ||
-			!sameEnvoyProcesses(status.Network.EnvoyProcesses, verification.processes) {
-			verifiedAt := metav1.NewTime(now)
+			!sameEnvoyProcesses(status.Network.EnvoyProcesses, verification.processes) ||
+			!verification.capturedAt.IsZero() && verification.capturedAt.After(status.Network.VerifiedAt.Time) {
+			verifiedTime := now
+			if !verification.capturedAt.IsZero() {
+				verifiedTime = verification.capturedAt
+			}
+			verifiedAt := metav1.NewTime(verifiedTime)
 			status.Network.VerifiedAt = &verifiedAt
 			status.Network.VerifiedFingerprint = desiredFingerprint
 			status.Network.EnvoyProcesses = slices.Clone(verification.processes)
@@ -145,7 +175,7 @@ func applyNetworkVerification(
 	case valkeyv1alpha1.NetworkVerificationUnknown:
 		conditionStatus = metav1.ConditionUnknown
 	default:
-		if status.Initialized {
+		if status.Initialized && reason != "EnvoyRefreshPending" {
 			status.Phase = valkeyv1alpha1.InstancePhaseUnavailable
 			status.Reason = "NETWORK_NOT_READY"
 		}
@@ -166,6 +196,7 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 ) (networkPrerequisites, error) {
 	accepted := instance.Status.AcceptedConfiguration
 	hostname := accepted.Slug + "." + r.BaseDomain
+	readOnlyBackendAddress := ""
 
 	gateway := &gatewayv1.Gateway{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.SystemNamespace, Name: gatewayName}, gateway); err != nil {
@@ -187,6 +218,23 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 			errNetworkObjectNotReady,
 		)
 	}
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		readOnlyListenerReady := false
+		for _, status := range gateway.Status.Listeners {
+			if status.Name == gatewayv1.SectionName(accepted.Slug+"-ro") &&
+				conditionsCurrent(status.Conditions, gateway.Generation, "Accepted", "Programmed") {
+				readOnlyListenerReady = true
+				break
+			}
+		}
+		if !readOnlyListenerReady {
+			gatewayErr = checkError(
+				"GatewayNotReady",
+				"listener Gateway для реплик не принят для текущего поколения",
+				errNetworkObjectNotReady,
+			)
+		}
+	}
 
 	route := &gatewayv1alpha2.TCPRoute{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug}, route); err != nil {
@@ -198,6 +246,30 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 			"TCPRoute не принят для текущего поколения",
 			errNetworkObjectNotReady,
 		)
+	}
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		var err error
+		readOnlyBackendAddress, err = r.replicaBackendAddress(ctx, instance)
+		if err != nil {
+			return networkPrerequisites{}, err
+		}
+		readOnlyRoute := &gatewayv1alpha2.TCPRoute{}
+		key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+		if err := r.Get(ctx, key, readOnlyRoute); err != nil {
+			return networkPrerequisites{}, checkError("TCPRouteUnavailable", "прочитать TCPRoute реплик", err)
+		}
+		if !routeReady(readOnlyRoute, r.SystemNamespace, accepted.Slug+"-ro") &&
+			(readOnlyBackendAddress != "" || !routeAcceptedWithoutReadyEndpoints(
+				readOnlyRoute,
+				r.SystemNamespace,
+				accepted.Slug+"-ro",
+			)) {
+			return networkPrerequisites{}, checkError(
+				"TCPRouteNotReady",
+				"TCPRoute реплик не принят для текущего поколения",
+				errNetworkObjectNotReady,
+			)
+		}
 	}
 
 	if accepted.Whitelist.IsEnabled {
@@ -212,6 +284,24 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 				errNetworkObjectNotReady,
 			)
 		}
+		if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+			readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
+			key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+			if err := r.Get(ctx, key, readOnlyPolicy); err != nil {
+				return networkPrerequisites{}, checkError(
+					"SecurityPolicyUnavailable",
+					"прочитать SecurityPolicy реплик",
+					err,
+				)
+			}
+			if !policyReady(readOnlyPolicy.Status, readOnlyPolicy.Generation) {
+				return networkPrerequisites{}, checkError(
+					"SecurityPolicyNotReady",
+					"SecurityPolicy реплик не принята для текущего поколения",
+					errNetworkObjectNotReady,
+				)
+			}
+		}
 	} else {
 		policy := &envoyv1alpha1.SecurityPolicy{}
 		err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug}, policy)
@@ -221,6 +311,18 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 				"SecurityPolicy присутствует при выключенном whitelist",
 				errNetworkObjectNotReady,
 			)
+		}
+		if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+			readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
+			key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+			err := r.Get(ctx, key, readOnlyPolicy)
+			if err == nil || !apierrors.IsNotFound(err) {
+				return networkPrerequisites{}, checkError(
+					"SecurityPolicyUnexpected",
+					"SecurityPolicy реплик присутствует при выключенном whitelist",
+					errNetworkObjectNotReady,
+				)
+			}
 		}
 	}
 
@@ -257,7 +359,19 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 		return networkPrerequisites{}, err
 	}
 	pod := &corev1.Pod{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-0"}, pod); err != nil {
+	primaryOrdinal, selected := selectedPrimaryOrdinal(instance)
+	if !selected {
+		return networkPrerequisites{}, checkError(
+			"BackendNotReady",
+			"primary ещё не выбран",
+			errNetworkObjectNotReady,
+		)
+	}
+	primaryKey := client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      fmt.Sprintf("%s-%d", accepted.Slug, primaryOrdinal),
+	}
+	if err := r.Get(ctx, primaryKey, pod); err != nil {
 		return networkPrerequisites{}, checkError("BackendUnavailable", "прочитать Pod backend", err)
 	}
 	if pod.Status.PodIP == "" {
@@ -270,6 +384,7 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 
 	expected := networkPrerequisites{
 		Hostname:          hostname,
+		RouteName:         accepted.Slug,
 		BackendNamespace:  instance.Namespace,
 		BackendService:    accepted.Slug + "-primary",
 		BackendPort:       valkeyPort,
@@ -282,11 +397,51 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 		CertificateExpiry: certificateDetails.NotAfter,
 		IdleTimeout:       string(*trafficPolicy.Spec.Timeout.TCP.IdleTimeout),
 	}
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		readOnly := expected
+		readOnly.Hostname = accepted.Slug + "-ro." + r.BaseDomain
+		readOnly.RouteName = accepted.Slug + "-ro"
+		readOnly.BackendService = accepted.Slug + "-replicas"
+		readOnly.BackendAddress = readOnlyBackendAddress
+		readOnly.ReadOnly = nil
+		expected.ReadOnly = &readOnly
+	}
 	if gatewayErr != nil {
 		return expected, gatewayErr
 	}
 
 	return expected, nil
+}
+
+func (r *ValkeyInstanceReconciler) replicaBackendAddress(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (string, error) {
+	for _, node := range instance.Status.Nodes {
+		if node.Role != valkeyv1alpha1.NodeRoleReplica || node.Termination != nil ||
+			node.Observation != nil || !node.Readiness || node.Replication == nil ||
+			!node.Replication.LinkUp || node.Replication.SyncInProgress || node.Replication.SyncedAt == nil {
+			continue
+		}
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, node.Ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return "", checkError("BackendUnavailable", "прочитать Pod реплики backend", err)
+		}
+		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
+		if pod.Status.PodIP != "" && container != nil && container.State.Running != nil &&
+			node.PodUID == string(pod.UID) && node.ContainerID == container.ContainerID {
+			return pod.Status.PodIP, nil
+		}
+	}
+
+	return "", nil
 }
 
 func networkFingerprint(expected networkPrerequisites) string {
@@ -301,6 +456,8 @@ func networkFingerprint(expected networkPrerequisites) string {
 		CIDRs            []string `json:"cidrs"`
 		CertificateHash  string   `json:"certificateHash"`
 		IdleTimeout      string   `json:"idleTimeout"`
+		ReadOnlyHostname string   `json:"readOnlyHostname,omitempty"`
+		ReadOnlyService  string   `json:"readOnlyService,omitempty"`
 	}{
 		Hostname:         expected.Hostname,
 		BackendNamespace: expected.BackendNamespace,
@@ -310,6 +467,10 @@ func networkFingerprint(expected networkPrerequisites) string {
 		CIDRs:            cidrs,
 		CertificateHash:  expected.CertificateHash,
 		IdleTimeout:      expected.IdleTimeout,
+	}
+	if expected.ReadOnly != nil {
+		input.ReadOnlyHostname = expected.ReadOnly.Hostname
+		input.ReadOnlyService = expected.ReadOnly.BackendService
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {
@@ -398,6 +559,28 @@ func routeReady(route *gatewayv1alpha2.TCPRoute, systemNamespace, section string
 		}
 
 		return conditionsCurrent(parent.Conditions, route.Generation, "Accepted", "ResolvedRefs")
+	}
+
+	return false
+}
+
+func routeAcceptedWithoutReadyEndpoints(
+	route *gatewayv1alpha2.TCPRoute,
+	systemNamespace string,
+	section string,
+) bool {
+	for _, parent := range route.Status.Parents {
+		if parent.ParentRef.Name != gatewayv1.ObjectName(gatewayName) ||
+			parent.ParentRef.Namespace == nil || string(*parent.ParentRef.Namespace) != systemNamespace ||
+			parent.ParentRef.SectionName == nil || string(*parent.ParentRef.SectionName) != section {
+			continue
+		}
+		accepted := apimeta.FindStatusCondition(parent.Conditions, "Accepted")
+		resolved := apimeta.FindStatusCondition(parent.Conditions, "ResolvedRefs")
+		return accepted != nil && accepted.Status == metav1.ConditionTrue &&
+			accepted.ObservedGeneration == route.Generation && resolved != nil &&
+			resolved.Status == metav1.ConditionFalse && resolved.ObservedGeneration == route.Generation &&
+			resolved.Reason == "EndpointsNotFound"
 	}
 
 	return false

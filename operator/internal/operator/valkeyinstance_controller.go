@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,9 +25,13 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -43,22 +48,29 @@ type ValkeyInstanceReconciler struct {
 	Recorder events.EventRecorder
 	Lease    *LeaseScope
 
-	SystemNamespace string
-	ValkeyImage     string
-	BaseDomain      string
-	Environment     string
-	OperatorCIDRs   []string
-	Clock           clock.Clock
-	InspectProcess  ProcessInspector
-	RESTConfig      *rest.Config
-	ReadEnvoy       EnvoySnapshotReader
-	EnvoyCache      *EnvoySnapshotCache
-	UpdateAppAccess AppAccessUpdater
+	SystemNamespace      string
+	ValkeyImage          string
+	BaseDomain           string
+	Environment          string
+	OperatorCIDRs        []string
+	Clock                clock.Clock
+	ObservationStartedAt time.Time
+	InspectProcess       ProcessInspector
+	RESTConfig           *rest.Config
+	ReadEnvoy            EnvoySnapshotReader
+	EnvoyCache           *EnvoySnapshotCache
+	UpdateAppAccess      AppAccessUpdater
+	PromoteProcess       ProcessPromoter
+	FollowProcess        ProcessFollower
+	RotatePassword       PasswordRotator
+	StopBusyProcess      BusyProcessStopper
 }
 
 const (
-	conditionTypeAccepted          = "Accepted"
-	conditionTypeUnsupportedChange = "UnsupportedChange"
+	conditionTypeAccepted             = "Accepted"
+	conditionTypeUnsupportedChange    = "UnsupportedChange"
+	conditionTypeInvalidIntent        = "InvalidIntent"
+	conditionTypeConfigurationPending = "ConfigurationPending"
 )
 
 // Права оператора по разделу 3 SYSTEM.md. Объекты инстанса живут в namespace,
@@ -76,6 +88,7 @@ const (
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=tcproutes,verbs=create;get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=securitypolicies,verbs=create;get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list
@@ -139,12 +152,40 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return result, err
 		}
 
-		result, err = r.reconcileSingleResources(ctx, instance)
+		result, err = r.reconcileWorkloadResources(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
 
-		result, err = r.reconcileProcess(ctx, instance)
+		processResult, err := r.reconcileProcess(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		result, err = r.reconcileManualFencing(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+		recoveryResult, err := r.reconcileProcessRecovery(ctx, instance)
+		if err != nil || resultRequestsImmediateRequeue(recoveryResult) {
+			return recoveryResult, err
+		}
+		result, err = r.reconcileFailover(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return earlierRequeue(result, recoveryResult), err
+		}
+		if !recoveryResult.IsZero() && instance.Status.Failover == nil {
+			return recoveryResult, nil
+		}
+		result, err = r.reconcileCredentialRotation(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+		result, err = r.reconcileRollout(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+
+		result, err = r.reconcileTopology(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
@@ -159,20 +200,34 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return result, err
 		}
 
-		networkResult, err := r.reconcileNetworkPrerequisites(ctx, instance)
-		if err != nil || instance.Status.Network == nil ||
-			instance.Status.Network.VerificationStatus != valkeyv1alpha1.NetworkVerificationVerified ||
-			instance.Status.Network.DesiredFingerprint == "" ||
-			instance.Status.Network.DesiredFingerprint != instance.Status.Network.VerifiedFingerprint {
-			return networkResult, err
+		networkResult, networkAllowsOperations, err := r.reconcileNetworkPrerequisites(ctx, instance)
+		if err != nil || !networkAllowsOperations {
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			return requeueForObservation(earlierRequeue(networkResult, processResult)), nil
 		}
 
 		result, err = r.reconcileAppAdmission(ctx, instance)
 		if err != nil || !result.IsZero() {
 			return result, err
 		}
+		result, err = r.reconcileReplicaAdmission(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+		changed, err = r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			applyOperationalPhase(instance, status)
+		})
+		if err != nil || changed {
+			return requeueIf(changed), err
+		}
+		result, err = r.reconcileProcessHistory(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
 
-		return networkResult, nil
+		return requeueForObservation(earlierRequeue(networkResult, processResult)), nil
 	}
 
 	namespace := &corev1.Namespace{}
@@ -215,11 +270,12 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 func (r *ValkeyInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&valkeyv1alpha1.ValkeyInstance{}).
+		For(&valkeyv1alpha1.ValkeyInstance{}, builder.WithPredicates(valkeyInstancePredicate())).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&gatewayv1alpha2.TCPRoute{}).
 		Owns(&envoyv1alpha1.SecurityPolicy{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
@@ -230,31 +286,178 @@ func (r *ValkeyInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&envoyv1alpha1.ClientTrafficPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.clientTrafficPolicyRequests),
 		).
+		WithOptions(valkeyInstanceControllerOptions()).
 		Named("valkeyinstance").
 		Complete(r)
+}
+
+func valkeyInstancePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(update event.UpdateEvent) bool {
+			before, beforeOK := update.ObjectOld.(*valkeyv1alpha1.ValkeyInstance)
+			after, afterOK := update.ObjectNew.(*valkeyv1alpha1.ValkeyInstance)
+			if !beforeOK || !afterOK {
+				return true
+			}
+			return before.Generation != after.Generation ||
+				!reflect.DeepEqual(before.Annotations, after.Annotations) ||
+				!reflect.DeepEqual(before.DeletionTimestamp, after.DeletionTimestamp)
+		},
+	}
+}
+
+func valkeyInstanceControllerOptions() controller.Options {
+	return controller.Options{MaxConcurrentReconciles: config.MaxConcurrentReconciles}
 }
 
 func (r *ValkeyInstanceReconciler) reconcileAcceptedConfiguration(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (bool, error) {
-	differences := configurationDifferences(instance.Spec, *instance.Status.AcceptedConfiguration)
-
-	return r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+	changed, err := r.updateStatusChecked(ctx, instance, func(current *valkeyv1alpha1.ValkeyInstance) error {
+		status := &current.Status
+		accepted := status.AcceptedConfiguration
+		if accepted == nil {
+			return nil
+		}
+		differences := configurationDifferences(current.Spec, *accepted)
 		if len(differences) == 0 {
 			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeUnsupportedChange)
-			return
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeInvalidIntent)
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeConfigurationPending)
+			return nil
 		}
 
+		candidate, validationErr := nextAcceptedConfiguration(current.Spec, *accepted)
+		if validationErr != nil {
+			setConfigurationValidationCondition(current, status, validationErr)
+			return nil
+		}
+		if !acceptedConfigurationComplete(*status, *accepted) {
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeUnsupportedChange)
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeInvalidIntent)
+			setCondition(
+				current,
+				status,
+				conditionTypeConfigurationPending,
+				metav1.ConditionTrue,
+				"CurrentGenerationIncomplete",
+				"новое поколение ждёт завершения принятой конфигурации",
+			)
+			return nil
+		}
+
+		secret := &corev1.Secret{}
+		key := client.ObjectKey{
+			Namespace: current.Namespace,
+			Name:      valkeyv1alpha1.AuthSecretName(accepted.Slug),
+		}
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if err := reader.Get(ctx, key, secret); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("прочитать Secret нового поколения: %w", err)
+			}
+			setConfigurationHashPending(current, status, "AppPasswordHashMissing")
+			return nil
+		}
+		if _, err := valkeyv1alpha1.ParseAppPasswordHash(secret.Data, candidate.PasswordVersion); err != nil {
+			setConfigurationHashPending(current, status, credentialFailureReason(err))
+			return nil
+		}
+
+		sizeChanged := candidate.VCPU != accepted.VCPU || candidate.RAMGB != accepted.RAMGB
+		passwordChanged := candidate.PasswordVersion != accepted.PasswordVersion
+		if sizeChanged {
+			status.Rollout = &valkeyv1alpha1.RolloutStatus{
+				DesiredGeneration: candidate.DesiredGeneration,
+				VCPU:              candidate.VCPU,
+				RAMGB:             candidate.RAMGB,
+				Stage:             valkeyv1alpha1.RolloutStagePreparing,
+			}
+		}
+		if passwordChanged {
+			status.CredentialRotation = &valkeyv1alpha1.CredentialRotationStatus{
+				TargetVersion:   candidate.PasswordVersion,
+				PreviousVersion: accepted.PasswordVersion,
+				Stage:           valkeyv1alpha1.CredentialRotationStagePreparing,
+			}
+		}
+		status.AcceptedConfiguration = candidate
+		if !sizeChanged && !passwordChanged {
+			status.ObservedGeneration = candidate.DesiredGeneration
+		} else if status.Initialized && status.Phase != valkeyv1alpha1.InstancePhaseUnavailable &&
+			status.Phase != valkeyv1alpha1.InstancePhaseError {
+			status.Phase = valkeyv1alpha1.InstancePhaseUpdating
+			status.Reason = "CONFIGURATION_APPLYING"
+		}
 		setCondition(
-			instance,
+			current,
 			status,
-			conditionTypeUnsupportedChange,
+			conditionTypeAccepted,
 			metav1.ConditionTrue,
-			"SpecChanged",
-			"не поддерживается изменение полей: "+strings.Join(differences, ", "),
+			"GenerationAccepted",
+			"новое поколение конфигурации принято",
 		)
+		apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeUnsupportedChange)
+		apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeInvalidIntent)
+		apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeConfigurationPending)
+
+		return nil
 	})
+	if err != nil || !changed || instance.Status.CredentialRotation == nil ||
+		instance.Status.CredentialRotation.Stage != valkeyv1alpha1.CredentialRotationStagePreparing {
+		return changed, err
+	}
+	if err := runCredentialRotationActionControl(
+		ctx,
+		"stage-saved",
+		instance,
+		valkeyv1alpha1.NodeStatus{},
+	); err != nil {
+		return changed, err
+	}
+	return changed, nil
+}
+
+func setConfigurationValidationCondition(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	status *valkeyv1alpha1.ValkeyInstanceStatus,
+	err error,
+) {
+	conditionType := conditionTypeInvalidIntent
+	reason := "InvalidSpec"
+	if validation, ok := errors.AsType[*configurationValidationError](err); ok {
+		conditionType = validation.conditionType
+		reason = validation.reason
+	}
+	setCondition(instance, status, conditionType, metav1.ConditionTrue, reason, err.Error())
+	if conditionType != conditionTypeUnsupportedChange {
+		apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeUnsupportedChange)
+	}
+	if conditionType != conditionTypeInvalidIntent {
+		apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeInvalidIntent)
+	}
+	apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeConfigurationPending)
+}
+
+func setConfigurationHashPending(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	status *valkeyv1alpha1.ValkeyInstanceStatus,
+	reason string,
+) {
+	apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeUnsupportedChange)
+	apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeInvalidIntent)
+	setCondition(
+		instance,
+		status,
+		conditionTypeConfigurationPending,
+		metav1.ConditionTrue,
+		reason,
+		"новое поколение ждёт валидный хеш принятой версии пароля",
+	)
 }
 
 func (r *ValkeyInstanceReconciler) setRejectedStatus(
@@ -275,6 +478,17 @@ func (r *ValkeyInstanceReconciler) updateStatus(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	mutate func(*valkeyv1alpha1.ValkeyInstanceStatus),
 ) (bool, error) {
+	return r.updateStatusChecked(ctx, instance, func(current *valkeyv1alpha1.ValkeyInstance) error {
+		mutate(&current.Status)
+		return nil
+	})
+}
+
+func (r *ValkeyInstanceReconciler) updateStatusChecked(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	mutate func(*valkeyv1alpha1.ValkeyInstance) error,
+) (bool, error) {
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
@@ -292,11 +506,14 @@ func (r *ValkeyInstanceReconciler) updateStatus(
 		firstAttempt = false
 
 		before := instance.DeepCopy()
-		mutate(&instance.Status)
+		if err := mutate(instance); err != nil {
+			return err
+		}
 		if reflect.DeepEqual(before.Status, instance.Status) {
 			return nil
 		}
-		if err := r.Status().Patch(ctx, instance, client.MergeFrom(before)); err != nil {
+		patch := client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})
+		if err := r.Status().Patch(ctx, instance, patch); err != nil {
 			return err
 		}
 		changed = true
@@ -315,13 +532,14 @@ func (r *ValkeyInstanceReconciler) reconcileProvisioningDeadline(
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (bool, error) {
 	if instance.CreationTimestamp.IsZero() ||
+		instance.Status.Applied != nil ||
 		r.now().Before(instance.CreationTimestamp.Add(config.ProvisionTimeout)) {
 		return false, nil
 	}
 
 	return r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 		status.Phase = valkeyv1alpha1.InstancePhaseError
-		status.Reason = "PROVISION_TIMEOUT"
+		status.Reason = "PROVISIONING_TIMEOUT"
 		setCondition(
 			instance,
 			status,
@@ -356,8 +574,6 @@ func rejectionReason(err error) string {
 		return "MissingRequiredFields"
 	case errors.Is(err, errInvalidIdentity):
 		return "IdentityMismatch"
-	case errors.Is(err, errUnsupportedMode):
-		return "UnsupportedMode"
 	default:
 		return "InvalidSpec"
 	}
@@ -449,4 +665,16 @@ func requeueIf(changed bool) ctrl.Result {
 	}
 
 	return ctrl.Result{}
+}
+
+func requeueForObservation(result ctrl.Result) ctrl.Result {
+	if result.RequeueAfter <= 0 || result.RequeueAfter > config.HealthCheckInterval {
+		result.RequeueAfter = config.HealthCheckInterval
+	}
+
+	return result
+}
+
+func resultRequestsImmediateRequeue(result ctrl.Result) bool {
+	return result.RequeueAfter > 0 && result.RequeueAfter < config.HealthCheckInterval
 }

@@ -104,6 +104,8 @@ func TestTakeControlWaitsForAuthenticationAndReadsState(t *testing.T) {
 			return "+OK\r\n", false
 		case "AUTH":
 			return "+OK\r\n", false
+		case "PING":
+			return "+PONG\r\n", false
 		case "CLIENT":
 			return ":1\r\n", false
 		case "ROLE":
@@ -112,6 +114,10 @@ func TestTakeControlWaitsForAuthenticationAndReadsState(t *testing.T) {
 			return "*4\r\n$5\r\nflags\r\n*1\r\n$3\r\noff\r\n$9\r\npasswords\r\n*1\r\n$64\r\n" + hash + "\r\n", false
 		case "INFO":
 			body := "# Server\r\nrun_id:process-1\r\n"
+			if len(command) > 1 && command[1] == "replication" {
+				body = "# Replication\r\nrole:master\r\nmaster_replid:history-1\r\n" +
+					"master_replid2:history-0\r\nmaster_repl_offset:42\r\nsecond_repl_offset:12\r\n"
+			}
 			return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body), false
 		default:
 			return "-ERR unexpected command\r\n", false
@@ -132,13 +138,54 @@ func TestTakeControlWaitsForAuthenticationAndReadsState(t *testing.T) {
 	if len(state.AppPasswordHashes) != 1 || state.AppPasswordHashes[0] != hash {
 		t.Fatalf("неверные хеши app: %v", state.AppPasswordHashes)
 	}
+	if state.Replication == nil || state.Replication.ReplicationID != "history-1" ||
+		state.Replication.SecondaryReplicationID != "history-0" ||
+		state.Replication.Offset != 42 || state.Replication.SecondaryOffset != 12 {
+		t.Fatalf("неверное состояние репликации: %+v", state.Replication)
+	}
 	if server.pipelinedAfter("AUTH") {
 		t.Fatal("следующая команда отправлена до ответа AUTH")
 	}
 
-	want := []string{"AUTH", "CLIENT KILL", "ROLE", "ACL GETUSER", "INFO"}
+	want := []string{"AUTH", "PING", "CLIENT KILL", "ROLE", "ACL GETUSER", "INFO", "INFO"}
 	if got := server.applicationCommands(); !slices.Equal(got, want) {
 		t.Fatalf("порядок команд %v, ожидался %v", got, want)
+	}
+}
+
+func TestObserveReadsStateWithoutKillingOperatorConnections(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		switch command[0] {
+		case "HELLO", "AUTH":
+			return "+OK\r\n", false
+		case "PING":
+			return "+PONG\r\n", false
+		case "ROLE":
+			return "*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n", false
+		case "ACL":
+			return "*4\r\n$5\r\nflags\r\n*1\r\n$3\r\noff\r\n$9\r\npasswords\r\n*1\r\n$64\r\n" + hash + "\r\n", false
+		case "INFO":
+			body := "# Server\r\nrun_id:process-1\r\n"
+			if len(command) > 1 && command[1] == "replication" {
+				body = "# Replication\r\nrole:master\r\nmaster_replid:history-1\r\nmaster_repl_offset:42\r\n"
+			}
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body), false
+		default:
+			return "-ERR unexpected command\r\n", false
+		}
+	})
+	client, session := dialSession(t, server.address())
+	defer client.Close()
+	defer session.Close()
+
+	state, err := session.Observe(context.Background(), "operator-secret")
+	if err != nil || state.RunID != "process-1" {
+		t.Fatalf("прочитать состояние без приёма управления: state=%+v error=%v", state, err)
+	}
+	want := []string{"AUTH", "PING", "ROLE", "ACL GETUSER", "INFO", "INFO"}
+	if got := server.applicationCommands(); !slices.Equal(got, want) {
+		t.Fatalf("наблюдение выполнило лишние команды %v, ожидались %v", got, want)
 	}
 }
 
@@ -161,6 +208,257 @@ func TestAuthenticationErrorDoesNotContainPassword(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), password) {
 		t.Fatalf("ошибка содержит пароль: %v", err)
+	}
+	if got := operatorvalkey.ClassifyError(err); got != operatorvalkey.ErrorKindAuth ||
+		!errors.Is(err, operatorvalkey.ErrAuthentication) {
+		t.Fatalf("ошибка авторизации классифицирована как %q: %v", got, err)
+	}
+}
+
+func TestObservationErrorsAreClassifiedByServerReply(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		reply    string
+		kind     operatorvalkey.ErrorKind
+		sentinel error
+	}{
+		{
+			name: "PING BUSY", command: "PING", reply: "-BUSY running a script\r\n",
+			kind: operatorvalkey.ErrorKindBusy, sentinel: operatorvalkey.ErrBusy,
+		},
+		{
+			name: "ROLE LOADING", command: "ROLE", reply: "-LOADING dataset\r\n",
+			kind: operatorvalkey.ErrorKindLoading, sentinel: operatorvalkey.ErrLoading,
+		},
+		{
+			name: "INFO NOAUTH", command: "INFO", reply: "-NOAUTH authentication required\r\n",
+			kind: operatorvalkey.ErrorKindAuth, sentinel: operatorvalkey.ErrAuthentication,
+		},
+		{
+			name: "INFO server error", command: "INFO", reply: "-ERR unavailable\r\n",
+			kind: operatorvalkey.ErrorKindServer,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRESPServer(t, func(command []string) (string, bool) {
+				if command[0] == test.command {
+					return test.reply, false
+				}
+				return successfulObservationReply(command), false
+			})
+			client, session := dialSession(t, server.address())
+			defer client.Close()
+			defer session.Close()
+
+			_, err := session.TakeControl(context.Background(), "operator-secret")
+			if err == nil {
+				t.Fatal("ожидалась ошибка наблюдения")
+			}
+			if got := operatorvalkey.ClassifyError(err); got != test.kind {
+				t.Fatalf("получена категория %q, ожидалась %q: %v", got, test.kind, err)
+			}
+			if test.sentinel != nil && !errors.Is(err, test.sentinel) {
+				t.Fatalf("ошибка не соответствует %v: %v", test.sentinel, err)
+			}
+		})
+	}
+}
+
+func TestPingTimeoutIsTransportFailure(t *testing.T) {
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		if command[0] == "PING" {
+			return "", false
+		}
+		return successfulObservationReply(command), false
+	})
+	client, session := dialSessionWithConfig(t, operatorvalkey.ClientConfig{
+		Address: server.address(), DialTimeout: time.Second, CommandTimeout: 20 * time.Millisecond,
+	})
+	defer client.Close()
+	defer session.Close()
+
+	_, err := session.TakeControl(context.Background(), "operator-secret")
+	if got := operatorvalkey.ClassifyError(err); got != operatorvalkey.ErrorKindTransport ||
+		!errors.Is(err, operatorvalkey.ErrTransportFailure) {
+		t.Fatalf("таймаут PING классифицирован как %q: %v", got, err)
+	}
+}
+
+func TestRoleMutationsAreSentOnce(t *testing.T) {
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		if command[0] == "REPLICAOF" {
+			return "+OK\r\n", false
+		}
+		return successfulObservationReply(command), false
+	})
+	client, session := dialSession(t, server.address())
+	defer client.Close()
+	defer session.Close()
+
+	if err := session.Promote(context.Background()); err != nil {
+		t.Fatalf("назначить primary: %v", err)
+	}
+	if err := session.Follow(context.Background(), "10.42.0.10", 6379); err != nil {
+		t.Fatalf("назначить upstream: %v", err)
+	}
+	server.mu.Lock()
+	commands := slices.Clone(server.commands)
+	server.mu.Unlock()
+	var roleCommands [][]string
+	for _, command := range commands {
+		if len(command) > 0 && command[0] == "REPLICAOF" {
+			roleCommands = append(roleCommands, command)
+		}
+	}
+	want := [][]string{{"REPLICAOF", "NO", "ONE"}, {"REPLICAOF", "10.42.0.10", "6379"}}
+	if !slices.EqualFunc(roleCommands, want, slices.Equal[[]string]) {
+		t.Fatalf("отправлены неверные команды роли: %v", roleCommands)
+	}
+}
+
+func TestRoleMutationIsNotRetriedAfterLostResponse(t *testing.T) {
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		if command[0] == "REPLICAOF" {
+			return "", true
+		}
+		return successfulObservationReply(command), false
+	})
+	client, session := dialSession(t, server.address())
+	defer client.Close()
+	defer session.Close()
+
+	if err := session.Promote(context.Background()); err == nil {
+		t.Fatal("потерянный ответ REPLICAOF принят как успех")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := server.commandCount("REPLICAOF"); got != 1 {
+		t.Fatalf("REPLICAOF отправлен %d раз", got)
+	}
+}
+
+func TestPasswordRotationPreservesAppStateInCommand(t *testing.T) {
+	hash := strings.Repeat("cd", 32)
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		if len(command) >= 2 && command[0] == "ACL" && command[1] == "SETUSER" {
+			return "+OK\r\n", false
+		}
+		return successfulObservationReply(command), false
+	})
+	client, session := dialSession(t, server.address())
+	defer client.Close()
+	defer session.Close()
+
+	if err := session.RotateAppPassword(context.Background(), hash); err != nil {
+		t.Fatalf("сменить хеш app: %v", err)
+	}
+	server.mu.Lock()
+	commands := slices.Clone(server.commands)
+	server.mu.Unlock()
+	want := []string{"ACL", "SETUSER", "app", "resetpass", "#" + hash}
+	if !slices.ContainsFunc(commands, func(command []string) bool { return slices.Equal(command, want) }) {
+		t.Fatalf("точная команда ротации не отправлена: %v", commands)
+	}
+	for _, command := range commands {
+		if len(command) >= 2 && command[0] == "ACL" && command[1] == "SETUSER" &&
+			(slices.Contains(command, "on") || slices.Contains(command, "off")) {
+			t.Fatalf("ротация изменила состояние app: %v", command)
+		}
+	}
+}
+
+func TestBusyRecoveryFallsBackFromScriptToFunction(t *testing.T) {
+	for name, scriptReply := range map[string]string{
+		"no Lua":        "-NOTBUSY No scripts in execution right now.\r\n",
+		"real Function": "-BUSY Valkey is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newRESPServer(t, func(command []string) (string, bool) {
+				if len(command) >= 2 && command[0] == "SCRIPT" && command[1] == "KILL" {
+					return scriptReply, false
+				}
+				if len(command) >= 2 && command[0] == "FUNCTION" && command[1] == "KILL" {
+					return "+OK\r\n", false
+				}
+				return successfulObservationReply(command), false
+			})
+			client, session := dialSession(t, server.address())
+			defer client.Close()
+			defer session.Close()
+
+			if err := session.StopBusy(context.Background(), "operator-secret"); err != nil {
+				t.Fatalf("остановить Function после ответа SCRIPT KILL: %v", err)
+			}
+			if server.commandCount("SCRIPT") != 1 || server.commandCount("FUNCTION") != 1 {
+				t.Fatalf("неверное число команд KILL: %+v", server.commands)
+			}
+		})
+	}
+}
+
+func TestBusyRecoveryClassifiesUnkillable(t *testing.T) {
+	server := newRESPServer(t, func(command []string) (string, bool) {
+		if len(command) >= 2 && command[0] == "SCRIPT" && command[1] == "KILL" {
+			return "-UNKILLABLE script already executed write commands\r\n", false
+		}
+		return successfulObservationReply(command), false
+	})
+	client, session := dialSession(t, server.address())
+	defer client.Close()
+	defer session.Close()
+
+	if err := session.StopBusy(context.Background(), "operator-secret"); !errors.Is(err, operatorvalkey.ErrUnkillable) {
+		t.Fatalf("UNKILLABLE классифицирован неверно: %v", err)
+	}
+	if server.commandCount("FUNCTION") != 0 {
+		t.Fatal("после UNKILLABLE отправлен FUNCTION KILL")
+	}
+}
+
+func successfulObservationReply(command []string) string {
+	switch command[0] {
+	case "HELLO", "AUTH":
+		return "+OK\r\n"
+	case "PING":
+		return "+PONG\r\n"
+	case "CLIENT":
+		return ":1\r\n"
+	case "ROLE":
+		return "*3\r\n$6\r\nmaster\r\n:0\r\n*0\r\n"
+	case "ACL":
+		return "*4\r\n$5\r\nflags\r\n*1\r\n$3\r\noff\r\n$9\r\npasswords\r\n*0\r\n"
+	case "INFO":
+		body := "# Server\r\nrun_id:process-1\r\n"
+		if len(command) > 1 && command[1] == "replication" {
+			body = "# Replication\r\nrole:master\r\nmaster_replid:history-1\r\n" +
+				"master_replid2:0000000000000000000000000000000000000000\r\n" +
+				"master_repl_offset:0\r\nsecond_repl_offset:-1\r\n"
+		}
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+	default:
+		return "-ERR unexpected command\r\n"
+	}
+}
+
+func TestClientCloseCallsHookOnce(t *testing.T) {
+	server := newRESPServer(t, func([]string) (string, bool) {
+		return "+OK\r\n", false
+	})
+	closed := 0
+	client, err := operatorvalkey.Dial(context.Background(), operatorvalkey.ClientConfig{
+		Address: server.address(), DialTimeout: time.Second, CommandTimeout: time.Second,
+		OnClose: func() { closed++ },
+	})
+	if err != nil {
+		t.Fatalf("подключить клиент: %v", err)
+	}
+
+	client.Close()
+	client.Close()
+	if closed != 1 {
+		t.Fatalf("обработчик закрытия вызван %d раз", closed)
 	}
 }
 

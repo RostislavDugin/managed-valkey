@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
+	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 )
 
 const (
@@ -108,6 +109,34 @@ func configMapData(accepted valkeyv1alpha1.AcceptedConfiguration) map[string]str
 		backlog,
 		ioThreads,
 	)
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		configuration += fmt.Sprintf(
+			"replicaof %s-primary.valkey-%s.svc 6379\n",
+			accepted.Slug,
+			accepted.Slug,
+		)
+	}
+	readiness := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"export REDISCLI_AUTH=\"$(cat /etc/valkey-auth/health-password)\"\n" +
+		fmt.Sprintf(
+			"role=\"$(timeout %d valkey-cli --user health --no-auth-warning --raw ROLE | head -n 1 | tr -d '\\r')\"\n"+
+				"info=\"$(timeout %d valkey-cli --user health --no-auth-warning --raw INFO replication | tr -d '\\r')\"\n",
+			config.ReadinessCommandTimeout,
+			config.ReadinessCommandTimeout,
+		)
+	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
+		readiness += "case \"$role\" in\n" +
+			"  master) printf '%s\\n' \"$info\" | grep -q '^role:master$' ;;\n" +
+			"  slave) printf '%s\\n' \"$info\" | grep -q '^role:slave$' && " +
+			"printf '%s\\n' \"$info\" | grep -q '^master_link_status:up$' && " +
+			"printf '%s\\n' \"$info\" | grep -q '^master_sync_in_progress:0$' ;;\n" +
+			"  *) exit 1 ;;\n" +
+			"esac\n"
+	} else {
+		readiness += "[ \"$role\" = master ]\n" +
+			"printf '%s\\n' \"$info\" | grep -q '^role:master$'\n"
+	}
 
 	return map[string]string{
 		valkeyConfigKey: configuration,
@@ -116,14 +145,18 @@ func configMapData(accepted valkeyv1alpha1.AcceptedConfiguration) map[string]str
 			"umask 077\n" +
 			"cp /etc/valkey-config/valkey.conf /run/valkey/valkey.conf\n" +
 			"printf 'primaryuser replica\\nprimaryauth %s\\n' \"$(cat /etc/valkey-auth/replica-password)\" >> /run/valkey/valkey.conf\n" +
-			"exec valkey-server /run/valkey/valkey.conf\n",
-		readinessScriptKey: "#!/bin/sh\n" +
-			"set -eu\n" +
-			"export REDISCLI_AUTH=\"$(cat /etc/valkey-auth/health-password)\"\n" +
-			"role=\"$(valkey-cli --user health --no-auth-warning --raw ROLE | head -n 1 | tr -d '\\r')\"\n" +
-			"info=\"$(valkey-cli --user health --no-auth-warning --raw INFO replication | tr -d '\\r')\"\n" +
-			"[ \"$role\" = master ]\n" +
-			"printf '%s\\n' \"$info\" | grep -q '^role:master$'\n",
+			"valkey-server /run/valkey/valkey.conf &\n" +
+			"valkey_pid=$!\n" +
+			"trap 'kill -TERM \"$valkey_pid\" 2>/dev/null || true' TERM INT\n" +
+			"set +e\n" +
+			"wait \"$valkey_pid\"\n" +
+			"status=$?\n" +
+			"if kill -0 \"$valkey_pid\" 2>/dev/null; then\n" +
+			"  wait \"$valkey_pid\"\n" +
+			"  status=$?\n" +
+			"fi\n" +
+			"exit \"$status\"\n",
+		readinessScriptKey: readiness,
 	}
 }
 

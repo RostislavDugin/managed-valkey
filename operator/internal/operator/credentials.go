@@ -76,7 +76,9 @@ func (r *ValkeyInstanceReconciler) reconcileCredentials(
 	if len(secret.Data[valkeyv1alpha1.UsersACLKey]) > 0 &&
 		!bytes.Equal(secret.Data[valkeyv1alpha1.UsersACLKey], expectedACL) &&
 		instance.Status.CredentialsInitialized {
-		return r.credentialsFailure(ctx, instance, "ACLInvalid", true)
+		if !validACLBeforeRotation(instance, secret.Data, credentials, expectedACL) {
+			return r.credentialsFailure(ctx, instance, "ACLInvalid", true)
+		}
 	}
 	credentials.UsersACL = expectedACL
 
@@ -110,6 +112,32 @@ func (r *ValkeyInstanceReconciler) reconcileCredentials(
 	}
 
 	return requeueIf(changed || statusChanged), nil
+}
+
+func validACLBeforeRotation(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	data map[string][]byte,
+	credentials *valkeyv1alpha1.ServiceCredentials,
+	targetACL []byte,
+) bool {
+	rotation := instance.Status.CredentialRotation
+	if rotation == nil || rotation.TargetVersion != instance.Status.AcceptedConfiguration.PasswordVersion {
+		return false
+	}
+	if bytes.Equal(data[valkeyv1alpha1.UsersACLKey], targetACL) {
+		return true
+	}
+	previousHash, err := valkeyv1alpha1.ParseAppPasswordHash(data, rotation.PreviousVersion)
+	if err != nil {
+		return false
+	}
+	previousACL := valkeyclient.InitialACL(
+		previousHash,
+		string(credentials.OperatorPassword),
+		string(credentials.ReplicaPassword),
+		string(credentials.HealthPassword),
+	)
+	return bytes.Equal(data[valkeyv1alpha1.UsersACLKey], previousACL)
 }
 
 func credentialRecoveryReason(reason string) bool {

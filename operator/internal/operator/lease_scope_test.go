@@ -68,6 +68,17 @@ func TestLeaseScopeRequiresLeaderElection(t *testing.T) {
 	}
 }
 
+func TestLeaseScopeRemovesClosedConnection(t *testing.T) {
+	scope := NewLeaseScope()
+	connection := &trackedConnection{closed: make(chan struct{})}
+	scope.connections[connection] = struct{}{}
+
+	scope.removeConnection(connection)
+	if len(scope.connections) != 0 {
+		t.Fatalf("закрытое соединение осталось в LeaseScope: %d", len(scope.connections))
+	}
+}
+
 type trackedConnection struct {
 	once   sync.Once
 	closed chan struct{}

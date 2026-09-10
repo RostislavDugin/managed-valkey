@@ -9,13 +9,18 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
@@ -50,6 +55,40 @@ func TestConditionsMustMatchCurrentGeneration(t *testing.T) {
 	}
 }
 
+func TestReadOnlyRouteAllowsOnlyMissingReadyEndpoints(t *testing.T) {
+	namespace := gatewayv1.Namespace("valkey-system")
+	section := gatewayv1.SectionName("cache-a1b2c3-ro")
+	route := &gatewayv1alpha2.TCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Generation: 4},
+		Status: gatewayv1alpha2.TCPRouteStatus{
+			RouteStatus: gatewayv1.RouteStatus{Parents: []gatewayv1.RouteParentStatus{{
+				ParentRef: gatewayv1.ParentReference{
+					Name: gatewayv1.ObjectName(gatewayName), Namespace: &namespace, SectionName: &section,
+				},
+				Conditions: []metav1.Condition{
+					{Type: "Accepted", Status: metav1.ConditionTrue, ObservedGeneration: 4},
+					{
+						Type: "ResolvedRefs", Status: metav1.ConditionFalse, Reason: "EndpointsNotFound",
+						ObservedGeneration: 4,
+					},
+				},
+			}}},
+		},
+	}
+	if !routeAcceptedWithoutReadyEndpoints(route, "valkey-system", "cache-a1b2c3-ro") {
+		t.Fatal("принятый маршрут без готовых endpoints отклонён")
+	}
+	route.Status.Parents[0].Conditions[1].Reason = "BackendNotFound"
+	if routeAcceptedWithoutReadyEndpoints(route, "valkey-system", "cache-a1b2c3-ro") {
+		t.Fatal("ошибка ссылки backend принята как отсутствие готовых реплик")
+	}
+	route.Status.Parents[0].Conditions[1].Reason = "EndpointsNotFound"
+	route.Status.Parents[0].Conditions[1].ObservedGeneration = 3
+	if routeAcceptedWithoutReadyEndpoints(route, "valkey-system", "cache-a1b2c3-ro") {
+		t.Fatal("устаревший статус маршрута принят")
+	}
+}
+
 func TestNetworkFingerprintContainsOnlyInstanceSettings(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	first := testNetworkPrerequisites(now)
@@ -71,12 +110,43 @@ func TestNetworkFingerprintContainsOnlyInstanceSettings(t *testing.T) {
 	if networkFingerprint(first) == networkFingerprint(second) {
 		t.Fatal("изменение сертификата не изменило отпечаток")
 	}
+	second = first
+	readOnly := first
+	readOnly.Hostname = "cache-a1b2c3-ro.valkey.localhost"
+	readOnly.BackendService = "cache-a1b2c3-replicas"
+	second.ReadOnly = &readOnly
+	if networkFingerprint(first) == networkFingerprint(second) {
+		t.Fatal("добавление маршрута реплик не изменило отпечаток")
+	}
+}
+
+func TestTCPRouteServerDefaultsDoNotCauseRepeatedPatch(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	desired := desiredTCPRoute(instance, "valkey-system", networkEndpoints(instance)[0])
+	current := desired.DeepCopy()
+	current.Spec.Rules[0].BackendRefs[0].Weight = ptr.To[int32](1)
+	scheme := NewScheme()
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(current).Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, Scheme: scheme}
+
+	changed, err := reconciler.ensureTCPRoute(ctx, desired)
+	if err != nil || changed {
+		t.Fatalf("серверное значение TCPRoute вызвало повторный PATCH: changed=%t error=%v", changed, err)
+	}
+	observed := &gatewayv1alpha2.TCPRoute{}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(current), observed); err != nil ||
+		observed.Spec.Rules[0].BackendRefs[0].Weight == nil {
+		t.Fatalf("серверное значение TCPRoute потеряно: route=%+v error=%v", observed.Spec, err)
+	}
 }
 
 func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
 	verifiedAt := metav1.NewTime(time.Date(2026, 9, 8, 11, 0, 0, 0, time.UTC))
 	processes := []valkeyv1alpha1.EnvoyProcessStatus{{
 		PodUID: "envoy-1", NodeName: "worker-1", NodeUID: "node-1", ContainerID: "containerd://1",
+	}, {
+		PodUID: "envoy-2", NodeName: "worker-2", NodeUID: "node-2", ContainerID: "containerd://2",
 	}}
 	instance := &valkeyv1alpha1.ValkeyInstance{ObjectMeta: metav1.ObjectMeta{Generation: 3}}
 	status := valkeyv1alpha1.ValkeyInstanceStatus{Network: &valkeyv1alpha1.NetworkStatus{
@@ -103,6 +173,24 @@ func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
 	if !status.Network.VerifiedAt.Equal(&verifiedAt) {
 		t.Fatalf("переиспользованный снимок изменил verifiedAt: %v", status.Network.VerifiedAt)
 	}
+	capturedAt := now.Add(time.Minute)
+	applyNetworkVerification(
+		instance,
+		&status,
+		envoyVerification{
+			status:     valkeyv1alpha1.NetworkVerificationVerified,
+			reason:     "EnvoyVerified",
+			processes:  processes,
+			capturedAt: capturedAt,
+		},
+		"same",
+		"EnvoyVerified",
+		"подтверждено",
+		capturedAt.Add(time.Minute),
+	)
+	if !status.Network.VerifiedAt.Time.Equal(capturedAt) {
+		t.Fatalf("новый фоновый снимок не изменил verifiedAt: %v", status.Network.VerifiedAt)
+	}
 
 	applyNetworkVerification(
 		instance,
@@ -114,13 +202,70 @@ func TestNetworkVerificationKeepsLastSuccessWithoutNewSnapshot(t *testing.T) {
 		"same",
 		"EnvoyAdminUnavailable",
 		"admin API недоступен",
-		now,
+		capturedAt.Add(2*time.Minute),
 	)
 	if status.Network.VerificationStatus != valkeyv1alpha1.NetworkVerificationUnknown ||
-		!status.Network.VerifiedAt.Equal(&verifiedAt) ||
+		!status.Network.VerifiedAt.Time.Equal(capturedAt) ||
 		status.Network.VerifiedFingerprint != "same" ||
 		!sameEnvoyProcesses(status.Network.EnvoyProcesses, processes) {
 		t.Fatalf("ошибка Envoy стёрла последнее подтверждение: %+v", status.Network)
+	}
+	if !networkVerificationAllowsOperations(status.Network, envoyVerification{
+		status:    valkeyv1alpha1.NetworkVerificationUnknown,
+		reason:    "EnvoyAdminUnavailable",
+		processes: processes,
+	}, "same") {
+		t.Fatal("неизменный проверенный состав заблокирован из-за недоступного admin API")
+	}
+	status.Initialized = true
+	status.Phase = valkeyv1alpha1.InstancePhaseRunning
+	coldCache := envoyVerification{
+		status: valkeyv1alpha1.NetworkVerificationPending, reason: "EnvoyRefreshPending", processes: processes,
+	}
+	applyNetworkVerification(
+		instance,
+		&status,
+		coldCache,
+		"same",
+		coldCache.reason,
+		"снимок обновляется",
+		capturedAt.Add(3*time.Minute),
+	)
+	if status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
+		!networkVerificationAllowsOperations(status.Network, coldCache, "same") {
+		t.Fatalf("пустой кэш Envoy изменил доступность исправного инстанса: %+v", status)
+	}
+	changedProcesses := slices.Clone(processes)
+	changedProcesses[0].ContainerID = "containerd://replacement"
+	changedCache := envoyVerification{
+		status: valkeyv1alpha1.NetworkVerificationPending,
+		reason: "EnvoyRefreshPending", processes: changedProcesses,
+	}
+	applyNetworkVerification(
+		instance,
+		&status,
+		changedCache,
+		"same",
+		changedCache.reason,
+		"новый процесс проверяется",
+		capturedAt.Add(4*time.Minute),
+	)
+	if status.Phase != valkeyv1alpha1.InstancePhaseRunning {
+		t.Fatalf("проверка нового процесса Envoy объявлена подтверждённой потерей: %+v", status)
+	}
+	if networkVerificationAllowsOperations(status.Network, envoyVerification{
+		status:    valkeyv1alpha1.NetworkVerificationUnknown,
+		reason:    "EnvoyAdminUnavailable",
+		processes: changedProcesses,
+	}, "same") {
+		t.Fatal("новый состав Envoy допущен по прежнему подтверждению")
+	}
+	if networkVerificationAllowsOperations(status.Network, envoyVerification{
+		status:    valkeyv1alpha1.NetworkVerificationUnknown,
+		reason:    "EnvoyFormatUnknown",
+		processes: processes,
+	}, "same") {
+		t.Fatal("неизвестный формат Envoy допущен по прежнему подтверждению")
 	}
 }
 

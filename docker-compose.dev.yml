@@ -85,6 +85,19 @@ services:
     volumes:
       - k3s-agent-2-node:/etc/rancher/node
 
+  k3s-agent-3:
+    <<: *k3s-agent
+    profiles:
+      - operator-four-node
+    command:
+      - agent
+      - --node-name=k3s-agent-3
+    networks:
+      default:
+        ipv4_address: 172.27.0.6
+    volumes:
+      - k3s-agent-3-node:/etc/rancher/node
+
 networks:
   default:
     ipam:
@@ -96,3 +109,4 @@ volumes:
   k3s-server-data:
   k3s-agent-1-node:
   k3s-agent-2-node:
+  k3s-agent-3-node:

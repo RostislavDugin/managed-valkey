@@ -53,4 +53,23 @@ for manifest in deploy/dev/rbac/operator.yaml deploy/prod/rbac.yaml; do
     fi
 done
 
+regular_config_files=$(cd "$repo_root" && go list -f '{{range .GoFiles}}{{println .}}{{end}}' \
+    ./operator/internal/config)
+integration_config_files=$(cd "$repo_root" && go list -tags=integration \
+    -f '{{range .GoFiles}}{{println .}}{{end}}' ./operator/internal/config)
+rg -qx 'timings.go' <<<"$regular_config_files"
+if rg -qx 'timings_integration.go' <<<"$regular_config_files"; then
+    echo "проверка сборки оператора: integration-профиль попал в обычную сборку" >&2
+    exit 1
+fi
+rg -qx 'timings_integration.go' <<<"$integration_config_files"
+if rg -qx 'timings.go' <<<"$integration_config_files"; then
+    echo "проверка сборки оператора: рабочий профиль попал в integration-сборку" >&2
+    exit 1
+fi
+if ! rg -qx 'ARG GO_BUILD_TAGS' "$repo_root/operator/Dockerfile"; then
+    echo "проверка сборки оператора: Dockerfile задаёт build tags по умолчанию" >&2
+    exit 1
+fi
+
 echo "проверка генерации оператора: расхождений нет"

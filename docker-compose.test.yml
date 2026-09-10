@@ -24,3 +24,10 @@ services:
         ipv4_address: ${K3S_AGENT_2_IP:?задайте K3S_AGENT_2_IP}
     ports:
       - "127.0.0.1::31379"
+
+  k3s-agent-3:
+    networks:
+      default:
+        ipv4_address: ${K3S_AGENT_3_IP:?задайте K3S_AGENT_3_IP}
+    ports:
+      - "127.0.0.1::31379"

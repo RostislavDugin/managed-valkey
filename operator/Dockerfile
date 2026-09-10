@@ -11,11 +11,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 FROM deps AS build
+ARG GO_BUILD_TAGS
 COPY operator ./operator
 COPY internal ./internal
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/operator ./operator/cmd/operator
+    go build -tags="${GO_BUILD_TAGS}" -trimpath -ldflags="-s -w" -o /out/operator ./operator/cmd/operator
 
 FROM ${RUNTIME_IMAGE} AS runtime
 COPY --from=build /out/operator /usr/local/bin/operator

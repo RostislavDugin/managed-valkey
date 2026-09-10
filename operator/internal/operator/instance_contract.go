@@ -22,9 +22,18 @@ const (
 var (
 	errIncompleteIntent = errors.New("намерение создания неполно")
 	errInvalidIdentity  = errors.New("идентичность инстанса не совпадает")
-	errUnsupportedMode  = errors.New("режим пока не поддерживается")
 	errInvalidIntent    = errors.New("намерение создания некорректно")
 )
+
+type configurationValidationError struct {
+	conditionType string
+	reason        string
+	message       string
+}
+
+func (e *configurationValidationError) Error() string {
+	return e.message
+}
 
 func acceptedConfiguration(
 	instance *valkeyv1alpha1.ValkeyInstance,
@@ -39,11 +48,7 @@ func acceptedConfiguration(
 		spec.PasswordVersion == 0 || spec.DesiredGeneration == 0 {
 		return nil, errIncompleteIntent
 	}
-	if spec.Mode != valkeyv1alpha1.ValkeyModeSingle {
-		if spec.Mode == valkeyv1alpha1.ValkeyModeHA {
-			return nil, errUnsupportedMode
-		}
-
+	if spec.Mode != valkeyv1alpha1.ValkeyModeSingle && spec.Mode != valkeyv1alpha1.ValkeyModeHA {
 		return nil, errInvalidIntent
 	}
 	if !validSize(spec.VCPU, spec.RAMGB) {
@@ -177,4 +182,91 @@ func configurationDifferences(
 	}
 
 	return differences
+}
+
+func nextAcceptedConfiguration(
+	spec valkeyv1alpha1.ValkeyInstanceSpec,
+	accepted valkeyv1alpha1.AcceptedConfiguration,
+) (*valkeyv1alpha1.AcceptedConfiguration, error) {
+	if spec.Mode == "" || spec.VCPU == 0 || spec.RAMGB == 0 || spec.PublicPort == 0 || spec.Whitelist == nil ||
+		spec.PasswordVersion == 0 || spec.DesiredGeneration == 0 {
+		return nil, invalidConfiguration("MissingRequiredFields", "новое поколение конфигурации неполно")
+	}
+	if spec.Mode != valkeyv1alpha1.ValkeyModeSingle && spec.Mode != valkeyv1alpha1.ValkeyModeHA {
+		return nil, invalidConfiguration("InvalidMode", "новое поколение содержит неизвестный режим")
+	}
+	if !validSize(spec.VCPU, spec.RAMGB) {
+		return nil, invalidConfiguration("InvalidSize", "новое поколение содержит недопустимый размер")
+	}
+	whitelist, err := normalizedWhitelist(spec.Whitelist)
+	if err != nil {
+		return nil, invalidConfiguration("InvalidWhitelist", "новое поколение содержит некорректный whitelist")
+	}
+
+	candidate := &valkeyv1alpha1.AcceptedConfiguration{
+		InstanceID:        spec.InstanceID,
+		Slug:              spec.Slug,
+		Mode:              spec.Mode,
+		VCPU:              spec.VCPU,
+		RAMGB:             spec.RAMGB,
+		PublicPort:        spec.PublicPort,
+		Whitelist:         whitelist,
+		PasswordVersion:   spec.PasswordVersion,
+		DesiredGeneration: spec.DesiredGeneration,
+	}
+	if spec.DesiredGeneration < accepted.DesiredGeneration {
+		return nil, invalidConfiguration("StaleDesiredGeneration", "desiredGeneration меньше принятого поколения")
+	}
+	if spec.DesiredGeneration == accepted.DesiredGeneration {
+		return nil, invalidConfiguration(
+			"AcceptedGenerationChanged",
+			"содержимое принятого desiredGeneration изменено на месте",
+		)
+	}
+	if spec.PasswordVersion < accepted.PasswordVersion {
+		return nil, invalidConfiguration("PasswordVersionRollback", "passwordVersion меньше принятой версии")
+	}
+
+	unsupported := make([]string, 0, 5)
+	if candidate.InstanceID != accepted.InstanceID {
+		unsupported = append(unsupported, "instanceId")
+	}
+	if candidate.Slug != accepted.Slug {
+		unsupported = append(unsupported, "slug")
+	}
+	if candidate.Mode != accepted.Mode {
+		unsupported = append(unsupported, "mode")
+	}
+	if candidate.PublicPort != accepted.PublicPort {
+		unsupported = append(unsupported, "publicPort")
+	}
+	if candidate.Whitelist.IsEnabled != accepted.Whitelist.IsEnabled ||
+		!slices.Equal(candidate.Whitelist.CIDRs, accepted.Whitelist.CIDRs) {
+		unsupported = append(unsupported, "whitelist")
+	}
+	if len(unsupported) > 0 {
+		return nil, &configurationValidationError{
+			conditionType: conditionTypeUnsupportedChange,
+			reason:        "UnsupportedFields",
+			message:       "не поддерживается изменение полей: " + strings.Join(unsupported, ", "),
+		}
+	}
+
+	return candidate, nil
+}
+
+func invalidConfiguration(reason, message string) error {
+	return &configurationValidationError{
+		conditionType: conditionTypeInvalidIntent,
+		reason:        reason,
+		message:       message,
+	}
+}
+
+func acceptedConfigurationComplete(
+	status valkeyv1alpha1.ValkeyInstanceStatus,
+	accepted valkeyv1alpha1.AcceptedConfiguration,
+) bool {
+	return status.ObservedGeneration == accepted.DesiredGeneration &&
+		status.Failover == nil && status.Rollout == nil && status.CredentialRotation == nil
 }

@@ -12,11 +12,13 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
+	"github.com/RostislavDugin/managed-valkey/operator/internal/config"
 	operatorvalkey "github.com/RostislavDugin/managed-valkey/operator/internal/valkey"
 )
 
@@ -69,6 +71,15 @@ func TestTerminatedContainerIsSavedBeforePodFinalizerIsRemoved(t *testing.T) {
 	if observedPod.DeletionTimestamp.IsZero() {
 		t.Fatal("Pod не получил deletionTimestamp")
 	}
+	if lostDeleteResponse.options == nil || lostDeleteResponse.options.GracePeriodSeconds == nil ||
+		*lostDeleteResponse.options.GracePeriodSeconds != config.ProcessDeletionGracePeriod ||
+		lostDeleteResponse.options.Preconditions == nil ||
+		lostDeleteResponse.options.Preconditions.UID == nil ||
+		*lostDeleteResponse.options.Preconditions.UID != pod.UID ||
+		lostDeleteResponse.options.Preconditions.ResourceVersion == nil ||
+		*lostDeleteResponse.options.Preconditions.ResourceVersion != pod.ResourceVersion {
+		t.Fatalf("DELETE потерял срок или предусловия процесса: %+v", lostDeleteResponse.options)
+	}
 
 	result, err = newReconciler().reconcileProcess(ctx, instance)
 	if err != nil || result.IsZero() {
@@ -81,7 +92,8 @@ func TestTerminatedContainerIsSavedBeforePodFinalizerIsRemoved(t *testing.T) {
 
 type lostDeleteResponseClient struct {
 	client.Client
-	once sync.Once
+	once    sync.Once
+	options *metav1.DeleteOptions
 }
 
 func (c *lostDeleteResponseClient) Delete(
@@ -89,6 +101,8 @@ func (c *lostDeleteResponseClient) Delete(
 	object client.Object,
 	options ...client.DeleteOption,
 ) error {
+	resolved := (&client.DeleteOptions{}).ApplyOptions(options).AsDeleteOptions()
+	c.options = resolved.DeepCopy()
 	lost := false
 	c.once.Do(func() { lost = true })
 	if err := c.Client.Delete(ctx, object, options...); err != nil {
@@ -118,9 +132,11 @@ func TestLastStateOfDifferentContainerDoesNotProveOldProcessStopped(t *testing.T
 		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
 		WithObjects(instance, pod, node, secret).
 		Build()
+	recorder := events.NewFakeRecorder(1)
 	reconciler := &ValkeyInstanceReconciler{
-		Client: k8s,
-		InspectProcess: func(context.Context, string, string, string) (operatorvalkey.ProcessState, error) {
+		Client:   k8s,
+		Recorder: recorder,
+		InspectProcess: func(context.Context, string, string, string, bool) (operatorvalkey.ProcessState, error) {
 			return operatorvalkey.ProcessState{
 				Role: "primary", RunID: "run-c", AppEnabled: true,
 				AppPasswordHashes: []string{strings.Repeat("ab", 32)},
@@ -133,8 +149,20 @@ func TestLastStateOfDifferentContainerDoesNotProveOldProcessStopped(t *testing.T
 	}
 	condition := apimeta.FindStatusCondition(instance.Status.Conditions, conditionTypeRecoveryRequired)
 	if condition == nil || condition.Reason != "TerminationProofLost" ||
-		instance.Status.Nodes[0].Termination != nil || instance.Status.Reason != "FENCING_REQUIRED" {
+		instance.Status.Nodes[0].RunID != "run-c" || instance.Status.Nodes[0].Termination != nil ||
+		len(instance.Status.PreviousProcesses) != 1 ||
+		instance.Status.PreviousProcesses[0].ContainerID != "containerd://process-a" ||
+		instance.Status.PreviousProcesses[0].Termination != nil ||
+		instance.Status.Reason != "FENCING_REQUIRED" {
 		t.Fatalf("lastState чужого процесса принят как доказательство: %+v", instance.Status)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "TerminationProofLost") {
+			t.Fatalf("неверный Event потери доказательства: %q", event)
+		}
+	default:
+		t.Fatal("потеря доказательства не создала Event")
 	}
 }
 
@@ -180,6 +208,158 @@ func TestNodeDeletionRequiresSavedNameAndUID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestND01DeletedNodeProvesStoppedPodStillHeldByFinalizer(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, _, _ := processObservationObjects()
+	pod.Finalizers = []string{processFinalizer}
+	instance.Status.Initialized = true
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{testObservedNode(pod)}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
+		WithObjects(instance, pod).
+		Build()
+	recorder := events.NewFakeRecorder(1)
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, APIReader: k8s, Recorder: recorder}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("сохранить node_deleted: result=%+v error=%v", result, err)
+	}
+	if instance.Status.Nodes[0].Termination == nil ||
+		instance.Status.Nodes[0].Termination.Evidence != "node_deleted" {
+		t.Fatalf("удаление Node не стало доказательством: %+v", instance.Status.Nodes[0])
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "ProcessNodeDeleted") {
+			t.Fatalf("неверный Event удаления Node: %q", event)
+		}
+	default:
+		t.Fatal("удаление Node не создало Event")
+	}
+	result, err = reconciler.reconcileProcess(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("запросить удаление Pod после node_deleted: result=%+v error=%v", result, err)
+	}
+	result, err = reconciler.reconcileProcess(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("снять finalizer Pod после node_deleted: result=%+v error=%v", result, err)
+	}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), &corev1.Pod{}); err == nil {
+		t.Fatal("Pod остался после доказательства остановки")
+	}
+}
+
+func TestCT06DeletingPodWithoutFinalizerDoesNotBlockFailover(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, node, _ := processObservationObjects()
+	deletingAt := metav1.Now()
+	pod.DeletionTimestamp = &deletingAt
+	pod.Finalizers = nil
+	process := testObservedNode(pod)
+	process.Termination = &valkeyv1alpha1.ProcessTermination{
+		Reason: "ManualFencing", FinishedAt: metav1.Now(), Evidence: "manual_fencing",
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{process}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
+		WithObjects(instance, node).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{
+		Client: &deletingPodClient{Client: k8s, pod: pod}, APIReader: k8s,
+	}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err != nil || !result.IsZero() {
+		t.Fatalf("удаляющийся Pod без finalizer остановил reconcile: result=%+v error=%v", result, err)
+	}
+}
+
+func TestCT06ManualFencingForceDeletesStoppedPod(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, node, _ := processObservationObjects()
+	pod.Finalizers = []string{processFinalizer}
+	process := testObservedNode(pod)
+	process.Termination = &valkeyv1alpha1.ProcessTermination{
+		Reason: "ManualFencing", FinishedAt: metav1.Now(), Evidence: "manual_fencing",
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{process}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
+		WithObjects(instance, pod, node).
+		Build()
+	deleteClient := &lostDeleteResponseClient{Client: k8s}
+	reconciler := &ValkeyInstanceReconciler{Client: deleteClient, APIReader: k8s}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err == nil || !result.IsZero() {
+		t.Fatalf("потерянный ответ принудительного DELETE: result=%+v error=%v", result, err)
+	}
+	if deleteClient.options == nil || deleteClient.options.GracePeriodSeconds == nil ||
+		*deleteClient.options.GracePeriodSeconds != 0 {
+		t.Fatalf("ручное fencing не сократило grace period: %+v", deleteClient.options)
+	}
+}
+
+func TestDeletionRecordsTerminatedReplacementAfterProvenOldProcess(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, node, _ := processObservationObjects()
+	pod.Finalizers = []string{processFinalizer}
+	pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: metav1.Now()},
+	}
+	oldProcess := testObservedNode(pod)
+	oldProcess.PodUID = "old-pod"
+	oldProcess.ContainerID = "containerd://old"
+	oldProcess.RunID = "old-run"
+	oldProcess.Termination = &valkeyv1alpha1.ProcessTermination{
+		Reason: "ManualFencing", FinishedAt: metav1.Now(), Evidence: "manual_fencing",
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{oldProcess}
+	instance.Status.Deletion = &valkeyv1alpha1.DeletionStatus{
+		Stage: valkeyv1alpha1.DeletionStageVerifying, StartedAt: metav1.Now(),
+	}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
+		WithObjects(instance, pod, node).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, APIReader: k8s}
+
+	result, err := reconciler.reconcileProcess(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("сохранить завершение новой инкарнации: result=%+v error=%v", result, err)
+	}
+	if len(instance.Status.PreviousProcesses) != 1 ||
+		instance.Status.PreviousProcesses[0].PodUID != oldProcess.PodUID ||
+		instance.Status.Nodes[0].PodUID != string(pod.UID) ||
+		instance.Status.Nodes[0].Termination == nil ||
+		instance.Status.Nodes[0].Termination.Evidence != "container_status" {
+		t.Fatalf("история удаления сохранена неверно: %+v", instance.Status)
+	}
+}
+
+type deletingPodClient struct {
+	client.Client
+	pod *corev1.Pod
+}
+
+func (c *deletingPodClient) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	object client.Object,
+	options ...client.GetOption,
+) error {
+	if pod, ok := object.(*corev1.Pod); ok && key == client.ObjectKeyFromObject(c.pod) {
+		*pod = *c.pod.DeepCopy()
+		return nil
+	}
+	return c.Client.Get(ctx, key, object, options...)
 }
 
 type errorReader struct {

@@ -214,6 +214,39 @@ func TestDeletionWaitsWhenPodDisappearsWithoutProof(t *testing.T) {
 	}
 }
 
+func TestDeletionCopiesKnownTerminationToDuplicateHistory(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Finalizers = []string{instanceFinalizer}
+	instance.DeletionTimestamp = ptrTime(time.Now())
+	instance.Status.Deletion = &valkeyv1alpha1.DeletionStatus{
+		Stage: valkeyv1alpha1.DeletionStageVerifying, StartedAt: metav1.Now(),
+	}
+	current := failoverNode(0, valkeyv1alpha1.NodeRolePrimary, "history", 10, nil)
+	current.Termination = &valkeyv1alpha1.ProcessTermination{
+		Reason: "Completed", FinishedAt: metav1.Now(), Evidence: "container_status",
+	}
+	previous := current
+	previous.Termination = nil
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{current}
+	instance.Status.PreviousProcesses = []valkeyv1alpha1.NodeStatus{previous}
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, APIReader: k8s}
+
+	result, err := reconciler.reconcileDeletion(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("перенести известное завершение в историю: result=%+v error=%v", result, err)
+	}
+	if instance.Status.PreviousProcesses[0].Termination == nil ||
+		instance.Status.PreviousProcesses[0].Termination.Evidence != "container_status" {
+		t.Fatalf("известное завершение не перенесено: %+v", instance.Status.PreviousProcesses)
+	}
+}
+
 func TestDeletionBeforeWorkloadDoesNotCreateResources(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -294,6 +327,29 @@ func TestDeletionContinuesWhenAppProcessIsUnavailable(t *testing.T) {
 	}
 	if instance.Status.Deletion.Stage != valkeyv1alpha1.DeletionStageStopping {
 		t.Fatalf("удаление не перешло к остановке: %+v", instance.Status.Deletion)
+	}
+}
+
+func TestDeletionDoesNotStopWorkloadWhenSecretCannotBeRead(t *testing.T) {
+	ctx := context.Background()
+	instance, pod, _, _ := processObservationObjects()
+	instance.Finalizers = []string{instanceFinalizer}
+	instance.DeletionTimestamp = ptrTime(time.Now())
+	instance.Status.Deletion = &valkeyv1alpha1.DeletionStatus{
+		Stage: valkeyv1alpha1.DeletionStageDisablingApp, StartedAt: metav1.Now(),
+	}
+	pod.Labels = workloadLabels(instance.Name)
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, pod).
+		Build()
+
+	result, err := (&ValkeyInstanceReconciler{Client: k8s}).reconcileDeletion(ctx, instance)
+	if err == nil || !result.IsZero() ||
+		instance.Status.Deletion.Stage != valkeyv1alpha1.DeletionStageDisablingApp {
+		t.Fatalf("удаление продолжилось без Secret: result=%+v stage=%s error=%v",
+			result, instance.Status.Deletion.Stage, err)
 	}
 }
 

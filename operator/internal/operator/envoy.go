@@ -41,39 +41,85 @@ type EnvoyAdminSnapshot struct {
 type EnvoySnapshotReader func(context.Context, corev1.Pod) (EnvoyAdminSnapshot, error)
 
 type EnvoySnapshotCache struct {
-	mu        sync.Mutex
-	captured  time.Time
-	processes []valkeyv1alpha1.EnvoyProcessStatus
-	snapshots []EnvoyAdminSnapshot
+	mu            sync.Mutex
+	captured      time.Time
+	attempted     time.Time
+	processes     []valkeyv1alpha1.EnvoyProcessStatus
+	snapshots     []EnvoyAdminSnapshot
+	failureReason string
+	refreshing    bool
+	refreshingFor []valkeyv1alpha1.EnvoyProcessStatus
+	verifiedFor   string
+	verifiedAt    time.Time
+	verifiedState valkeyv1alpha1.NetworkVerificationStatus
+	verifiedCause string
 }
 
 func NewEnvoySnapshotCache() *EnvoySnapshotCache {
 	return &EnvoySnapshotCache{}
 }
 
+type envoySnapshotState struct {
+	snapshots     []EnvoyAdminSnapshot
+	captured      time.Time
+	fresh         bool
+	found         bool
+	failureReason string
+	refreshing    bool
+	refreshDue    bool
+}
+
 func (c *EnvoySnapshotCache) load(
 	now time.Time,
 	targets []envoyTarget,
-) ([]EnvoyAdminSnapshot, bool) {
+) envoySnapshotState {
 	if c == nil {
-		return nil, false
+		return envoySnapshotState{}
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.captured.IsZero() || now.Before(c.captured) ||
-		now.Sub(c.captured) >= config.NetworkVerifyInterval ||
-		!sameEnvoyProcesses(c.processes, envoyProcessStatuses(targets)) {
-		return nil, false
+	processes := envoyProcessStatuses(targets)
+	state := envoySnapshotState{
+		refreshing: c.refreshing && sameEnvoyProcesses(c.refreshingFor, processes),
 	}
+	if !sameEnvoyProcesses(c.processes, processes) {
+		state.refreshDue = true
+		return state
+	}
+	state.found = len(c.snapshots) == len(targets) && len(c.snapshots) > 0
+	state.snapshots = slices.Clone(c.snapshots)
+	state.captured = c.captured
+	state.failureReason = c.failureReason
+	state.fresh = state.found && c.failureReason == "" && !c.captured.IsZero() &&
+		!now.Before(c.captured) && now.Sub(c.captured) < config.NetworkVerifyInterval
+	state.refreshDue = c.attempted.IsZero() || now.Before(c.attempted) ||
+		now.Sub(c.attempted) >= config.NetworkVerifyInterval
 
-	return slices.Clone(c.snapshots), true
+	return state
 }
 
-func (c *EnvoySnapshotCache) store(
+func (c *EnvoySnapshotCache) beginRefresh(targets []envoyTarget) bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.refreshing {
+		return false
+	}
+	c.refreshing = true
+	c.refreshingFor = envoyProcessStatuses(targets)
+
+	return true
+}
+
+func (c *EnvoySnapshotCache) finishRefresh(
 	now time.Time,
 	targets []envoyTarget,
 	snapshots []EnvoyAdminSnapshot,
+	failureReason string,
 ) {
 	if c == nil {
 		return
@@ -81,9 +127,63 @@ func (c *EnvoySnapshotCache) store(
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.captured = now
-	c.processes = envoyProcessStatuses(targets)
-	c.snapshots = slices.Clone(snapshots)
+	processes := envoyProcessStatuses(targets)
+	if !c.refreshing || !sameEnvoyProcesses(c.refreshingFor, processes) {
+		return
+	}
+	c.refreshing = false
+	c.refreshingFor = nil
+	compositionChanged := !sameEnvoyProcesses(c.processes, processes)
+	c.attempted = now
+	c.processes = processes
+	c.failureReason = failureReason
+	if failureReason == "" {
+		c.captured = now
+		c.snapshots = slices.Clone(snapshots)
+		c.verifiedFor = ""
+		c.verifiedAt = time.Time{}
+		c.verifiedState = ""
+		c.verifiedCause = ""
+	} else if compositionChanged {
+		c.captured = time.Time{}
+		c.snapshots = nil
+		c.verifiedFor = ""
+		c.verifiedAt = time.Time{}
+		c.verifiedState = ""
+		c.verifiedCause = ""
+	}
+}
+
+func (c *EnvoySnapshotCache) loadVerification(
+	fingerprint string,
+	capturedAt time.Time,
+) (valkeyv1alpha1.NetworkVerificationStatus, string, bool) {
+	if c == nil || capturedAt.IsZero() {
+		return "", "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.verifiedFor != fingerprint || !c.verifiedAt.Equal(capturedAt) {
+		return "", "", false
+	}
+	return c.verifiedState, c.verifiedCause, true
+}
+
+func (c *EnvoySnapshotCache) storeVerification(
+	fingerprint string,
+	capturedAt time.Time,
+	status valkeyv1alpha1.NetworkVerificationStatus,
+	reason string,
+) {
+	if c == nil || capturedAt.IsZero() {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.verifiedFor = fingerprint
+	c.verifiedAt = capturedAt
+	c.verifiedState = status
+	c.verifiedCause = reason
 }
 
 type envoyTarget struct {
@@ -92,10 +192,10 @@ type envoyTarget struct {
 }
 
 type envoyVerification struct {
-	status    valkeyv1alpha1.NetworkVerificationStatus
-	reason    string
-	processes []valkeyv1alpha1.EnvoyProcessStatus
-	fresh     bool
+	status     valkeyv1alpha1.NetworkVerificationStatus
+	reason     string
+	processes  []valkeyv1alpha1.EnvoyProcessStatus
+	capturedAt time.Time
 }
 
 func (r *ValkeyInstanceReconciler) verifyEnvoy(
@@ -109,12 +209,26 @@ func (r *ValkeyInstanceReconciler) verifyEnvoy(
 			reason: "EnvoyCompositionUnknown",
 		}
 	}
-	snapshots, snapshotsFresh, failureReason := r.envoySnapshots(ctx, targets)
+	processes := envoyProcessStatuses(targets)
+	snapshots, capturedAt, failureReason := r.envoySnapshots(ctx, targets)
 	if failureReason != "" {
-		return envoyVerification{
-			status: valkeyv1alpha1.NetworkVerificationUnknown,
-			reason: failureReason,
+		status := valkeyv1alpha1.NetworkVerificationUnknown
+		if failureReason == "EnvoyRefreshPending" {
+			status = valkeyv1alpha1.NetworkVerificationPending
 		}
+		return envoyVerification{
+			status:    status,
+			reason:    failureReason,
+			processes: processes,
+		}
+	}
+	fingerprint := networkFingerprint(expected)
+	if status, reason, found := r.EnvoyCache.loadVerification(fingerprint, capturedAt); found {
+		result := envoyVerification{status: status, reason: reason, processes: processes}
+		if status == valkeyv1alpha1.NetworkVerificationVerified {
+			result.capturedAt = capturedAt
+		}
+		return result
 	}
 
 	pending := false
@@ -125,35 +239,97 @@ func (r *ValkeyInstanceReconciler) verifyEnvoy(
 				continue
 			}
 
-			return envoyVerification{
-				status: valkeyv1alpha1.NetworkVerificationUnknown,
-				reason: "EnvoyFormatUnknown",
+			return r.cacheEnvoyVerification(envoyVerification{
+				status:    valkeyv1alpha1.NetworkVerificationUnknown,
+				reason:    "EnvoyFormatUnknown",
+				processes: processes,
+			}, fingerprint, capturedAt)
+		}
+		if expected.ReadOnly != nil {
+			if err := validateEnvoySnapshot(snapshot, *expected.ReadOnly, r.now()); err != nil {
+				if errors.Is(err, errEnvoyPending) {
+					pending = true
+					continue
+				}
+
+				return r.cacheEnvoyVerification(envoyVerification{
+					status:    valkeyv1alpha1.NetworkVerificationUnknown,
+					reason:    "EnvoyFormatUnknown",
+					processes: processes,
+				}, fingerprint, capturedAt)
 			}
 		}
 	}
 	if pending {
-		return envoyVerification{
-			status: valkeyv1alpha1.NetworkVerificationPending,
-			reason: "EnvoyConfigurationPending",
-		}
+		return r.cacheEnvoyVerification(envoyVerification{
+			status:    valkeyv1alpha1.NetworkVerificationPending,
+			reason:    "EnvoyConfigurationPending",
+			processes: processes,
+		}, fingerprint, capturedAt)
 	}
 
-	return envoyVerification{
-		status:    valkeyv1alpha1.NetworkVerificationVerified,
-		reason:    "EnvoyVerified",
-		processes: envoyProcessStatuses(targets),
-		fresh:     snapshotsFresh,
-	}
+	return r.cacheEnvoyVerification(envoyVerification{
+		status:     valkeyv1alpha1.NetworkVerificationVerified,
+		reason:     "EnvoyVerified",
+		processes:  processes,
+		capturedAt: capturedAt,
+	}, fingerprint, capturedAt)
+}
+
+func (r *ValkeyInstanceReconciler) cacheEnvoyVerification(
+	verification envoyVerification,
+	fingerprint string,
+	capturedAt time.Time,
+) envoyVerification {
+	r.EnvoyCache.storeVerification(fingerprint, capturedAt, verification.status, verification.reason)
+	return verification
 }
 
 func (r *ValkeyInstanceReconciler) envoySnapshots(
 	ctx context.Context,
 	targets []envoyTarget,
-) ([]EnvoyAdminSnapshot, bool, string) {
-	if snapshots, ok := r.EnvoyCache.load(r.now(), targets); ok {
-		return snapshots, false, ""
+) ([]EnvoyAdminSnapshot, time.Time, string) {
+	if r.EnvoyCache == nil {
+		snapshots, fresh, failureReason := r.readEnvoySnapshots(ctx, targets)
+		if fresh && failureReason == "" {
+			return snapshots, r.now(), ""
+		}
+		return snapshots, time.Time{}, failureReason
 	}
 
+	state := r.EnvoyCache.load(r.now(), targets)
+	if state.fresh {
+		return state.snapshots, state.captured, ""
+	}
+	if state.refreshDue && !state.refreshing && r.EnvoyCache.beginRefresh(targets) {
+		go r.refreshEnvoySnapshots(context.WithoutCancel(ctx), targets)
+		state.refreshing = true
+	}
+	if state.failureReason != "" {
+		return nil, time.Time{}, state.failureReason
+	}
+	if state.found {
+		return state.snapshots, state.captured, ""
+	}
+	if state.refreshing || state.refreshDue {
+		return nil, time.Time{}, "EnvoyRefreshPending"
+	}
+
+	return nil, time.Time{}, "EnvoyAdminUnavailable"
+}
+
+func (r *ValkeyInstanceReconciler) refreshEnvoySnapshots(ctx context.Context, targets []envoyTarget) {
+	refreshCtx, cancel := context.WithTimeout(ctx, config.NetworkVerifyTimeout)
+	defer cancel()
+
+	snapshots, _, failureReason := r.readEnvoySnapshots(refreshCtx, targets)
+	r.EnvoyCache.finishRefresh(r.now(), targets, snapshots, failureReason)
+}
+
+func (r *ValkeyInstanceReconciler) readEnvoySnapshots(
+	ctx context.Context,
+	targets []envoyTarget,
+) ([]EnvoyAdminSnapshot, bool, string) {
 	read := r.ReadEnvoy
 	if read == nil {
 		read = r.readEnvoySnapshot
@@ -166,9 +342,7 @@ func (r *ValkeyInstanceReconciler) envoySnapshots(
 	for index := range targets {
 		pod := targets[index].pod
 		go func() {
-			readCtx, cancel := context.WithTimeout(ctx, config.NetworkVerifyTimeout)
-			defer cancel()
-			snapshot, err := read(readCtx, pod)
+			snapshot, err := read(ctx, pod)
 			results <- snapshotResult{snapshot: snapshot, err: err}
 		}()
 	}
@@ -186,8 +360,6 @@ func (r *ValkeyInstanceReconciler) envoySnapshots(
 	if err != nil || !sameEnvoyTargets(targets, after) {
 		return nil, false, "EnvoyCompositionChanged"
 	}
-	r.EnvoyCache.store(r.now(), targets, snapshots)
-
 	return snapshots, true, ""
 }
 
@@ -518,15 +690,16 @@ func validateEnvoySnapshot(
 
 		return errEnvoyPending
 	}
-	expectedCluster := fmt.Sprintf(
-		"tcproute/%s/%s/rule/-1",
-		expected.BackendNamespace,
-		strings.TrimSuffix(expected.BackendService, "-primary"),
-	)
+	routeName := expected.RouteName
+	if routeName == "" {
+		routeName = strings.TrimSuffix(expected.BackendService, "-primary")
+	}
+	expectedCluster := fmt.Sprintf("tcproute/%s/%s/rule/-1", expected.BackendNamespace, routeName)
 	if err := validateEnvoyFilterChain(*activeChain, expected, expectedCluster); err != nil {
 		return err
 	}
-	if !envoyEndpointReady(*endpoints, expectedCluster, expected.BackendAddress, expected.BackendPort) {
+	if expected.BackendAddress != "" &&
+		!envoyEndpointReady(*endpoints, expectedCluster, expected.BackendAddress, expected.BackendPort) {
 		return errEnvoyPending
 	}
 	if err := validateEnvoyCertificates(snapshot.Certificates, expected, now); err != nil {

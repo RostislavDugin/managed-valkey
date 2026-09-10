@@ -38,54 +38,93 @@ func (r *ValkeyInstanceReconciler) reconcilePrimaryLabel(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	pod := &corev1.Pod{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Spec.Slug + "-0"}
-	if err := r.Get(ctx, key, pod); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+
+			return ctrl.Result{}, fmt.Errorf("прочитать Pod для primary Service: %w", err)
+		}
+		desiredRole := currentProcessRoleLabel(instance, pod, ordinal)
+		if pod.Labels[applicationRoleLabel] == desiredRole {
+			continue
 		}
 
-		return ctrl.Result{}, fmt.Errorf("прочитать Pod для primary Service: %w", err)
-	}
-	primary := currentPrimaryStatus(instance, pod)
-	hasPrimaryLabel := pod.Labels[applicationRoleLabel] == string(valkeyv1alpha1.NodeRolePrimary)
-	if hasPrimaryLabel == primary {
-		return ctrl.Result{}, nil
-	}
-
-	before := pod.DeepCopy()
-	pod.Labels = maps.Clone(pod.Labels)
-	if primary {
-		if pod.Labels == nil {
-			pod.Labels = make(map[string]string, 1)
+		before := pod.DeepCopy()
+		pod.Labels = maps.Clone(pod.Labels)
+		if desiredRole != "" {
+			if pod.Labels == nil {
+				pod.Labels = make(map[string]string, 1)
+			}
+			pod.Labels[applicationRoleLabel] = desiredRole
+		} else {
+			delete(pod.Labels, applicationRoleLabel)
 		}
-		pod.Labels[applicationRoleLabel] = string(valkeyv1alpha1.NodeRolePrimary)
-	} else {
-		delete(pod.Labels, applicationRoleLabel)
-	}
-	if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("обновить роль Pod: %w", err)
+		if err := r.Patch(ctx, pod, client.MergeFrom(before)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("обновить роль Pod: %w", err)
+		}
+
+		return requeueIf(true), nil
 	}
 
-	return requeueIf(true), nil
+	return ctrl.Result{}, nil
+}
+
+func currentProcessRoleLabel(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	pod *corev1.Pod,
+	ordinal int32,
+) string {
+	if currentPrimaryStatus(instance, pod, ordinal) {
+		return string(valkeyv1alpha1.NodeRolePrimary)
+	}
+	if instance.Status.AcceptedConfiguration == nil ||
+		instance.Status.AcceptedConfiguration.Mode != valkeyv1alpha1.ValkeyModeHA ||
+		hasUnterminatedPreviousProcess(instance.Status.PreviousProcesses) {
+		return ""
+	}
+	node, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
+	if !found || container == nil || node.Role != valkeyv1alpha1.NodeRoleReplica ||
+		node.Termination != nil || node.Observation != nil || !node.Readiness ||
+		node.Replication == nil || !node.Replication.LinkUp || node.Replication.SyncInProgress ||
+		node.Replication.SyncedAt == nil ||
+		node.AppPasswordVersion != instance.Status.AcceptedConfiguration.PasswordVersion ||
+		node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID {
+		return ""
+	}
+
+	return string(valkeyv1alpha1.NodeRoleReplica)
 }
 
 func currentPrimaryStatus(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	pod *corev1.Pod,
+	ordinal int32,
 ) bool {
-	if len(instance.Status.Nodes) != 1 || instance.Status.Nodes[0].Termination != nil {
+	primaryOrdinal, selected := selectedPrimaryOrdinal(instance)
+	if !selected || primaryOrdinal != ordinal || hasUnterminatedPreviousProcess(instance.Status.PreviousProcesses) {
 		return false
 	}
 	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 	if container == nil {
 		return false
 	}
-	node := instance.Status.Nodes[0]
+	node, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+	if !found || node.Termination != nil {
+		return false
+	}
 
 	return node.Role == valkeyv1alpha1.NodeRolePrimary &&
 		node.PodUID == string(pod.UID) &&
-		node.ContainerID == container.ContainerID
+		node.ContainerID == container.ContainerID &&
+		primaryIdentityMatches(instance, node)
 }
 
 func (r *ValkeyInstanceReconciler) reconcileAppAdmission(
@@ -107,6 +146,10 @@ func (r *ValkeyInstanceReconciler) reconcileAppAdmission(
 			"EndpointSliceNotReady",
 			"primary Service ещё не указывает только на текущий Pod",
 		)
+	}
+	if node.AppEnabled &&
+		node.AppPasswordVersion == instance.Status.AcceptedConfiguration.PasswordVersion {
+		return r.finishAppAdmission(ctx, instance, node)
 	}
 
 	credentials, appHash, err := r.processCredentials(ctx, instance)
@@ -138,23 +181,40 @@ func (r *ValkeyInstanceReconciler) reconcileAppAdmission(
 		)
 	}
 
+	return r.finishAppAdmission(ctx, instance, node)
+}
+
+func (r *ValkeyInstanceReconciler) finishAppAdmission(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	node valkeyv1alpha1.NodeStatus,
+) (ctrl.Result, error) {
 	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
-		ordinal := int32(0)
+		ordinal := node.Ordinal
+		firstAdmission := !status.Initialized
 		status.Initialized = true
-		status.Phase = valkeyv1alpha1.InstancePhaseRunning
-		status.Reason = ""
 		status.PrimaryOrdinal = &ordinal
 		status.PrimaryPodUID = node.PodUID
 		status.PrimaryContainerID = node.ContainerID
-		status.ObservedGeneration = instance.Status.AcceptedConfiguration.DesiredGeneration
-		status.AppliedPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
-		status.Applied = &valkeyv1alpha1.AppliedConfiguration{
-			Mode:  instance.Status.AcceptedConfiguration.Mode,
-			VCPU:  instance.Status.AcceptedConfiguration.VCPU,
-			RAMGB: instance.Status.AcceptedConfiguration.RAMGB,
+		status.PrimaryRunID = node.RunID
+		status.PrimaryNodeName = node.NodeName
+		status.PrimaryNodeUID = node.NodeUID
+		for index := range status.Nodes {
+			if sameProcess(status.Nodes[index], node) {
+				status.Nodes[index].AppEnabled = true
+				status.Nodes[index].AppPasswordVersion = status.AcceptedConfiguration.PasswordVersion
+			}
 		}
-		now := metav1.NewTime(r.now())
-		status.ObservedAt = &now
+		if firstAdmission {
+			status.AppliedPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
+			status.Applied = &valkeyv1alpha1.AppliedConfiguration{
+				Mode:  instance.Status.AcceptedConfiguration.Mode,
+				VCPU:  instance.Status.AcceptedConfiguration.VCPU,
+				RAMGB: instance.Status.AcceptedConfiguration.RAMGB,
+			}
+			now := metav1.NewTime(r.now())
+			status.ObservedAt = &now
+		}
 		setCondition(
 			instance,
 			status,
@@ -163,6 +223,7 @@ func (r *ValkeyInstanceReconciler) reconcileAppAdmission(
 			"Admitted",
 			"текущий primary доступен через подтверждённый публичный маршрут",
 		)
+		applyOperationalPhase(instance, status)
 	})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -171,25 +232,120 @@ func (r *ValkeyInstanceReconciler) reconcileAppAdmission(
 	return requeueIf(changed), nil
 }
 
+func (r *ValkeyInstanceReconciler) reconcileReplicaAdmission(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (ctrl.Result, error) {
+	if instance.Status.AcceptedConfiguration.Mode != valkeyv1alpha1.ValkeyModeHA ||
+		instance.Status.PrimaryOrdinal == nil || instance.Status.CredentialRotation != nil {
+		return ctrl.Result{}, nil
+	}
+	primaryPod := &corev1.Pod{}
+	primaryKey := client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name: fmt.Sprintf(
+			"%s-%d",
+			instance.Status.AcceptedConfiguration.Slug,
+			*instance.Status.PrimaryOrdinal,
+		),
+	}
+	if err := r.Get(ctx, primaryKey, primaryPod); err != nil {
+		return ctrl.Result{}, fmt.Errorf("прочитать primary для допуска реплик: %w", err)
+	}
+	credentials, appHash, err := r.processCredentials(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	for _, node := range instance.Status.Nodes {
+		if node.Ordinal == *instance.Status.PrimaryOrdinal || node.Role != valkeyv1alpha1.NodeRoleReplica ||
+			!node.Readiness || node.Termination != nil || node.Observation != nil ||
+			node.Replication == nil || !node.Replication.LinkUp || node.Replication.SyncInProgress ||
+			node.Replication.SyncedAt == nil || node.Replication.UpstreamHost != primaryPod.Status.PodIP ||
+			node.Replication.UpstreamPort != valkeyPort ||
+			node.AppEnabled && node.AppPasswordVersion == instance.Status.AcceptedConfiguration.PasswordVersion {
+			continue
+		}
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, node.Ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("прочитать Pod допуска реплики: %w", err)
+		}
+		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
+		if pod.Status.PodIP == "" || container == nil || container.State.Running == nil ||
+			node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID ||
+			pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) {
+			continue
+		}
+		update := r.UpdateAppAccess
+		if update == nil {
+			update = r.updateAppAccess
+		}
+		state, err := update(
+			ctx,
+			net.JoinHostPort(pod.Status.PodIP, "6379"),
+			string(credentials.OperatorPassword),
+			appHash,
+			true,
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if state.Role != string(valkeyv1alpha1.NodeRoleReplica) || state.RunID != node.RunID ||
+			!state.AppEnabled || !appACLMatches(state.AppPasswordHashes, appHash) ||
+			state.Replication == nil || !state.Replication.LinkUp || state.Replication.SyncInProgress ||
+			state.Replication.UpstreamHost != primaryPod.Status.PodIP ||
+			state.Replication.UpstreamPort != valkeyPort {
+			return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
+		}
+		changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			for index := range status.Nodes {
+				if sameProcess(status.Nodes[index], node) {
+					status.Nodes[index].AppEnabled = true
+					status.Nodes[index].AppPasswordVersion = status.AcceptedConfiguration.PasswordVersion
+				}
+			}
+			applyOperationalPhase(instance, status)
+		})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		return requeueIf(changed), nil
+	}
+
+	return ctrl.Result{}, nil
+}
+
 func (r *ValkeyInstanceReconciler) admissionProcess(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (*corev1.Pod, valkeyv1alpha1.NodeStatus, error) {
-	if len(instance.Status.Nodes) != 1 {
+	ordinal, selected := selectedPrimaryOrdinal(instance)
+	if !selected || hasUnterminatedPreviousProcess(instance.Status.PreviousProcesses) {
 		return nil, valkeyv1alpha1.NodeStatus{}, errAppAdmissionIncomplete
 	}
-	node := instance.Status.Nodes[0]
+	node, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+	if !found {
+		return nil, valkeyv1alpha1.NodeStatus{}, errAppAdmissionIncomplete
+	}
 	if node.Role != valkeyv1alpha1.NodeRolePrimary || !node.Readiness || node.Termination != nil {
 		return nil, valkeyv1alpha1.NodeStatus{}, errAppAdmissionIncomplete
 	}
 	pod := &corev1.Pod{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Spec.Slug + "-0"}
+	key := client.ObjectKey{
+		Namespace: instance.Namespace,
+		Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+	}
 	if err := r.Get(ctx, key, pod); err != nil {
 		return nil, valkeyv1alpha1.NodeStatus{}, fmt.Errorf("прочитать Pod допуска app: %w", err)
 	}
 	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 	if pod.Status.PodIP == "" || container == nil || container.State.Running == nil ||
 		node.PodUID != string(pod.UID) || node.ContainerID != container.ContainerID ||
+		!primaryIdentityMatches(instance, node) ||
 		pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRolePrimary) {
 		return nil, valkeyv1alpha1.NodeStatus{}, errAppAdmissionIncomplete
 	}
@@ -289,13 +445,7 @@ func (r *ValkeyInstanceReconciler) updateAppAccess(
 		DialTimeout:    config.ValkeyDialTimeout,
 		CommandTimeout: config.ValkeyCommandTimeout,
 	}
-	var connection *operatorvalkey.Client
-	var err error
-	if r.Lease != nil {
-		connection, err = r.Lease.DialValkey(ctx, cfg)
-	} else {
-		connection, err = operatorvalkey.Dial(ctx, cfg)
-	}
+	connection, err := r.dialValkey(ctx, cfg)
 	if err != nil {
 		return operatorvalkey.ProcessState{}, err
 	}
@@ -311,9 +461,6 @@ func (r *ValkeyInstanceReconciler) updateAppAccess(
 	if err != nil {
 		return operatorvalkey.ProcessState{}, err
 	}
-	if enabled && state.Role != string(valkeyv1alpha1.NodeRolePrimary) {
-		return state, errAppAdmissionIncomplete
-	}
 	if state.AppEnabled == enabled && appACLMatches(state.AppPasswordHashes, appHash) {
 		if !enabled {
 			if err := session.KillAppClients(ctx); err != nil {
@@ -321,6 +468,21 @@ func (r *ValkeyInstanceReconciler) updateAppAccess(
 			}
 		}
 		return state, nil
+	}
+	if enabled && !appACLMatches(state.AppPasswordHashes, appHash) {
+		if err := session.SetAppUser(ctx, false, appHash); err != nil {
+			return operatorvalkey.ProcessState{}, err
+		}
+		if err := session.KillAppClients(ctx); err != nil {
+			return operatorvalkey.ProcessState{}, err
+		}
+		state, err = session.TakeControl(ctx, operatorPassword)
+		if err != nil {
+			return operatorvalkey.ProcessState{}, err
+		}
+		if state.AppEnabled || !appACLMatches(state.AppPasswordHashes, appHash) {
+			return state, errAppAdmissionIncomplete
+		}
 	}
 	if err := session.SetAppUser(ctx, enabled, appHash); err != nil {
 		return operatorvalkey.ProcessState{}, err
@@ -336,6 +498,9 @@ func (r *ValkeyInstanceReconciler) updateAppAccess(
 	}
 	if state.AppEnabled != enabled || !appACLMatches(state.AppPasswordHashes, appHash) {
 		return state, errAppAdmissionIncomplete
+	}
+	if err := runAppAccessActionControl(ctx, address, enabled); err != nil {
+		return state, err
 	}
 
 	return state, nil
@@ -374,10 +539,12 @@ func (r *ValkeyInstanceReconciler) admissionPending(
 
 func endpointSliceInstanceRequests(_ context.Context, object client.Object) []reconcile.Request {
 	serviceName := object.GetLabels()[discoveryv1.LabelServiceName]
-	slug, found := strings.CutSuffix(serviceName, "-primary")
-	if !found || slug == "" {
-		return nil
+	for _, suffix := range []string{"-primary", "-replicas"} {
+		slug, found := strings.CutSuffix(serviceName, suffix)
+		if found && slug != "" {
+			return []reconcile.Request{newReconcileRequest(object.GetNamespace(), slug)}
+		}
 	}
 
-	return []reconcile.Request{newReconcileRequest(object.GetNamespace(), slug)}
+	return nil
 }

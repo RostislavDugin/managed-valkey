@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	envoyv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -115,19 +116,20 @@ func NewManager(
 	}
 
 	reconciler := &ValkeyInstanceReconciler{
-		Client:          mgr.GetClient(),
-		APIReader:       mgr.GetAPIReader(),
-		Scheme:          mgr.GetScheme(),
-		Recorder:        mgr.GetEventRecorder("managed-valkey-operator"),
-		Lease:           leaseScope,
-		SystemNamespace: systemNamespace,
-		ValkeyImage:     valkeyImage,
-		BaseDomain:      baseDomain,
-		Environment:     cfg.Logging.Environment,
-		OperatorCIDRs:   slices.Clone(cfg.OperatorCIDRs),
-		Clock:           clock.RealClock{},
-		RESTConfig:      restConfig,
-		EnvoyCache:      NewEnvoySnapshotCache(),
+		Client:               mgr.GetClient(),
+		APIReader:            mgr.GetAPIReader(),
+		Scheme:               mgr.GetScheme(),
+		Recorder:             mgr.GetEventRecorder("managed-valkey-operator"),
+		Lease:                leaseScope,
+		SystemNamespace:      systemNamespace,
+		ValkeyImage:          valkeyImage,
+		BaseDomain:           baseDomain,
+		Environment:          cfg.Logging.Environment,
+		OperatorCIDRs:        slices.Clone(cfg.OperatorCIDRs),
+		Clock:                clock.RealClock{},
+		ObservationStartedAt: time.Now().UTC(),
+		RESTConfig:           restConfig,
+		EnvoyCache:           NewEnvoySnapshotCache(),
 	}
 
 	if err := reconciler.SetupWithManager(mgr); err != nil {
