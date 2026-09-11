@@ -84,6 +84,11 @@ run_script "$normal_state"
 [[ -f "$normal_state/started/api" ]]
 [[ -f "$normal_state/started/operator" ]]
 rg -q '^VALKEY_PUBLIC_PORT=41379$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=4$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=8$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=2000$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=4096$' "$normal_state/started/api.env"
 jwt_secret=$(awk -F= '$1 == "JWT_SECRET" {print $2}' "$normal_state/started/api.env")
 [[ -n "$jwt_secret" ]]
 rg --fixed-strings --line-regexp --quiet "$jwt_secret" "$normal_state/integration-secret-values"

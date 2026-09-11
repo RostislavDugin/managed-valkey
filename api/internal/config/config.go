@@ -16,16 +16,16 @@ import (
 )
 
 const (
-	ServiceName            = "api"
-	ShutdownTimeout        = 15 * time.Second
-	SyncInterval           = time.Second
-	MetricsCleanupInterval = 24 * time.Hour
-	EnvDatabaseURL         = "DATABASE_URL"
-	EnvJWTSecret           = "JWT_SECRET"
-	EnvHTTPAddr            = "HTTP_ADDR"
-	EnvKubernetesSync      = "KUBERNETES_SYNC_ENABLED"
-	DefaultHTTPAddr        = ":8080"
-	DefaultKubernetesSync  = true
+	ServiceName                     = "api"
+	ShutdownTimeout                 = 15 * time.Second
+	SyncInterval                    = time.Second
+	MetricsCleanupInterval          = 24 * time.Hour
+	EnvDatabaseURL                  = "DATABASE_URL"
+	EnvJWTSecret                    = "JWT_SECRET"
+	EnvHTTPAddr                     = "HTTP_ADDR"
+	EnvKubernetesBackgroundSync     = "KUBERNETES_BACKGROUND_SYNC_ENABLED"
+	DefaultHTTPAddr                 = ":8080"
+	DefaultKubernetesBackgroundSync = true
 
 	EnvValkeyBaseDomain                 = "VALKEY_BASE_DOMAIN"
 	EnvValkeyPublicPort                 = "VALKEY_PUBLIC_PORT"
@@ -57,7 +57,7 @@ type Config struct {
 	DatabaseURL                        string
 	JWTSecret                          string
 	HTTPAddr                           string
-	KubernetesSyncEnabled              bool
+	KubernetesBackgroundSyncEnabled    bool
 	ValkeyBaseDomain                   string
 	ValkeyPublicPort                   int
 	ValkeyInstanceMaxVCPU              int
@@ -93,7 +93,10 @@ func Load() (Config, error) {
 		httpAddr = DefaultHTTPAddr
 	}
 
-	kubernetesSyncEnabled, err := boolWithDefault(EnvKubernetesSync, DefaultKubernetesSync)
+	kubernetesBackgroundSyncEnabled, err := boolWithDefault(
+		EnvKubernetesBackgroundSync,
+		DefaultKubernetesBackgroundSync,
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -158,7 +161,7 @@ func Load() (Config, error) {
 		DatabaseURL:                        databaseURL,
 		JWTSecret:                          jwtSecret,
 		HTTPAddr:                           httpAddr,
-		KubernetesSyncEnabled:              kubernetesSyncEnabled,
+		KubernetesBackgroundSyncEnabled:    kubernetesBackgroundSyncEnabled,
 		ValkeyBaseDomain:                   valkeyBaseDomain,
 		ValkeyPublicPort:                   valkeyPublicPort,
 		ValkeyInstanceMaxVCPU:              valkeyInstanceMaxVCPU,

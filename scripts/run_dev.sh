@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+source "$repo_root/scripts/local_env.sh"
+load_local_env "$repo_root"
 state_dir="$repo_root/tmp/k3s/dev"
 runtime_dir=${XDG_RUNTIME_DIR:-/tmp}
 lock_file="$runtime_dir/managed-valkey-dev-${UID}.lock"
@@ -26,11 +28,6 @@ require_commands() {
 load_dev_postgres() {
     local container existing_env
 
-    if [[ -f "$repo_root/.env" ]]; then
-        set -a
-        source "$repo_root/.env"
-        set +a
-    fi
     POSTGRES_USER=${POSTGRES_USER:-managed_valkey}
     POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-managed_valkey}
     POSTGRES_DB=${POSTGRES_DB:-managed_valkey}

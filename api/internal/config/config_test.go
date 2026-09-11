@@ -36,7 +36,7 @@ func Test_LoadConfig_WithoutOptionalValues_UsesDefaults(t *testing.T) {
 	t.Setenv(config.EnvValkeyVCPUPriceCoinsPerHour, "")
 	t.Setenv(config.EnvValkeyRAMGBPriceCoinsPerHour, "")
 	t.Setenv(config.EnvValkeyMetricsRetention, "")
-	t.Setenv(config.EnvKubernetesSync, "")
+	t.Setenv(config.EnvKubernetesBackgroundSync, "")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -54,8 +54,8 @@ func Test_LoadConfig_WithoutOptionalValues_UsesDefaults(t *testing.T) {
 	if cfg.Logging.ServiceName != config.ServiceName {
 		t.Errorf("service.name %q, ожидался %q", cfg.Logging.ServiceName, config.ServiceName)
 	}
-	if !cfg.KubernetesSyncEnabled {
-		t.Error("синхронизация Kubernetes по умолчанию выключена")
+	if !cfg.KubernetesBackgroundSyncEnabled {
+		t.Error("фоновые процессы синхронизации с Kubernetes по умолчанию выключены")
 	}
 	if cfg.ValkeyPublicPort != config.DefaultValkeyPublicPort ||
 		cfg.ValkeyVCPUPriceCoinsPerHour != config.DefaultValkeyVCPUPriceCoinsPerHour ||
@@ -78,26 +78,26 @@ func Test_LoadConfig_WithMetricsRetention_ParsesDuration(t *testing.T) {
 	}
 }
 
-func Test_LoadConfig_WithKubernetesSyncDisabled_DisablesSynchronization(t *testing.T) {
+func Test_LoadConfig_WithKubernetesBackgroundSyncDisabled_DisablesBackgroundSynchronization(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv(config.EnvKubernetesSync, "false")
+	t.Setenv(config.EnvKubernetesBackgroundSync, "false")
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("загрузить конфигурацию: %v", err)
 	}
-	if cfg.KubernetesSyncEnabled {
-		t.Fatal("синхронизация Kubernetes включена")
+	if cfg.KubernetesBackgroundSyncEnabled {
+		t.Fatal("фоновые процессы синхронизации с Kubernetes включены")
 	}
 }
 
-func Test_LoadConfig_WithInvalidKubernetesSync_ReturnsVariableError(t *testing.T) {
+func Test_LoadConfig_WithInvalidKubernetesBackgroundSync_ReturnsVariableError(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv(config.EnvKubernetesSync, "sometimes")
+	t.Setenv(config.EnvKubernetesBackgroundSync, "sometimes")
 
 	_, err := config.Load()
-	if err == nil || !strings.Contains(err.Error(), config.EnvKubernetesSync) {
-		t.Fatalf("ошибка %v, ожидалось имя %s", err, config.EnvKubernetesSync)
+	if err == nil || !strings.Contains(err.Error(), config.EnvKubernetesBackgroundSync) {
+		t.Fatalf("ошибка %v, ожидалось имя %s", err, config.EnvKubernetesBackgroundSync)
 	}
 }
 
@@ -264,7 +264,7 @@ func setValidEnv(t *testing.T) {
 
 	t.Setenv(config.EnvDatabaseURL, "postgres://user:pass@postgres:45432/managed_valkey")
 	t.Setenv(config.EnvJWTSecret, "test-secret")
-	t.Setenv(config.EnvKubernetesSync, "true")
+	t.Setenv(config.EnvKubernetesBackgroundSync, "true")
 	t.Setenv(config.EnvValkeyBaseDomain, "valkey.localhost")
 	t.Setenv(config.EnvValkeyPublicPort, "41379")
 	t.Setenv(config.EnvValkeyInstanceMaxVCPU, "4")

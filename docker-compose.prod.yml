@@ -49,7 +49,7 @@ services:
       VL_OTLP_URL: http://victorialogs:9428/insert/opentelemetry/v1/logs
       DATABASE_URL: postgres://managed_valkey:${POSTGRES_PASSWORD}@postgres:45432/managed_valkey?sslmode=disable
       HTTP_ADDR: ":8080"
-      KUBERNETES_SYNC_ENABLED: "true"
+      KUBERNETES_BACKGROUND_SYNC_ENABLED: "true"
       KUBECONFIG: /run/secrets/kubeconfig/api.kubeconfig
       JWT_SECRET: ${JWT_SECRET:?задайте JWT_SECRET}
       VALKEY_BASE_DOMAIN: valkey.h3llo-demo.com

@@ -10,7 +10,7 @@
 - Устанавливать CRD, права API и оператора, Gateway API, Envoy Gateway, `cert-manager`, TLS-сертификат и оператор до обновления API на сервере.
 - Хранить административный файл подключения Kubernetes и токен Cloudflare в секретах окружения GitHub `production`; создавать для API отдельный файл с ограниченными правами.
 - После завершения `valkey-pod-lifecycle` заменить предварительную проверку `ContainerRestartRules` проверкой `spec.restartPolicy: Never` самого `Pod` на каждой рабочей ноде; проверить доступность образа оператора, внешний адрес Envoy, DNS, TLS и права API. Не создавать пользовательские `ValkeyInstance` из CI/CD.
-- Монтировать файл подключения API только для чтения и включать `KUBERNETES_SYNC_ENABLED=true` после успешной подготовки Kubernetes.
+- Монтировать файл подключения API только для чтения и включать `KUBERNETES_BACKGROUND_SYNC_ENABLED=true` после успешной подготовки Kubernetes.
 
 ## Capabilities
 

@@ -9,7 +9,8 @@ server="${KUBERNETES_SERVER:-https://127.0.0.1:6443}"
 mkdir -p "$(dirname "$output")"
 
 umask 077
-docker compose -f "$repo_root/docker-compose.dev.yml" -p "$project" exec -T k3s-server \
+docker compose --env-file /dev/null \
+    -f "$repo_root/docker-compose.dev.yml" -p "$project" exec -T k3s-server \
     cat /etc/rancher/k3s/k3s.yaml >"$output"
 KUBECONFIG="$output" kubectl config set-cluster default --server="$server" >/dev/null
 chmod 0600 "$output"

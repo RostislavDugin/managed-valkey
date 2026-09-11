@@ -1,5 +1,4 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set dotenv-path := "../.env"
 
 export GOTOOLCHAIN := "auto"
 
@@ -8,7 +7,8 @@ root := justfile_directory() / ".."
 run: migration-up _run-server
 
 _run-server:
-    cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/api.kubeconfig") }} go run ./api/cmd/api
+    cd {{ root }} && source scripts/local_env.sh && load_local_env "$PWD" && \
+        KUBECONFIG={{ quote(root / "tmp/k3s/dev/api.kubeconfig") }} go run ./api/cmd/api
 
 format:
     cd {{ root }} && find api internal -type f -name '*.go' -print0 | \
@@ -27,10 +27,12 @@ test-full:
     cd {{ root }} && MV_TEST_K3S_ENABLED=1 scripts/test_environment.sh exec api -- scripts/test_api.sh full
 
 migration-up:
-    cd {{ root }} && go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" up
+    cd {{ root }} && source scripts/local_env.sh && load_local_env "$PWD" && \
+        go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" up
 
 migration-down:
-    cd {{ root }} && go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" down
+    cd {{ root }} && source scripts/local_env.sh && load_local_env "$PWD" && \
+        go tool goose -allow-missing -dir migrations postgres "${DATABASE_URL:?переменная DATABASE_URL обязательна}" down
 
 migration-generate name:
     cd {{ root }} && go tool goose -allow-missing -dir migrations create {{ name }} sql

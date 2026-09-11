@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
+"$repo_root/scripts/local_env_test.sh"
 run_id=invalid-topology
 state="$temporary/operator/$run_id"
 

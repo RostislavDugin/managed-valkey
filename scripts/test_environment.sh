@@ -25,34 +25,11 @@ require_command() {
     done
 }
 
-load_local_env() {
-    local container existing_env had_password=0 had_port=0 had_user=0
-    local saved_password="" saved_port="" saved_user=""
-
-    if [[ -v POSTGRES_PASSWORD ]]; then
-        had_password=1
-        saved_password=$POSTGRES_PASSWORD
-    fi
-    if [[ -v POSTGRES_PORT ]]; then
-        had_port=1
-        saved_port=$POSTGRES_PORT
-    fi
-    if [[ -v POSTGRES_USER ]]; then
-        had_user=1
-        saved_user=$POSTGRES_USER
-    fi
-
-    if [[ -f "$repo_root/.env" ]]; then
-        set -a
-        source "$repo_root/.env"
-        set +a
-    fi
-
-    ((had_password == 0)) || POSTGRES_PASSWORD=$saved_password
-    ((had_port == 0)) || POSTGRES_PORT=$saved_port
-    ((had_user == 0)) || POSTGRES_USER=$saved_user
+configure_test_postgres() {
+    local container existing_env
 
     POSTGRES_USER=${POSTGRES_USER:-managed_valkey}
+    POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-managed_valkey}
     POSTGRES_PORT=${POSTGRES_PORT:-45432}
     POSTGRES_DB=${POSTGRES_DB:-managed_valkey}
 
@@ -348,8 +325,12 @@ allocate_environment() {
 }
 
 compose() {
-    docker compose -f "$compose_file" -f "$test_compose_file" \
+    docker_compose -f "$compose_file" -f "$test_compose_file" \
         -p "$MANAGED_VALKEY_COMPOSE_PROJECT" "$@"
+}
+
+docker_compose() {
+    docker compose --env-file /dev/null "$@"
 }
 
 load_image_into_k3s() {
@@ -393,14 +374,14 @@ public_node_for_suite() {
 prepare_postgres() {
     local database_name database_suffix
 
-    [[ -n "${POSTGRES_PASSWORD:-}" ]] || fail "задайте POSTGRES_PASSWORD в .env или окружении"
+    [[ -n "${POSTGRES_PASSWORD:-}" ]] || fail "задайте POSTGRES_PASSWORD в окружении тестов"
     [[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]] ||
         fail "POSTGRES_PASSWORD содержит символы, требующие кодирования в URL"
 
     exec 8>"$state_root/.postgres.lock"
     flock 8
     MANAGED_VALKEY_COMPOSE_PROJECT=managed-valkey-dev \
-        docker compose -f "$compose_file" -p managed-valkey-dev up -d --wait postgres
+        docker_compose -f "$compose_file" -p managed-valkey-dev up -d --wait postgres
     flock -u 8
 
     database_suffix=$(printf '%s_%s' "$MV_SUITE" "$MV_RUN_ID" | tr '-' '_' | cut -c1-42)
@@ -408,10 +389,10 @@ prepare_postgres() {
     database_name=${database_name:0:63}
     [[ "$database_name" != "$POSTGRES_DB" ]] || fail "тестовая база совпала с dev-базой"
 
-    if ! docker compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
+    if ! docker_compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
         psql --username "$POSTGRES_USER" --dbname postgres --tuples-only --no-align \
         --command "SELECT 1 FROM pg_database WHERE datname = '$database_name'" | grep -qx 1; then
-        docker compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
+        docker_compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
             createdb --username "$POSTGRES_USER" "$database_name"
     fi
 
@@ -570,7 +551,7 @@ prepare() {
         require_command kubectl
         "$repo_root/scripts/k3s_host_prerequisites.sh"
     fi
-    load_local_env
+    configure_test_postgres
     mkdir -p "$state_root"
     trap 'handle_prepare_failure $?' ERR
     trap 'handle_prepare_failure 130' INT
@@ -768,10 +749,12 @@ collect_diagnostics() {
         -1 "$MV_RUN_ID" "${MV_DIAGNOSTIC_SCENARIO:-environment}" \
         >"$DIAGNOSTICS_DIR/metadata.tsv"
 
-    timeout 10s docker compose -f "$compose_file" -f "$test_compose_file" \
+    timeout 10s docker compose --env-file /dev/null \
+        -f "$compose_file" -f "$test_compose_file" \
         -p "$MANAGED_VALKEY_COMPOSE_PROJECT" ps --all \
         >"$DIAGNOSTICS_DIR/compose-ps.txt" 2>&1 || true
-    timeout 10s docker compose -f "$compose_file" -f "$test_compose_file" \
+    timeout 10s docker compose --env-file /dev/null \
+        -f "$compose_file" -f "$test_compose_file" \
         -p "$MANAGED_VALKEY_COMPOSE_PROJECT" logs --no-color --tail 500 \
         k3s-server k3s-agent-1 k3s-agent-2 k3s-agent-3 \
         >"$DIAGNOSTICS_DIR/k3s.log" 2>&1 || true
@@ -832,7 +815,7 @@ drop_test_database() {
     [[ "$TEST_DATABASE_NAME" != "$POSTGRES_DB" ]] ||
         { log "отказ удалить dev-базу $TEST_DATABASE_NAME"; return 1; }
 
-    docker compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
+    docker_compose -f "$compose_file" -p managed-valkey-dev exec -T postgres \
         psql --username "$POSTGRES_USER" --dbname postgres \
         --command "DROP DATABASE IF EXISTS \"$TEST_DATABASE_NAME\" WITH (FORCE)"
 }

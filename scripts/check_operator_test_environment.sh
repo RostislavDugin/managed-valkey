@@ -15,14 +15,15 @@ if [[ "$expected_envoy_replicas" != 1 && "$expected_envoy_replicas" != 2 ]]; the
 fi
 
 mapfile -t dev_nodes < <(
-    docker compose -f "$repo_root/docker-compose.dev.yml" config --services | rg '^k3s-'
+    docker compose --env-file /dev/null \
+        -f "$repo_root/docker-compose.dev.yml" config --services | rg '^k3s-'
 )
 if ((${#dev_nodes[@]} != 3)) || printf '%s\n' "${dev_nodes[@]}" | rg -qx k3s-agent-3; then
     echo "обычный Compose должен содержать три k3s-ноды" >&2
     exit 1
 fi
 
-if K3S_DOCKER_GATEWAY= docker compose \
+if K3S_DOCKER_GATEWAY= docker compose --env-file /dev/null \
     -f "$repo_root/docker-compose.dev.yml" \
     -f "$repo_root/docker-compose.test.yml" \
     -p "$MANAGED_VALKEY_COMPOSE_PROJECT" config >/dev/null 2>&1; then

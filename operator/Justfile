@@ -1,5 +1,4 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set dotenv-path := "../.env"
 
 export GOTOOLCHAIN := "auto"
 
@@ -10,8 +9,9 @@ run: _check-generated
         { echo "сначала выполните scripts/k3s_bootstrap.sh" >&2; exit 1; }
     test -f {{ quote(root / "tmp/k3s/dev/operator.env") }} || \
         { echo "сначала выполните scripts/k3s_bootstrap.sh для настройки сетевого доступа" >&2; exit 1; }
-    set -a && source {{ quote(root / "tmp/k3s/dev/operator.env") }} && set +a && \
-        cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} go run ./operator/cmd/operator
+    cd {{ root }} && source scripts/local_env.sh && load_local_env "$PWD" && \
+        set -a && source {{ quote(root / "tmp/k3s/dev/operator.env") }} && set +a && \
+        KUBECONFIG={{ quote(root / "tmp/k3s/dev/operator.kubeconfig") }} go run ./operator/cmd/operator
 
 format:
     cd {{ root }} && find operator internal -type f -name '*.go' -print0 | \

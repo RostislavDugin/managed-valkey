@@ -7,10 +7,9 @@ trap 'exit 143' TERM
 repo_root=$(git rev-parse --show-toplevel)
 project=${MANAGED_VALKEY_COMPOSE_PROJECT:-managed-valkey-dev}
 
-if [[ "$project" == managed-valkey-dev && -f "$repo_root/.env" ]]; then
-    set -a
-    source "$repo_root/.env"
-    set +a
+if [[ "$project" == managed-valkey-dev ]]; then
+    source "$repo_root/scripts/local_env.sh"
+    load_local_env "$repo_root"
 fi
 
 state_dir=${MV_STATE_DIR:-$repo_root/tmp/k3s/dev}

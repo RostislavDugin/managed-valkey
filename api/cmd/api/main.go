@@ -88,7 +88,7 @@ func run() error {
 		valkey.CryptoSlugGenerator{},
 	)
 	stopKubernetesSync := func() {}
-	if cfg.KubernetesSyncEnabled {
+	if cfg.KubernetesBackgroundSyncEnabled {
 		kubernetes, err := valkeysync.NewKubernetesClient()
 		if err != nil {
 			return err
