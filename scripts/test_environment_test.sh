@@ -135,6 +135,43 @@ rg -q "остаток process: pid=$remaining_pid command=sleep" "$temporary/cle
 export MV_TEST_STATE_ROOT=$temporary/wait-state
 source <(sed '/^command_name=/,$d' "$repo_root/scripts/test_environment.sh")
 
+route_state=$temporary/e2e-route-refresh
+mkdir -p "$route_state"
+printf '%s\n' \
+    'MV_SUITE=e2e' \
+    "MV_STATE_DIR=$(printf '%q' "$route_state")" \
+    "ADMIN_KUBECONFIG=$(printf '%q' "$route_state/admin.kubeconfig")" \
+    "ROUTES_FILE=$(printf '%q' "$route_state/routes.tsv")" \
+    'K3S_CLUSTER_CIDR=10.66.0.0/16' \
+    'K3S_AGENT_1_IP=172.28.9.11' \
+    'K3S_AGENT_2_IP=172.28.9.12' \
+    'K3S_AGENT_3_IP=172.28.9.13' \
+    >"$route_state/environment.env"
+printf 'ready\n' >"$route_state/status"
+(
+    wait_operator_node_ready() {
+        [[ "$1" == k3s-agent-1 ]]
+    }
+    kubectl() {
+        [[ "$*" == *'get node/k3s-agent-1'* ]]
+        printf '10.66.3.0/24\t172.28.9.11\n'
+    }
+    ip() {
+        [[ "$*" == 'route show exact 10.66.3.0/24' ]]
+    }
+    sudo() {
+        printf '%s\n' "$*" >"$route_state/sudo.args"
+    }
+    refresh_test_node_route "$route_state" k3s-agent-1
+)
+rg -q '^ip route replace 10\.66\.3\.0/24 via 172\.28\.9\.11$' "$route_state/sudo.args"
+rg -q $'^10\.66\.3\.0/24\t172\.28\.9\.11$' "$route_state/routes.tsv"
+if (refresh_test_node_route "$route_state" k3s-server) 2>"$route_state/server.err"; then
+    echo "маршрут server разрешено менять через команду восстановления agent" >&2
+    exit 1
+fi
+rg -q 'только для agent тестового стенда' "$route_state/server.err"
+
 (
     unset MV_TEST_K3S_ENABLED
     configure_environment_mode api
@@ -157,6 +194,7 @@ rg -q 'окружение без k3s поддерживает только пр�
     [[ "$BOOTSTRAP_PROFILE" == api ]]
     [[ "$MANAGED_VALKEY_K3S_NODES" == 1 ]]
     [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 0 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY" == Local ]]
 )
 (
     unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
@@ -164,6 +202,7 @@ rg -q 'окружение без k3s поддерживает только пр�
     [[ "$BOOTSTRAP_PROFILE" == full ]]
     [[ "$MANAGED_VALKEY_K3S_NODES" == 3 ]]
     [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 2 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY" == Local ]]
 )
 (
     unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
@@ -171,6 +210,7 @@ rg -q 'окружение без k3s поддерживает только пр�
     [[ "$BOOTSTRAP_PROFILE" == full ]]
     [[ "$MANAGED_VALKEY_K3S_NODES" == 1 ]]
     [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 1 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY" == Local ]]
 )
 (
     unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
@@ -178,13 +218,40 @@ rg -q 'окружение без k3s поддерживает только пр�
     [[ "$BOOTSTRAP_PROFILE" == full ]]
     [[ "$MANAGED_VALKEY_K3S_NODES" == 3 ]]
     [[ "$MANAGED_VALKEY_ENVOY_REPLICAS" == 2 ]]
+    [[ "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY" == Cluster ]]
+    [[ "$MANAGED_VALKEY_VALKEY_IMAGE" == valkey/valkey:8.1.9 ]]
 )
+if (
+    unset MANAGED_VALKEY_K3S_NODES MANAGED_VALKEY_ENVOY_REPLICAS
+    MANAGED_VALKEY_VALKEY_IMAGE=valkey/valkey:latest configure_cluster_profile e2e
+) 2>"$temporary/latest.err"; then
+    echo "e2e разрешил тег Valkey latest" >&2
+    exit 1
+fi
+rg -q 'запрещает незакреплённый тег Valkey latest' "$temporary/latest.err"
+
+[[ "$(MV_SUITE=e2e public_node_for_suite e2e)" == k3s-server ]]
+
+preload_state="$temporary/preload-e2e"
+mkdir -p "$preload_state"
+state_dir=$preload_state
+MV_SUITE=e2e
+MANAGED_VALKEY_COMPOSE_PROJECT=managed-valkey-e2e-preload
+MANAGED_VALKEY_VALKEY_IMAGE=valkey/valkey:8.1.9
+load_image_into_k3s() {
+    printf '%s\n' "$*" >"$temporary/preload.args"
+}
+preload_e2e_valkey_image k3s-server k3s-agent-1 k3s-agent-2
+rg -q '^managed-valkey-e2e-preload valkey/valkey:8\.1\.9 k3s-server k3s-agent-1 k3s-agent-2$' \
+    "$temporary/preload.args"
+[[ "$(wc -l <"$preload_state/preloaded-images.tsv")" == 3 ]]
+rg -q '^k3s-server[[:space:]]+valkey/valkey:8\.1\.9$' "$preload_state/preloaded-images.tsv"
 
 [[ "$(MV_TEST_K3S_ENABLED=0 default_memory_mib_for_suite api)" == 512 ]]
 [[ "$(default_memory_mib_for_suite api)" == 3072 ]]
 [[ "$(default_memory_mib_for_suite operator)" == 3072 ]]
 [[ "$(default_memory_mib_for_suite integration)" == 8192 ]]
-[[ "$(default_memory_mib_for_suite e2e)" == 3072 ]]
+[[ "$(default_memory_mib_for_suite e2e)" == 8192 ]]
 
 diagnostic_state=$temporary/integration-diagnostics
 mkdir -p "$diagnostic_state/diagnostics"
@@ -200,6 +267,21 @@ printf '%s\n' \
 PATH="$mock_bin:$PATH" collect_diagnostics "$diagnostic_state"
 rg -q '^external operator log$' "$diagnostic_state/diagnostics/operator.log"
 rg -q '^operator pod log$' "$diagnostic_state/diagnostics/operator-kubernetes.log"
+
+e2e_diagnostic_state=$temporary/e2e-diagnostics
+mkdir -p "$e2e_diagnostic_state/diagnostics"
+: >"$e2e_diagnostic_state/admin.kubeconfig"
+printf 'host operator log\n' >"$e2e_diagnostic_state/diagnostics/operator.log"
+printf '%s\n' \
+    'MV_SUITE=e2e' \
+    'MV_RUN_ID=e2e-diagnostics' \
+    "DIAGNOSTICS_DIR=$(printf '%q' "$e2e_diagnostic_state/diagnostics")" \
+    "ADMIN_KUBECONFIG=$(printf '%q' "$e2e_diagnostic_state/admin.kubeconfig")" \
+    'MANAGED_VALKEY_COMPOSE_PROJECT=e2e-diagnostics' \
+    >"$e2e_diagnostic_state/environment.env"
+PATH="$mock_bin:$PATH" collect_diagnostics "$e2e_diagnostic_state"
+rg -q '^host operator log$' "$e2e_diagnostic_state/diagnostics/operator.log"
+rg -q '^operator pod log$' "$e2e_diagnostic_state/diagnostics/operator-kubernetes.log"
 
 reserve_environment_resources() { :; }
 release_environment_resources() { :; }
@@ -222,6 +304,14 @@ fi
 rg -q '^full[[:space:]][1-9][0-9]*$' \
     "$state_root/integration/target-overrun/diagnostics/durations.tsv"
 rg -q 'target_seconds=0 target_exceeded=true' "$temporary/duration.err"
+if ! MV_E2E_TARGET_SECONDS=0 run_in_environment e2e e2e-target-overrun -- "$slow_success" \
+    >"$temporary/e2e-duration.out" 2>"$temporary/e2e-duration.err"; then
+    echo "успешный e2e-запуск стал ошибкой из-за длительности" >&2
+    exit 1
+fi
+rg -q '^full[[:space:]][1-9][0-9]*$' \
+    "$state_root/e2e/e2e-target-overrun/diagnostics/durations.tsv"
+rg -q 'target_seconds=0 target_exceeded=true' "$temporary/e2e-duration.err"
 stubborn=$temporary/stubborn
 write_script "$stubborn" \
     'sleep 0.2' \

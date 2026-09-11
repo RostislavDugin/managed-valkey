@@ -51,6 +51,7 @@ type ValkeyInstanceReconciler struct {
 	SystemNamespace      string
 	ValkeyImage          string
 	BaseDomain           string
+	GatewayPort          gatewayv1.PortNumber
 	Environment          string
 	OperatorCIDRs        []string
 	Clock                clock.Clock
@@ -60,6 +61,7 @@ type ValkeyInstanceReconciler struct {
 	ReadEnvoy            EnvoySnapshotReader
 	EnvoyCache           *EnvoySnapshotCache
 	EnvoyProcesses       int
+	ResourceRequests     corev1.ResourceList
 	UpdateAppAccess      AppAccessUpdater
 	PromoteProcess       ProcessPromoter
 	FollowProcess        ProcessFollower

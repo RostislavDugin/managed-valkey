@@ -2,11 +2,28 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 root := justfile_directory() / "../.."
 
-test:
+check:
+    cd {{ root }} && bash -n scripts/test_environment.sh scripts/k3s_bootstrap.sh scripts/test_e2e.sh scripts/run_playwright_e2e.sh scripts/sanitize_e2e_artifacts.sh scripts/check_e2e_catalog.sh
+    cd {{ root }} && scripts/check_test_artifacts_test.sh
+    cd {{ root }} && scripts/sanitize_e2e_artifacts_test.sh
+    cd {{ root }} && scripts/run_playwright_e2e_test.sh
+    cd {{ root }} && scripts/load_k3s_image_test.sh
+    cd {{ root }} && scripts/test_e2e_runner_test.sh
+    cd {{ root }} && scripts/test_environment_test.sh
+    cd {{ root }} && scripts/check_e2e_catalog_test.sh
+    cd {{ root }} && pnpm --dir tests/e2e typecheck
+    cd {{ root }} && pnpm --dir tests/e2e test:unit
+    cd {{ root }} && scripts/check_e2e_catalog.sh
+
+test: check
     cd {{ root }} && scripts/test_environment.sh exec e2e -- scripts/test_e2e.sh
 
-test-headed:
+test-group group: check
+    cd {{ root }} && scripts/check_e2e_catalog.sh "{{group}}"
+    cd {{ root }} && MANAGED_VALKEY_E2E_GROUP="{{group}}" scripts/test_environment.sh exec e2e -- scripts/test_e2e.sh
+
+test-headed: check
     cd {{ root }} && MANAGED_VALKEY_E2E_HEADED=1 scripts/test_environment.sh exec e2e -- scripts/test_e2e.sh
 
-test-e2e-prod:
+test-e2e-prod: check
     @cd {{ root }} && PLAYWRIGHT_BASE_URL=https://app.h3llo-demo.com scripts/run_playwright_e2e.sh prod

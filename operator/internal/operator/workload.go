@@ -50,7 +50,12 @@ func (r *ValkeyInstanceReconciler) reconcileWorkloadResources(
 	if instance.Status.Rollout != nil && instance.Status.Rollout.Image != "" {
 		valkeyImage = instance.Status.Rollout.Image
 	}
-	desiredWorkload := desiredStatefulSet(workloadInstance, configMap.Name, valkeyImage)
+	desiredWorkload := desiredStatefulSet(
+		workloadInstance,
+		configMap.Name,
+		valkeyImage,
+		r.ResourceRequests,
+	)
 	desiredWorkload.Spec.Replicas = new(rolloutWorkloadReplicas(instance, *desiredWorkload.Spec.Replicas))
 	if err := runRolloutActionControl(ctx, "before-statefulset-update", instance, desiredWorkload); err != nil {
 		return ctrl.Result{}, err
@@ -193,22 +198,22 @@ func desiredStatefulSet(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	configMapName string,
 	image string,
+	requestOverrides corev1.ResourceList,
 ) *appsv1.StatefulSet {
 	accepted := instance.Status.AcceptedConfiguration
 	selectorLabels := workloadLabels(accepted.Slug)
 	labels := workloadResourceLabels(instance)
 	defaultMode := int32(0o555)
 	terminationGracePeriod := int64(30)
-	resources := corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewQuantity(int64(accepted.VCPU), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(accepted.RAMGB)*gibibyte, resource.BinarySI),
-		},
-		Limits: corev1.ResourceList{
-			corev1.ResourceCPU:    *resource.NewQuantity(int64(accepted.VCPU), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(accepted.RAMGB)*gibibyte, resource.BinarySI),
-		},
+	limits := corev1.ResourceList{
+		corev1.ResourceCPU:    *resource.NewQuantity(int64(accepted.VCPU), resource.DecimalSI),
+		corev1.ResourceMemory: *resource.NewQuantity(int64(accepted.RAMGB)*gibibyte, resource.BinarySI),
 	}
+	requests := limits.DeepCopy()
+	for name, quantity := range requestOverrides {
+		requests[name] = quantity.DeepCopy()
+	}
+	resources := corev1.ResourceRequirements{Requests: requests, Limits: limits}
 	readinessProbe := new(corev1.Probe)
 	readinessProbe.Exec = &corev1.ExecAction{
 		Command: []string{"/bin/sh", "/etc/valkey-config/readiness.sh"},

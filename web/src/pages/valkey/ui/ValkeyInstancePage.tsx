@@ -113,8 +113,10 @@ export function ValkeyInstancePage() {
 
   const total = getTotalResources(instance, instance.mode);
   const host = credentials?.host ?? instance.host;
+  const hostRo = credentials?.hostRo ?? instance.hostRo;
   const port = credentials?.port ?? instance.port;
-  const address = `${instance.host}:${instance.port}`;
+  const address = `${host}:${port}`;
+  const readOnlyAddress = hostRo ? `${hostRo}:${port}` : null;
   const canConfigure =
     !instance.isUpdating &&
     !instance.isStale &&
@@ -138,6 +140,19 @@ export function ValkeyInstancePage() {
               </Group>
             }
           />
+          {readOnlyAddress && (
+            <PropertyRow
+              label="Адрес только для чтения"
+              value={
+                <Group gap="h3_xs" wrap="nowrap">
+                  <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
+                    {readOnlyAddress}
+                  </Text>
+                  <CopyAction label="Скопировать адрес только для чтения" value={readOnlyAddress} />
+                </Group>
+              }
+            />
+          )}
           {credentialsError ? (
             <Alert
               className={styles.credentialsError}
@@ -218,6 +233,16 @@ export function ValkeyInstancePage() {
                   (изменить)
                 </Text>
               </Group>
+            }
+          />
+          <PropertyRow
+            label="Применённая конфигурация"
+            value={
+              <Text c="h3_text_2" size="h3_sm">
+                {instance.appliedVcpu > 0 && instance.appliedRamGb > 0
+                  ? `${formatVcpu(instance.appliedVcpu)} / ${formatRam(instance.appliedRamGb)}`
+                  : 'Ещё не применена'}
+              </Text>
             }
           />
           <PropertyRow

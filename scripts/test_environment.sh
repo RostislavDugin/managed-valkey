@@ -109,6 +109,8 @@ validate_cluster_profile() {
 configure_cluster_profile() {
     local suite=$1
 
+    MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY=Local
+    MANAGED_VALKEY_VALKEY_IMAGE=${MANAGED_VALKEY_VALKEY_IMAGE:-valkey/valkey:8.1.9}
     if [[ "$suite" == api ]]; then
         BOOTSTRAP_PROFILE=api
         MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-1}
@@ -121,8 +123,14 @@ configure_cluster_profile() {
         BOOTSTRAP_PROFILE=full
         MANAGED_VALKEY_K3S_NODES=${MANAGED_VALKEY_K3S_NODES:-3}
         MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-2}
+        if [[ "$suite" == e2e ]]; then
+            MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY=Cluster
+        fi
     fi
     K3S_EXPECTED_NODES=$MANAGED_VALKEY_K3S_NODES
+    if [[ "$suite" == e2e && "$MANAGED_VALKEY_VALKEY_IMAGE" == *:latest ]]; then
+        fail "e2e запрещает незакреплённый тег Valkey latest"
+    fi
     validate_cluster_profile
 }
 
@@ -131,7 +139,7 @@ default_memory_mib_for_suite() {
 
     if [[ "$suite" == api && "${MV_TEST_K3S_ENABLED:-1}" == 0 ]]; then
         printf '512\n'
-    elif [[ "$suite" == integration ]]; then
+    elif [[ "$suite" == integration || "$suite" == e2e ]]; then
         printf '8192\n'
     else
         printf '3072\n'
@@ -316,6 +324,9 @@ allocate_environment() {
     write_value K3S_EXPECTED_NODES "$K3S_EXPECTED_NODES"
     write_value MANAGED_VALKEY_K3S_NODES "$MANAGED_VALKEY_K3S_NODES"
     write_value MANAGED_VALKEY_ENVOY_REPLICAS "$MANAGED_VALKEY_ENVOY_REPLICAS"
+    write_value MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY \
+        "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY"
+    write_value MANAGED_VALKEY_VALKEY_IMAGE "$MANAGED_VALKEY_VALKEY_IMAGE"
     write_value BOOTSTRAP_PROFILE "$BOOTSTRAP_PROFILE"
     write_value ADMIN_KUBECONFIG "$ADMIN_KUBECONFIG"
     write_value API_KUBECONFIG "$API_KUBECONFIG"
@@ -339,6 +350,44 @@ allocate_environment() {
 compose() {
     docker compose -f "$compose_file" -f "$test_compose_file" \
         -p "$MANAGED_VALKEY_COMPOSE_PROJECT" "$@"
+}
+
+load_image_into_k3s() {
+    "$repo_root/scripts/load_k3s_image.sh" "$@"
+}
+
+preload_e2e_valkey_image() {
+    local image=${MANAGED_VALKEY_VALKEY_IMAGE:-valkey/valkey:8.1.9} node
+    local -a nodes=("$@")
+
+    [[ "$MV_SUITE" == e2e ]] || return 0
+    docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
+    load_image_into_k3s "$MANAGED_VALKEY_COMPOSE_PROJECT" "$image" "${nodes[@]}"
+
+    umask 077
+    : >"$state_dir/preloaded-images.tsv"
+    for node in "${nodes[@]}"; do
+        printf '%s\t%s\n' "$node" "$image" >>"$state_dir/preloaded-images.tsv"
+    done
+    log "e2e образ Valkey загружен на ${#nodes[@]} ноды: $image"
+}
+
+public_node_for_suite() {
+    local suite=$1 public_node
+
+    if [[ "$suite" == e2e ]]; then
+        printf 'k3s-server\n'
+        return 0
+    fi
+    public_node=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl -n envoy-gateway-system get pods \
+        -l gateway.envoyproxy.io/owning-gateway-name=valkey \
+        --field-selector=status.phase=Running \
+        -o jsonpath='{.items[0].spec.nodeName}')
+    case "$public_node" in
+    k3s-server | k3s-agent-1 | k3s-agent-2 | k3s-agent-3) ;;
+    *) fail "не найдена нода с готовым Envoy" ;;
+    esac
+    printf '%s\n' "$public_node"
 }
 
 prepare_postgres() {
@@ -396,19 +445,14 @@ prepare_cluster() {
     export NETWORK_FAULTS_FILE FAULT_EVENTS_FILE
     export BOOTSTRAP_PROFILE K3S_EXPECTED_NODES KUBERNETES_SERVER
     export MANAGED_VALKEY_ENVOY_REPLICAS
+    export MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY
     export MANAGED_VALKEY_COMPOSE_PROJECT MANAGED_VALKEY_DOCKER_NETWORK
     export MANAGED_VALKEY_CA_FILE VALKEY_BASE_DOMAIN
     "$repo_root/scripts/k3s_bootstrap.sh"
+    preload_e2e_valkey_image "${services[@]}"
 
     if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
-        public_node=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl -n envoy-gateway-system get pods \
-            -l gateway.envoyproxy.io/owning-gateway-name=valkey \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].spec.nodeName}')
-        case "$public_node" in
-        k3s-server | k3s-agent-1 | k3s-agent-2 | k3s-agent-3) ;;
-        *) fail "не найдена нода с готовым Envoy" ;;
-        esac
+        public_node=$(public_node_for_suite "$MV_SUITE")
     fi
     public_address=$(compose port "$public_node" 31379)
     MANAGED_VALKEY_PUBLIC_ADDRESS=$public_address
@@ -476,6 +520,20 @@ report_integration_duration() {
     mkdir -p "$DIAGNOSTICS_DIR"
     printf 'full\t%d\n' "$elapsed_seconds" >>"$DIAGNOSTICS_DIR/durations.tsv"
     log "integration duration: total_seconds=$elapsed_seconds target_seconds=$target_seconds target_exceeded=$exceeded"
+}
+
+report_e2e_duration() {
+    local started_seconds=$1 target_seconds=${MV_E2E_TARGET_SECONDS:-2400}
+    local elapsed_seconds exceeded=false
+
+    [[ "$target_seconds" =~ ^[0-9]+$ ]] || fail "MV_E2E_TARGET_SECONDS должно быть целым неотрицательным числом"
+    elapsed_seconds=$((SECONDS - started_seconds))
+    if ((elapsed_seconds > target_seconds)); then
+        exceeded=true
+    fi
+    mkdir -p "$DIAGNOSTICS_DIR"
+    printf 'full\t%d\n' "$elapsed_seconds" >>"$DIAGNOSTICS_DIR/durations.tsv"
+    log "e2e duration: total_seconds=$elapsed_seconds target_seconds=$target_seconds target_exceeded=$exceeded"
 }
 
 register_environment_owner() {
@@ -556,7 +614,7 @@ wait_operator_node_ready() {
     fail "у Node $node отсутствует Pod CIDR или InternalIP"
 }
 
-configure_operator_node_route() {
+configure_test_node_route() {
     local node=$1 route node_ip pod_cidr current temporary
 
     route=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get "node/$node" \
@@ -613,13 +671,51 @@ expand_operator_cluster() {
             "$MANAGED_VALKEY_COMPOSE_PROJECT" "$valkey_image" k3s-agent-3
     fi
     wait_operator_node_ready k3s-agent-3
-    configure_operator_node_route k3s-agent-3
+    configure_test_node_route k3s-agent-3
 
     actual_gateway=$(docker network inspect "$MANAGED_VALKEY_DOCKER_NETWORK" \
         --format '{{(index .IPAM.Config 0).Gateway}}')
     [[ "$actual_gateway" == "$K3S_DOCKER_GATEWAY" ]] ||
         fail "gateway сети изменился после добавления agent"
     log "четвёртая нода оператора готова: $target"
+}
+
+refresh_test_node_route() {
+    local target=$1 node=$2 expected_node_ip
+
+    [[ -f "$target/environment.env" ]] || fail "нет состояния $target"
+    state_dir=$target
+    environment_file="$target/environment.env"
+    set -a
+    source "$environment_file"
+    set +a
+    [[ "$MV_SUITE" == e2e || "$MV_SUITE" == operator ]] ||
+        fail "маршрут Node обновляется только для стенда e2e или оператора"
+    [[ "$(cat "$target/status")" == ready ]] || fail "тестовый стенд не готов"
+    case "$node" in
+    k3s-agent-1) expected_node_ip=$K3S_AGENT_1_IP ;;
+    k3s-agent-2) expected_node_ip=$K3S_AGENT_2_IP ;;
+    k3s-agent-3) expected_node_ip=$K3S_AGENT_3_IP ;;
+    *) fail "маршрут можно обновить только для agent тестового стенда" ;;
+    esac
+    require_command ip kubectl python3 sudo
+    wait_operator_node_ready "$node"
+    local route node_ip pod_cidr
+    route=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get "node/$node" \
+        -o jsonpath='{.spec.podCIDR}{"\t"}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{end}')
+    IFS=$'\t' read -r pod_cidr node_ip <<<"$route"
+    [[ "$node_ip" == "$expected_node_ip" ]] || fail "InternalIP Node $node не принадлежит стенду"
+    python3 - "$pod_cidr" "$K3S_CLUSTER_CIDR" <<'PY'
+import ipaddress
+import sys
+
+pod_network = ipaddress.ip_network(sys.argv[1])
+cluster_network = ipaddress.ip_network(sys.argv[2])
+if not pod_network.subnet_of(cluster_network):
+    raise SystemExit("Pod CIDR Node не принадлежит тестовому кластеру")
+PY
+    configure_test_node_route "$node"
+    log "маршрут восстановленной Node обновлён: $node $pod_cidr via $node_ip"
 }
 
 refresh_operator_public_address() {
@@ -654,7 +750,7 @@ collect_diagnostics() {
     source "$target/environment.env"
     set +a
     operator_log="$DIAGNOSTICS_DIR/operator.log"
-    if [[ "$MV_SUITE" == integration ]]; then
+    if [[ "$MV_SUITE" == integration || "$MV_SUITE" == e2e ]]; then
         operator_log="$DIAGNOSTICS_DIR/operator-kubernetes.log"
     fi
     mkdir -p "$DIAGNOSTICS_DIR"
@@ -938,6 +1034,8 @@ run_in_environment() {
     release_environment_resources
     if [[ "$suite" == integration ]]; then
         report_integration_duration "$run_started_seconds" || cleanup_status=$?
+    elif [[ "$suite" == e2e ]]; then
+        report_e2e_duration "$run_started_seconds" || cleanup_status=$?
     fi
     trap - EXIT
     ((signal_status == 0)) || command_status=$signal_status
@@ -954,6 +1052,7 @@ usage() {
     echo "usage: $0 prepare <api|operator|integration|e2e> [run-id]" >&2
     echo "       $0 expand-operator <state-dir> <operator-image> <valkey-image>" >&2
     echo "       $0 refresh-operator-public <state-dir>" >&2
+    echo "       $0 refresh-node-route <state-dir> <node>" >&2
     echo "       $0 cleanup|diagnostics <state-dir>" >&2
     echo "       $0 exec <api|operator|integration|e2e> [run-id] -- <command>" >&2
     exit 2
@@ -975,6 +1074,10 @@ expand-operator)
 refresh-operator-public)
     (($# == 2)) || usage
     refresh_operator_public_address "$2"
+    ;;
+refresh-node-route)
+    (($# == 3)) || usage
+    refresh_test_node_route "$2" "$3"
     ;;
 cleanup)
     (($# == 2)) || usage

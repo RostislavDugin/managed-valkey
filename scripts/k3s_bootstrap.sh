@@ -26,6 +26,7 @@ ENVOY_NODE_PORT=${ENVOY_NODE_PORT:-31379}
 BOOTSTRAP_PROFILE=${BOOTSTRAP_PROFILE:-full}
 K3S_EXPECTED_NODES=${K3S_EXPECTED_NODES:-3}
 MANAGED_VALKEY_ENVOY_REPLICAS=${MANAGED_VALKEY_ENVOY_REPLICAS:-2}
+MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY=${MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY:-Local}
 MANAGED_VALKEY_DOCKER_NETWORK=${MANAGED_VALKEY_DOCKER_NETWORK:-${project}_default}
 MANAGED_VALKEY_CA_FILE=${MANAGED_VALKEY_CA_FILE:-$state_dir/ca.crt}
 
@@ -222,9 +223,9 @@ install_managed_valkey() {
 
     if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
         kubectl apply -f "$repo_root/deploy/dev/infra"
-        envoy_patch="{\"spec\":{\"provider\":{\"kubernetes\":{\"envoyDeployment\":{\"replicas\":${MANAGED_VALKEY_ENVOY_REPLICAS}}}}}}"
+        envoy_patch="{\"spec\":{\"provider\":{\"kubernetes\":{\"envoyService\":{\"externalTrafficPolicy\":\"${MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY}\"},\"envoyDeployment\":{\"replicas\":${MANAGED_VALKEY_ENVOY_REPLICAS}}}}}}"
         if ((MANAGED_VALKEY_ENVOY_REPLICAS == 1)); then
-            envoy_patch='{"spec":{"provider":{"kubernetes":{"envoyDeployment":{"replicas":1,"pod":{"nodeSelector":{"kubernetes.io/hostname":"k3s-server"}}}}}}}'
+            envoy_patch="{\"spec\":{\"provider\":{\"kubernetes\":{\"envoyService\":{\"externalTrafficPolicy\":\"${MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY}\"},\"envoyDeployment\":{\"replicas\":1,\"pod\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"k3s-server\"}}}}}}}"
         fi
         kubectl -n valkey-system patch envoyproxy valkey-dev --type=merge \
             -p "$envoy_patch"
@@ -310,7 +311,7 @@ pin_envoy_node_port() {
         -p "[{\"op\":\"replace\",\"path\":\"/spec/ports/$((index - 1))/nodePort\",\"value\":${ENVOY_NODE_PORT}}]"
     if [[ "$project" != managed-valkey-dev ]]; then
         kubectl -n envoy-gateway-system patch svc "$service" --type=merge \
-            -p '{"spec":{"externalTrafficPolicy":"Local"}}'
+            -p "{\"spec\":{\"externalTrafficPolicy\":\"${MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY}\"}}"
     fi
     kubectl -n envoy-gateway-system wait \
         -l gateway.envoyproxy.io/owning-gateway-name=valkey \
@@ -387,6 +388,13 @@ if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
         echo "bootstrap: реплики Envoy нельзя разнести по $K3S_EXPECTED_NODES нодам" >&2
         exit 1
     fi
+    case "$MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY" in
+    Local | Cluster) ;;
+    *)
+        echo "bootstrap: externalTrafficPolicy должен быть Local или Cluster" >&2
+        exit 1
+        ;;
+    esac
     require_commands helm ip openssl sudo
     if [[ "$project" == managed-valkey-dev ]]; then
         require_commands mkcert

@@ -357,9 +357,8 @@ type NodeMetricStatus struct {
 	EvictedKeys int64 `json:"evictedKeys"`
 
 	// +kubebuilder:validation:Minimum=0
-	// +nullable
-	// +required
-	CPUMillicores *int64 `json:"cpuMillicores"`
+	// +optional
+	CPUMillicores *int64 `json:"cpuMillicores,omitempty"`
 }
 
 type EnvoyProcessStatus struct {

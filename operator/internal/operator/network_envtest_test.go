@@ -83,6 +83,7 @@ func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_Prese
 				Scheme:          NewScheme(),
 				SystemNamespace: "default",
 				BaseDomain:      "valkey.localhost",
+				GatewayPort:     30443,
 			}
 			_, err := reconciler.reconcileNetworkResources(ctx, instance)
 			errors <- err
@@ -100,6 +101,7 @@ func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_Prese
 		Scheme:          NewScheme(),
 		SystemNamespace: "default",
 		BaseDomain:      "valkey.localhost",
+		GatewayPort:     30443,
 	}
 	if _, err := reconciler.reconcileNetworkResources(ctx, open); err != nil {
 		t.Fatalf("reconcile открытой сети: %v", err)
@@ -120,6 +122,7 @@ func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_Prese
 	}
 	allowListener := listenerByName(t, gateway.Spec.Listeners, "allow-a1b2c3")
 	if allowListener.Hostname == nil || *allowListener.Hostname != "allow-a1b2c3.valkey.localhost" ||
+		allowListener.Port != 30443 ||
 		allowListener.AllowedRoutes == nil || allowListener.AllowedRoutes.Namespaces == nil ||
 		allowListener.AllowedRoutes.Namespaces.Selector == nil ||
 		allowListener.AllowedRoutes.Namespaces.Selector.MatchLabels[instanceLabelKey] != "allow-a1b2c3" {

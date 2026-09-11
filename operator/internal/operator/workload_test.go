@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,7 +21,7 @@ import (
 
 func Test_DesiredStatefulSet_WithSingleMode_CreatesOnePodWithSecurityAndResourceContract(t *testing.T) {
 	instance := completeAcceptedInstance()
-	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
+	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9", nil)
 
 	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 1 ||
 		statefulSet.Spec.PodManagementPolicy != appsv1.ParallelPodManagement ||
@@ -73,6 +74,34 @@ func Test_DesiredStatefulSet_WithSingleMode_CreatesOnePodWithSecurityAndResource
 	}
 }
 
+func Test_DesiredStatefulSet_WithRequestOverrides_PreservesConfiguredLimits(t *testing.T) {
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.VCPU = 4
+	instance.Status.AcceptedConfiguration.RAMGB = 16
+	requests := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("100m"),
+		corev1.ResourceMemory: resource.MustParse("128Mi"),
+	}
+
+	statefulSet := desiredStatefulSet(
+		instance,
+		"cache-a1b2c3-config-digest",
+		"valkey/valkey:8.1.9",
+		requests,
+	)
+	resources := statefulSet.Spec.Template.Spec.Containers[0].Resources
+	expectedRequestCPU := requests[corev1.ResourceCPU]
+	expectedRequestMemory := requests[corev1.ResourceMemory]
+	expectedLimitCPU := resource.MustParse("4")
+	expectedLimitMemory := resource.MustParse("16Gi")
+	if resources.Requests.Cpu().Cmp(expectedRequestCPU) != 0 ||
+		resources.Requests.Memory().Cmp(expectedRequestMemory) != 0 ||
+		resources.Limits.Cpu().Cmp(expectedLimitCPU) != 0 ||
+		resources.Limits.Memory().Cmp(expectedLimitMemory) != 0 {
+		t.Fatalf("ресурсы Valkey не совпали: %+v", resources)
+	}
+}
+
 func Test_DesiredOperatorResources_WithOwnerMetadata_AddsDescriptionsWithoutChangingSelectors(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -85,7 +114,7 @@ func Test_DesiredOperatorResources_WithOwnerMetadata_AddsDescriptionsWithoutChan
 	if err != nil {
 		t.Fatalf("сформировать ConfigMap: %v", err)
 	}
-	statefulSet := desiredStatefulSet(instance, configMap.Name, "valkey/valkey:8.1.9")
+	statefulSet := desiredStatefulSet(instance, configMap.Name, "valkey/valkey:8.1.9", nil)
 	services := desiredServices(instance)
 	networkPolicy := desiredNetworkPolicy(instance, "valkey-system", nil)
 	pdb := desiredPodDisruptionBudget(instance)
@@ -166,7 +195,7 @@ func Test_ReconcileStatefulSet_WhenValkeyImageChanges_PreservesExistingTemplate(
 		t.Fatalf("сформировать ConfigMap: %v", err)
 	}
 	const originalImage = "valkey/valkey:8.1.9"
-	statefulSet := desiredStatefulSet(instance, configMap.Name, originalImage)
+	statefulSet := desiredStatefulSet(instance, configMap.Name, originalImage, nil)
 	k8s := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
@@ -213,7 +242,7 @@ func Test_ReconcileStatefulSet_WhenValkeyImageChanges_PreservesExistingTemplate(
 func Test_EnsureStatefulSet_WithServerDefaultsAndUnknownMetadata_DoesNotPatchRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()
-	desired := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
+	desired := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9", nil)
 	current := desired.DeepCopy()
 	current.Spec.RevisionHistoryLimit = ptr.To[int32](10)
 	current.Labels["example.com/unknown"] = "label"
@@ -234,7 +263,7 @@ func Test_DesiredStatefulSetAndDisruptionBudget_WithHAMode_CreateThreeAntiAffine
 	instance := completeAcceptedInstance()
 	instance.Spec.Mode = valkeyv1alpha1.ValkeyModeHA
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
-	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9")
+	statefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9", nil)
 
 	container := statefulSet.Spec.Template.Spec.Containers[0]
 	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 3 ||

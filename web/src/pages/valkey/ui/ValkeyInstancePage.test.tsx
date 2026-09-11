@@ -17,6 +17,43 @@ afterEach(() => {
 });
 
 describe('управление базой Valkey', () => {
+  it('показывает применённую конфигурацию и отдельный адрес только для чтения у HA-базы', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([
+      valkeyInstanceDto({
+        mode: 'ha',
+        vcpu: 2,
+        ram_gb: 8,
+        applied_vcpu: 2,
+        applied_ram_gb: 8,
+        host_ro: 'shop-abc123-ro.valkey.test',
+      }),
+    ]);
+
+    renderValkeySection(instancePath, session);
+
+    expect(await screen.findByRole('heading', { name: 'cache' }, WAIT)).toBeVisible();
+    expect(screen.getByText('Применённая конфигурация').parentElement).toHaveTextContent(
+      '2 vCPU / 8 ГБ'
+    );
+    expect(screen.getByText('Адрес только для чтения').parentElement).toHaveTextContent(
+      'shop-abc123-ro.valkey.test:41379'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Скопировать адрес только для чтения' })
+    ).toBeVisible();
+  });
+
+  it('не показывает адрес только для чтения у single-базы', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi();
+
+    renderValkeySection(instancePath, session);
+
+    expect(await screen.findByRole('heading', { name: 'cache' }, WAIT)).toBeVisible();
+    expect(screen.queryByText('Адрес только для чтения')).not.toBeInTheDocument();
+  });
+
   it('при сохранении имени и окна обслуживания отправляет один PATCH и повторно загружает карточку базы', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi();

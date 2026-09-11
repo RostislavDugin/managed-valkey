@@ -68,7 +68,6 @@ jobs:
 
   test-api:
     name: Тесты API
-    needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -80,6 +79,8 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
+      - name: Установить системные зависимости
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Запустить тесты
         working-directory: api
         env:
@@ -96,7 +97,6 @@ jobs:
 
   test-operator:
     name: Тесты оператора (unit/envtest)
-    needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -122,7 +122,6 @@ jobs:
 
   test-web:
     name: Тесты клиентского приложения
-    needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -148,7 +147,6 @@ jobs:
 
   test-integrations:
     name: Интеграция API и оператора
-    needs: [lint-api, lint-operator, lint-web]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -160,8 +158,12 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
+      - name: Установить системные зависимости
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Запустить общую интеграцию
         env:
+          MV_TEST_MEMORY_MIB: "2048"
+          MV_TEST_MIN_AVAILABLE_MIB: "1024"
           POSTGRES_PASSWORD: ci-postgres-password
         run: just test-integrations
       - name: Проверить диагностику
@@ -187,12 +189,24 @@ jobs:
           retention-days: 7
 
   test-e2e:
-    name: Сквозной тест регистрации
-    needs: [lint-api, lint-operator, lint-web]
+    name: Полный сквозной набор Playwright (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [lifecycle, quotas, failures]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Освободить место для трёхнодового стенда
+        run: |
+          sudo rm -rf -- \
+            /opt/az \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version-file: go.mod
@@ -211,27 +225,46 @@ jobs:
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b
         with:
           just-version: 1.43.0
+      - name: Установить системные зависимости
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Установить зависимости клиентского приложения
         working-directory: web
         run: pnpm install --frozen-lockfile
-      - name: Установить зависимости e2e и Chromium
+      - name: Установить зависимости e2e
         working-directory: tests/e2e
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium
-      - name: Запустить сквозной тест
+        run: pnpm install --frozen-lockfile
+      - name: Проверить каталог e2e
+        run: scripts/check_e2e_catalog.sh "${{ matrix.group }}"
+      - name: Установить Chromium
+        working-directory: tests/e2e
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Запустить полный сквозной набор
         env:
+          MV_TEST_MEMORY_MIB: "3072"
+          MV_TEST_MIN_AVAILABLE_MIB: "1024"
           POSTGRES_PASSWORD: ci-postgres-password
-        run: just test-e2e
-      - name: Проверить диагностику на пароль
+          VALKEY_INTEGRATION_REQUEST_CPU: "100m"
+          VALKEY_INTEGRATION_REQUEST_MEMORY: "128Mi"
+        run: just test-e2e-group "${{ matrix.group }}"
+      - name: Проверить диагностику на секреты
         id: check-e2e-artifacts
         if: failure()
-        run: scripts/check_test_artifacts.sh tmp/playwright/e2e tmp/k3s/e2e
+        run: |
+          scanner_args=()
+          for secret_values in tmp/k3s/e2e/*/e2e-secret-values; do
+            if [[ -f "$secret_values" ]]; then
+              scanner_args+=(--secret-values-file "$secret_values")
+            fi
+          done
+          scripts/check_e2e_artifacts.sh \
+            "${scanner_args[@]}" \
+            tmp/playwright/e2e \
+            tmp/k3s/e2e/*/diagnostics
       - name: Сохранить диагностику
         if: failure() && steps.check-e2e-artifacts.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: e2e-test-diagnostics-${{ github.sha }}
+          name: e2e-test-diagnostics-${{ matrix.group }}-${{ github.sha }}
           path: |
             tmp/playwright/e2e/**
             tmp/k3s/e2e/*/diagnostics/**
@@ -240,7 +273,6 @@ jobs:
 
   build-api:
     name: Сборка API и миграций
-    needs: [test-api, test-operator, test-web, test-integrations, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -279,7 +311,6 @@ jobs:
 
   build-web:
     name: Сборка Caddy и клиентского приложения
-    needs: [test-api, test-operator, test-web, test-integrations, test-e2e]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -307,10 +338,60 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  ci-success:
+    name: Итоговая проверка CI
+    if: always()
+    needs:
+      - lint-api
+      - lint-operator
+      - lint-web
+      - test-api
+      - test-operator
+      - test-web
+      - test-integrations
+      - test-e2e
+      - build-api
+      - build-web
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Проверить результаты обязательных заданий
+        env:
+          LINT_API_RESULT: ${{ needs.lint-api.result }}
+          LINT_OPERATOR_RESULT: ${{ needs.lint-operator.result }}
+          LINT_WEB_RESULT: ${{ needs.lint-web.result }}
+          TEST_API_RESULT: ${{ needs.test-api.result }}
+          TEST_OPERATOR_RESULT: ${{ needs.test-operator.result }}
+          TEST_WEB_RESULT: ${{ needs.test-web.result }}
+          TEST_INTEGRATIONS_RESULT: ${{ needs.test-integrations.result }}
+          TEST_E2E_RESULT: ${{ needs.test-e2e.result }}
+          BUILD_API_RESULT: ${{ needs.build-api.result }}
+          BUILD_WEB_RESULT: ${{ needs.build-web.result }}
+        run: |
+          results=(
+            "lint-api=$LINT_API_RESULT"
+            "lint-operator=$LINT_OPERATOR_RESULT"
+            "lint-web=$LINT_WEB_RESULT"
+            "test-api=$TEST_API_RESULT"
+            "test-operator=$TEST_OPERATOR_RESULT"
+            "test-web=$TEST_WEB_RESULT"
+            "test-integrations=$TEST_INTEGRATIONS_RESULT"
+            "test-e2e=$TEST_E2E_RESULT"
+            "build-api=$BUILD_API_RESULT"
+            "build-web=$BUILD_WEB_RESULT"
+          )
+          failed=0
+          for result in "${results[@]}"; do
+            if [[ ${result#*=} != success ]]; then
+              echo "$result" >&2
+              failed=1
+            fi
+          done
+          exit "$failed"
+
   deploy:
     name: Развёртывание рабочего окружения
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build-api, build-web]
+    needs: [ci-success]
     runs-on: ubuntu-24.04
     environment: production
     concurrency:

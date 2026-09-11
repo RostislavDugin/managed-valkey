@@ -55,6 +55,7 @@ services:
 
   k3s-agent-1: &k3s-agent
     image: rancher/k3s:v1.35.7-k3s1
+    restart: unless-stopped
     command:
       - agent
       - --node-name=k3s-agent-1

@@ -38,3 +38,35 @@ assert_rejected exact-password "request failed: $password"
 assert_rejected account-token "Authorization: Bearer $token"
 assert_rejected kubeconfig $'clusters:\n- cluster:\n    certificate-authority-data: ZGF0YQ==\nusers:\ncurrent-context: test'
 assert_rejected secret-content $'apiVersion: v1\nkind: Secret\ndata:\n  app-password: ZGF0YQ=='
+
+python3 - "$temporary/archive.zip" "$password" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("report.txt", f"password={sys.argv[2]}\n")
+PY
+if "$scanner" --secret-values-file "$secret_values" "$temporary/archive.zip" \
+    >"$temporary/archive.out" 2>"$temporary/archive.err"; then
+    echo "секрет внутри ZIP был принят" >&2
+    exit 1
+fi
+rg -q 'секретное значение' "$temporary/archive.err"
+
+python3 - "$temporary/embedded.html" "$temporary/archive.zip" <<'PY'
+import base64
+import pathlib
+import sys
+
+archive = pathlib.Path(sys.argv[2]).read_bytes()
+pathlib.Path(sys.argv[1]).write_bytes(
+    b'<a href="data:application/zip;base64,' + base64.b64encode(archive) + b'">report</a>'
+)
+PY
+if "$scanner" --secret-values-file "$secret_values" "$temporary/embedded.html" \
+    >"$temporary/embedded.out" 2>"$temporary/embedded.err"; then
+    echo "секрет внутри встроенного ZIP был принят" >&2
+    exit 1
+fi
+rg -q 'секретное значение' "$temporary/embedded.err"

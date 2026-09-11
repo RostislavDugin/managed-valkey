@@ -46,6 +46,37 @@ func Test_RZ09_ReconcileRolloutPreparing_WhenWorkloadStillUsesAppliedSize_KeepsA
 	}
 }
 
+func Test_PodTemplateMatchesRollout_WithReducedRequests_UsesLimits(t *testing.T) {
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.VCPU = 4
+	instance.Status.AcceptedConfiguration.RAMGB = 16
+	instance.Status.Rollout = &valkeyv1alpha1.RolloutStatus{
+		DesiredGeneration: 2,
+		VCPU:              4,
+		RAMGB:             16,
+		Image:             "valkey:fixed",
+		Stage:             valkeyv1alpha1.RolloutStageUpdatingTemplate,
+	}
+	requests := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("100m"),
+		corev1.ResourceMemory: resource.MustParse("128Mi"),
+	}
+	statefulSet := desiredStatefulSet(
+		instance,
+		rolloutConfigMapName(instance),
+		instance.Status.Rollout.Image,
+		requests,
+	)
+
+	if !statefulSetTemplateMatchesRollout(statefulSet, instance) {
+		t.Fatal("шаблон с уменьшенными запросами ресурсов не совпал с лимитами перекатки")
+	}
+	statefulSet.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
+	if statefulSetTemplateMatchesRollout(statefulSet, instance) {
+		t.Fatal("шаблон с неверным лимитом CPU принят")
+	}
+}
+
 func Test_RZ03_ReconcileFullStop_WhenClientAccessIsOpen_ScalesDownOnlyAfterAccessCloses(t *testing.T) {
 	instance := completeAcceptedInstance()
 	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
@@ -254,6 +285,9 @@ func Test_RZ05_ReconcileReplicaAdmission_WhenRolloutIsActive_DoesNotBlockTargetR
 		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("2"),
 			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		}, Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		}},
 	}}
 	replica := testObservedNode(pod)
@@ -322,6 +356,9 @@ func Test_RZ11_ReconcileRollingReplacement_WhenStatusWriteConflicts_RetriesWithC
 		Name:  "valkey",
 		Image: instance.Status.Rollout.Image,
 		Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		}, Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("2"),
 			corev1.ResourceMemory: resource.MustParse("4Gi"),
 		}},

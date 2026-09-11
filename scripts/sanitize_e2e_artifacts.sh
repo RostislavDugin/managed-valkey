@@ -1,24 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-(($# > 0)) || {
-    echo "usage: $0 <artifact-path>..." >&2
+secret_value_files=()
+artifact_paths=()
+while (($# > 0)); do
+    case "$1" in
+    --secret-values-file)
+        (($# >= 2)) || {
+            echo "usage: $0 [--secret-values-file <path>] <artifact-path>..." >&2
+            exit 2
+        }
+        secret_value_files+=("$2")
+        shift 2
+        ;;
+    *)
+        artifact_paths+=("$1")
+        shift
+        ;;
+    esac
+done
+((${#artifact_paths[@]} > 0)) || {
+    echo "usage: $0 [--secret-values-file <path>] <artifact-path>..." >&2
     exit 2
 }
 
-MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD=${MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD:?MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD не задан} \
-    python3 - "$@" <<'PY'
+python3 - "${#secret_value_files[@]}" "${secret_value_files[@]}" -- "${artifact_paths[@]}" <<'PY'
 import base64
 import io
-import os
 import pathlib
 import re
 import sys
 import zipfile
 
-needle = os.environ["MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD"].encode()
+secret_file_count = int(sys.argv[1])
+secret_files = [pathlib.Path(value) for value in sys.argv[2 : 2 + secret_file_count]]
+artifact_paths = [pathlib.Path(value) for value in sys.argv[3 + secret_file_count :]]
 replacement = b"<redacted>"
 embedded_zip = re.compile(rb"data:application/zip;base64,([A-Za-z0-9+/=]+)")
+secret_values = [b"testpassword"]
+
+for secret_file in secret_files:
+    if secret_file.exists():
+        secret_values.extend(value for value in secret_file.read_bytes().splitlines() if value)
+secret_values = sorted(set(secret_values), key=len, reverse=True)
 
 
 def sanitize_zip(data: bytes) -> bytes:
@@ -37,7 +61,8 @@ def sanitize_bytes(data: bytes) -> bytes:
             data = sanitize_zip(data)
         except zipfile.BadZipFile:
             pass
-    data = data.replace(needle, replacement)
+    for value in secret_values:
+        data = data.replace(value, replacement)
 
     def sanitize_embedded(match: re.Match[bytes]) -> bytes:
         archive = base64.b64decode(match.group(1))
@@ -47,8 +72,7 @@ def sanitize_bytes(data: bytes) -> bytes:
     return embedded_zip.sub(sanitize_embedded, data)
 
 
-for raw_path in sys.argv[1:]:
-    path = pathlib.Path(raw_path)
+for path in artifact_paths:
     if not path.exists():
         continue
     files = [path] if path.is_file() else (item for item in path.rglob("*") if item.is_file())

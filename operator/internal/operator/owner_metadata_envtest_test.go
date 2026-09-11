@@ -31,7 +31,7 @@ func Test_Envtest_ReconcileOwnerMetadata_WithExistingWorkload_UpdatesWithoutRepl
 	legacy.Labels = nil
 	legacy.Annotations = nil
 	legacy.Status.AcceptedConfiguration.InstanceID = ""
-	legacyStatefulSet := desiredStatefulSet(legacy, "cache-a1b2c3-config", "valkey/valkey:8.1.9")
+	legacyStatefulSet := desiredStatefulSet(legacy, "cache-a1b2c3-config", "valkey/valkey:8.1.9", nil)
 	if err := k8s.Create(ctx, legacyStatefulSet); err != nil {
 		t.Fatalf("создать прежний StatefulSet: %v", err)
 	}
@@ -54,7 +54,7 @@ func Test_Envtest_ReconcileOwnerMetadata_WithExistingWorkload_UpdatesWithoutRepl
 
 	instance := completeAcceptedInstance()
 	instance.Namespace = "default"
-	desiredStatefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config", "valkey/valkey:8.1.9")
+	desiredStatefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config", "valkey/valkey:8.1.9", nil)
 	reconciler := &ValkeyInstanceReconciler{Client: k8s, Scheme: NewScheme()}
 	if changed, err := reconciler.ensureStatefulSet(ctx, desiredStatefulSet); err != nil || !changed {
 		t.Fatalf("дополнить StatefulSet: changed=%t error=%v", changed, err)

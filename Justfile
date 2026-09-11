@@ -24,6 +24,9 @@ test-integrations:
 test-e2e:
     just --justfile tests/e2e/Justfile test
 
+test-e2e-group group:
+    just --justfile tests/e2e/Justfile test-group "{{group}}"
+
 test-e2e-headed:
     just --justfile tests/e2e/Justfile test-headed
 

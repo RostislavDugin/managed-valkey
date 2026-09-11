@@ -123,10 +123,16 @@ func NewManager(
 	if envoyProcesses == 0 {
 		envoyProcesses = config.DefaultEnvoyProcesses
 	}
+	publicPort := cfg.PublicPort
+	if publicPort == 0 {
+		publicPort = config.DefaultPublicPort
+	}
+	if publicPort < 1 || publicPort > 65535 {
+		return nil, fmt.Errorf("публичный порт должен быть от 1 до 65535")
+	}
 	if envoyProcesses < 1 || envoyProcesses > config.DefaultEnvoyProcesses {
 		return nil, fmt.Errorf("число процессов Envoy должно быть от 1 до %d", config.DefaultEnvoyProcesses)
 	}
-
 	reconciler := &ValkeyInstanceReconciler{
 		Client:               mgr.GetClient(),
 		APIReader:            mgr.GetAPIReader(),
@@ -136,6 +142,7 @@ func NewManager(
 		SystemNamespace:      systemNamespace,
 		ValkeyImage:          valkeyImage,
 		BaseDomain:           baseDomain,
+		GatewayPort:          publicPort,
 		Environment:          cfg.Logging.Environment,
 		OperatorCIDRs:        slices.Clone(cfg.OperatorCIDRs),
 		Clock:                clock.RealClock{},
@@ -143,6 +150,7 @@ func NewManager(
 		RESTConfig:           restConfig,
 		EnvoyCache:           NewEnvoySnapshotCache(),
 		EnvoyProcesses:       envoyProcesses,
+		ResourceRequests:     cfg.ResourceRequests.DeepCopy(),
 	}
 
 	if err := reconciler.SetupWithManager(mgr); err != nil {

@@ -414,7 +414,6 @@ spec:
                     cpuMillicores:
                       format: int64
                       minimum: 0
-                      nullable: true
                       type: integer
                     evictedKeys:
                       format: int64
@@ -459,7 +458,6 @@ spec:
                   - collectedAt
                   - connectedClients
                   - containerID
-                  - cpuMillicores
                   - evictedKeys
                   - keyspaceHits
                   - keyspaceMisses

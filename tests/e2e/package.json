@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:catalog": "node --experimental-strip-types src/catalog.ts",
     "test": "playwright test",
+    "test:failures": "playwright test --grep @local-k8s",
     "test:headed": "playwright test --headed",
+    "test:lifecycle": "playwright test --grep @prod",
     "test:prod": "playwright test --headed --grep @prod",
+    "test:quotas": "playwright test --grep '@local(?!-k8s)'",
+    "test:unit": "node --experimental-strip-types --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -17,5 +22,8 @@
   "engines": {
     "node": ">=24.0.0"
   },
-  "packageManager": "pnpm@10.33.0"
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "iovalkey": "0.4.0"
+  }
 }

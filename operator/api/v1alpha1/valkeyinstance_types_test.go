@@ -10,7 +10,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func Test_NodeMetricStatus_WhenJSONRoundTrip_PreservesMicrosecondsAndNullableCPU(t *testing.T) {
+func Test_NodeMetricStatus_WhenCPUIsUnavailable_OmitsCPUAndPreservesMicroseconds(t *testing.T) {
 	collectedAt := time.Date(2026, time.September, 9, 12, 34, 56, 123456000, time.UTC)
 	metric := valkeyv1alpha1.NodeMetricStatus{
 		Ordinal:          1,
@@ -33,6 +33,13 @@ func Test_NodeMetricStatus_WhenJSONRoundTrip_PreservesMicrosecondsAndNullableCPU
 	if err != nil {
 		t.Fatalf("закодировать снимок метрик: %v", err)
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("декодировать поля снимка метрик: %v", err)
+	}
+	if _, exists := fields["cpuMillicores"]; exists {
+		t.Fatal("CPU присутствует в JSON при недоступной метрике")
+	}
 
 	var decoded valkeyv1alpha1.NodeMetricStatus
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
@@ -42,6 +49,6 @@ func Test_NodeMetricStatus_WhenJSONRoundTrip_PreservesMicrosecondsAndNullableCPU
 		t.Fatalf("время %s, ожидалось %s", decoded.CollectedAt.Time, collectedAt)
 	}
 	if decoded.CPUMillicores != nil {
-		t.Fatalf("CPU равен %v, ожидался null", decoded.CPUMillicores)
+		t.Fatalf("CPU равен %v, ожидалось отсутствие значения", decoded.CPUMillicores)
 	}
 }

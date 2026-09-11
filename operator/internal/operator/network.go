@@ -71,7 +71,11 @@ func (r *ValkeyInstanceReconciler) reconcileGatewayListener(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	endpoint networkEndpoint,
 ) (bool, error) {
-	desired := desiredGatewayListener(instance, r.BaseDomain, endpoint)
+	port := r.GatewayPort
+	if port == 0 {
+		port = instance.Status.AcceptedConfiguration.PublicPort
+	}
+	desired := desiredGatewayListener(instance, r.BaseDomain, port, endpoint)
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
@@ -192,6 +196,7 @@ func (r *ValkeyInstanceReconciler) removeNetworkResources(
 func desiredGatewayListener(
 	instance *valkeyv1alpha1.ValkeyInstance,
 	baseDomain string,
+	port gatewayv1.PortNumber,
 	endpoint networkEndpoint,
 ) gatewayv1.Listener {
 	accepted := instance.Status.AcceptedConfiguration
@@ -206,7 +211,7 @@ func desiredGatewayListener(
 	return gatewayv1.Listener{
 		Name:     gatewayv1.SectionName(name),
 		Hostname: &hostname,
-		Port:     accepted.PublicPort,
+		Port:     port,
 		Protocol: gatewayv1.TLSProtocolType,
 		TLS: &gatewayv1.ListenerTLSConfig{
 			Mode: &mode,

@@ -509,8 +509,8 @@ func podTemplateMatchesRollout(
 		if container.Name != "valkey" {
 			continue
 		}
-		cpu := container.Resources.Requests.Cpu()
-		memory := container.Resources.Requests.Memory()
+		cpu := container.Resources.Limits.Cpu()
+		memory := container.Resources.Limits.Memory()
 		return configMatches && container.Image == rollout.Image && cpu != nil && memory != nil &&
 			cpu.CmpInt64(int64(rollout.VCPU)) == 0 &&
 			memory.CmpInt64(int64(rollout.RAMGB)*gibibyte) == 0
