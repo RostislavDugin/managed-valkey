@@ -4,7 +4,7 @@
 
 В кластере три одинаковые рабочие ноды по 4 vCPU и 16 GiB. Kubernetes API и процессы `kubelet` имеют версию `v1.34.1`; ноды используют `containerd` 1.7.25 и доступны только по внутренним адресам `10.17.0.26`–`10.17.0.28`. Проверка 11 сентября 2026 года показала, что `ContainerRestartRules` не задан в настройках ни одного из трёх процессов `kubelet`: поле принимается сервером, но завершившийся контейнер перезапускается. До исправления этой возможности включать оператор и синхронизацию API нельзя.
 
-Секреты `PRODUCTION_KUBECONFIG`, `CLOUDFLARE_ACCOUNT_ID` и `CLOUDFLARE_API_TOKEN` добавлены в окружение GitHub `production`. Cloudflare подтверждает, что токен аккаунта активен и имеет доступ к активной зоне `h3llo-demo.com`. Общедоступный пакет `ghcr.io/rostislavdugin/managed-valkey-operator` появится только после первой публикации образа.
+Секреты `PRODUCTION_KUBECONFIG`, `CLOUDFLARE_ACCOUNT_ID` и `CLOUDFLARE_API_TOKEN` добавлены в окружение GitHub `production`. Cloudflare подтверждает, что токен аккаунта активен и имеет доступ к активной зоне `h3llo-demo.com`. Пакет `ghcr.io/rostislavdugin/managed-valkey-operator` открыт для общего доступа. Образ ревизии `4a8a5dfe0d2d69623906b2c6c1c9dfd3fcd9c8df` имеет платформу `linux/amd64` и загружается без учётных данных.
 
 ## Goals / Non-Goals
 
