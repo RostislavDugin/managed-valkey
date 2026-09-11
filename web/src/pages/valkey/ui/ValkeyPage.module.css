@@ -167,10 +167,6 @@
   padding-block: 3.75rem;
 }
 
-.emptyAside {
-  display: none;
-}
-
 .tableCard {
   overflow: hidden;
   border: 1px solid var(--h3-border);

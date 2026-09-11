@@ -37,6 +37,9 @@ import { ValkeyAside } from './ValkeyAside';
 import { useValkeySection } from './ValkeyLayout';
 import styles from './ValkeyPage.module.css';
 
+const QUOTA_DESCRIPTION =
+  'Квота ограничивает количество ресурсов, которые вы можете заказать. Она защищает от случайного создания слишком большого количества серверов, например скриптом автоматизации. Чтобы увеличить квоту, обратитесь в поддержку.';
+
 function matchesQuery(instance: ValkeyInstance, query: string) {
   const haystack = [
     instance.name,
@@ -124,12 +127,12 @@ function ListSkeleton() {
   );
 }
 
-function EmptyState() {
-  const { asideSlot } = useValkeySection();
-
+function EmptyState({ quota }: { quota: ValkeyQuota }) {
   return (
     <>
-      {asideSlot ? createPortal(<span className={styles.emptyAside} />, asideSlot) : null}
+      <ValkeyAside description={QUOTA_DESCRIPTION} label="Квота">
+        <QuotaUsagePanel quota={quota} />
+      </ValkeyAside>
 
       <div className={styles.empty}>
         <Badge color="h3_bg_2" c="h3_text" radius="h3_full" size="lg" variant="filled">
@@ -286,7 +289,7 @@ export function ValkeyManagementPage() {
   if (instances.length === 0) {
     return (
       <Container className={styles.emptyPage} fluid>
-        <EmptyState />
+        <EmptyState quota={quota} />
       </Container>
     );
   }
@@ -307,10 +310,7 @@ export function ValkeyManagementPage() {
           )
         : null}
 
-      <ValkeyAside
-        description="Квота ограничивает количество ресурсов, которые вы можете заказать. Она защищает от случайного создания слишком большого количества серверов, например скриптом автоматизации. Чтобы увеличить квоту, обратитесь в поддержку."
-        label="Квота"
-      >
+      <ValkeyAside description={QUOTA_DESCRIPTION} label="Квота">
         <QuotaUsagePanel quota={quota} />
       </ValkeyAside>
 

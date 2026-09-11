@@ -1,4 +1,4 @@
-import { act, screen } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderValkeySection, seedSession } from '../../../../test/render';
 import {
@@ -14,6 +14,24 @@ afterEach(() => {
 });
 
 describe('список баз Valkey', () => {
+  it('при отсутствии баз показывает нулевое использование квоты в правой колонке', async () => {
+    const session = seedSession();
+    installStatefulValkeyApi([]);
+
+    renderValkeySection('/valkey/management', session);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT)
+    ).toBeVisible();
+    const aside = screen.getByTestId('console-aside');
+    expect(within(aside).getByRole('heading', { name: 'Квота' })).toBeVisible();
+    expect(within(aside).getByRole('progressbar', { name: 'vCPU: занято 0 / 8' })).toBeVisible();
+    expect(
+      within(aside).getByRole('progressbar', { name: /RAM: занято 0\sГБ \/ 32\sГБ/ })
+    ).toBeVisible();
+    expect(within(aside).getByRole('link', { name: 'Увеличить через поддержку' })).toBeVisible();
+  });
+
   it('при повторном открытии страницы загружает сохранённые базы с сервера и показывает их в таблице', async () => {
     const session = seedSession();
     installStatefulValkeyApi([valkeyInstanceDto({ name: 'persistent-cache' })]);
