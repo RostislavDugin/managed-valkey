@@ -2253,7 +2253,8 @@ func Test_FP05_RecoverSingle_WhenProcessExitsCleanlyWhileOperatorIsDown_Replaces
 			return false
 		}
 		after := current.Status.Nodes[0]
-		return after.PodUID != before.PodUID && after.ContainerID != before.ContainerID && after.RunID != before.RunID &&
+		return after.PodUID != before.PodUID && after.ContainerID != before.ContainerID &&
+			after.RunID != before.RunID &&
 			after.Termination == nil &&
 			after.Readiness
 	}, "FP-05 замены чисто завершённого процесса")
