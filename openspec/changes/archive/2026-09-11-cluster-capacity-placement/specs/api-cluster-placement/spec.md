@@ -73,7 +73,7 @@ API SHALL проверять размещение и сохранять наме
 
 ### Requirement: Отказ размещения отличается от общей нехватки
 
-При достаточных личной и общей квотах, но невозможном распределении API SHALL возвращать `422 NOT_ENOUGH_RESOURCES` с `details.reason=placement_capacity`. Объект `details` SHALL сохранять общие `limit`, `used`, `requested`, `missing` и дополнительно содержать `placement.node_count`, `placement.required_distinct_nodes`, `placement.process` и `placement.node_budget`; последние два объекта SHALL содержать целые `cpu_milli` и `ram_mib`. Общий `missing` SHALL быть нулевым, если общая квота не превышена. Ответ MUST NOT раскрывать чужие инстансы или реальные имена нод. Отказ MUST NOT сохранять частичные записи, аудит, биллинг и идемпотентный ключ.
+При достаточных личной и общей квотах, но невозможном распределении API SHALL возвращать `422 NOT_ENOUGH_RESOURCES` с `details.reason=placement_capacity`. Объект `details` SHALL сохранять общие `limit`, `used`, `requested`, `missing` и дополнительно содержать `placement.node_count`, `placement.required_distinct_nodes`, `placement.process` и `placement.node_budget`; последние два объекта SHALL содержать целые `cpu_milli` и `ram_mib`. Общий `missing` SHALL быть нулевым, если общая квота не превышена. Ответ MUST NOT раскрывать чужие инстансы или реальные имена нод. Отказ MUST NOT сохранять частичные записи, аудит, платёжные записи и идемпотентный ключ.
 
 #### Scenario: Фрагментация без общего дефицита
 
