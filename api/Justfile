@@ -5,7 +5,9 @@ export GOTOOLCHAIN := "auto"
 
 root := justfile_directory() / ".."
 
-run: migration-up
+run: migration-up _run-server
+
+_run-server:
     cd {{ root }} && KUBECONFIG={{ quote(root / "tmp/k3s/dev/api.kubeconfig") }} go run ./api/cmd/api
 
 format:

@@ -187,6 +187,7 @@ run() {
         OPERATOR_ENV="$state_dir/operator.env" \
         ROUTES_FILE="$state_dir/routes.tsv" \
         "$repo_root/scripts/k3s_bootstrap.sh"
+    just --justfile "$repo_root/api/Justfile" migration-up
     pnpm --dir "$repo_root/web" install --frozen-lockfile
 
     trap stop_children EXIT
@@ -194,7 +195,7 @@ run() {
     trap 'stop_children; exit 143' TERM
     setsid just --justfile "$repo_root/operator/Justfile" run &
     child_pids+=("$!")
-    setsid env HTTP_ADDR=":$dev_api_port" just --justfile "$repo_root/api/Justfile" run &
+    setsid env HTTP_ADDR=":$dev_api_port" just --justfile "$repo_root/api/Justfile" _run-server &
     child_pids+=("$!")
     setsid env API_PROXY_TARGET="http://127.0.0.1:$dev_api_port" \
         just --justfile "$repo_root/web/Justfile" run 127.0.0.1 "$dev_web_port" &
