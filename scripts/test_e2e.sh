@@ -143,8 +143,11 @@ valkey_public_port=${MANAGED_VALKEY_PUBLIC_ADDRESS##*:}
 set -a
 source "${OPERATOR_ENV:?OPERATOR_ENV не задан}"
 set +a
-managed_k8s_node_ram_gb=${MANAGED_K8S_NODE_RAM_GB:-16}
-managed_k8s_node_vcpu=${MANAGED_K8S_NODE_VCPU:-4}
+managed_k8s_node_count=${MANAGED_K8S_NODE_COUNT:-3}
+managed_k8s_node_capacity_vcpu=${MANAGED_K8S_NODE_CAPACITY_VCPU:-4}
+managed_k8s_node_capacity_ram_gb=${MANAGED_K8S_NODE_CAPACITY_RAM_GB:-16}
+managed_k8s_node_reserved_cpu_milli=${MANAGED_K8S_NODE_RESERVED_CPU_MILLI:-2666}
+managed_k8s_node_reserved_ram_mib=${MANAGED_K8S_NODE_RESERVED_RAM_MIB:-10922}
 valkey_gateway_port=${VALKEY_LISTENER_PORT:-41379}
 
 trap finish EXIT
@@ -165,8 +168,11 @@ setsid env \
     JWT_SECRET="$jwt_secret" \
     KUBECONFIG="${API_KUBECONFIG:?API_KUBECONFIG не задан}" \
     LOG_LEVEL=error \
-    MANAGED_K8S_NODE_RAM_GB="$managed_k8s_node_ram_gb" \
-    MANAGED_K8S_NODE_VCPU="$managed_k8s_node_vcpu" \
+    MANAGED_K8S_NODE_COUNT="$managed_k8s_node_count" \
+    MANAGED_K8S_NODE_CAPACITY_VCPU="$managed_k8s_node_capacity_vcpu" \
+    MANAGED_K8S_NODE_CAPACITY_RAM_GB="$managed_k8s_node_capacity_ram_gb" \
+    MANAGED_K8S_NODE_RESERVED_CPU_MILLI="$managed_k8s_node_reserved_cpu_milli" \
+    MANAGED_K8S_NODE_RESERVED_RAM_MIB="$managed_k8s_node_reserved_ram_mib" \
     VALKEY_BASE_DOMAIN="${VALKEY_BASE_DOMAIN:?VALKEY_BASE_DOMAIN не задан}" \
     VALKEY_INSTANCE_MAX_RAM_GB="${VALKEY_INSTANCE_MAX_RAM_GB:-16}" \
     VALKEY_INSTANCE_MAX_VCPU="${VALKEY_INSTANCE_MAX_VCPU:-4}" \
@@ -215,8 +221,11 @@ if [[ "${MANAGED_VALKEY_E2E_HEADED:-0}" == 1 ]]; then
         MANAGED_VALKEY_E2E_COMPOSE_PROJECT="${MANAGED_VALKEY_COMPOSE_PROJECT:?MANAGED_VALKEY_COMPOSE_PROJECT не задан}" \
         MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
         MANAGED_VALKEY_E2E_STATE_DIR="$state_dir" \
-        MANAGED_K8S_NODE_RAM_GB="$managed_k8s_node_ram_gb" \
-        MANAGED_K8S_NODE_VCPU="$managed_k8s_node_vcpu" \
+        MANAGED_K8S_NODE_COUNT="$managed_k8s_node_count" \
+        MANAGED_K8S_NODE_CAPACITY_VCPU="$managed_k8s_node_capacity_vcpu" \
+        MANAGED_K8S_NODE_CAPACITY_RAM_GB="$managed_k8s_node_capacity_ram_gb" \
+        MANAGED_K8S_NODE_RESERVED_CPU_MILLI="$managed_k8s_node_reserved_cpu_milli" \
+        MANAGED_K8S_NODE_RESERVED_RAM_MIB="$managed_k8s_node_reserved_ram_mib" \
         "$repo_root/scripts/run_playwright_e2e.sh" headed "$e2e_group"
 else
     PLAYWRIGHT_BASE_URL="http://127.0.0.1:$web_port" \
@@ -225,8 +234,11 @@ else
         MANAGED_VALKEY_E2E_COMPOSE_PROJECT="${MANAGED_VALKEY_COMPOSE_PROJECT:?MANAGED_VALKEY_COMPOSE_PROJECT не задан}" \
         MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
         MANAGED_VALKEY_E2E_STATE_DIR="$state_dir" \
-        MANAGED_K8S_NODE_RAM_GB="$managed_k8s_node_ram_gb" \
-        MANAGED_K8S_NODE_VCPU="$managed_k8s_node_vcpu" \
+        MANAGED_K8S_NODE_COUNT="$managed_k8s_node_count" \
+        MANAGED_K8S_NODE_CAPACITY_VCPU="$managed_k8s_node_capacity_vcpu" \
+        MANAGED_K8S_NODE_CAPACITY_RAM_GB="$managed_k8s_node_capacity_ram_gb" \
+        MANAGED_K8S_NODE_RESERVED_CPU_MILLI="$managed_k8s_node_reserved_cpu_milli" \
+        MANAGED_K8S_NODE_RESERVED_RAM_MIB="$managed_k8s_node_reserved_ram_mib" \
         "$repo_root/scripts/run_playwright_e2e.sh" test "$e2e_group"
 fi
 playwright_status=$?

@@ -1,12 +1,9 @@
-# Production-манифесты оператора. CRD и права берутся из сгенерированных
-# operator/config: kustomize не хранит их копию.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - namespace.yaml
-  - ../../operator/config/crd
-  - ../../operator/config/rbac/role.yaml
   - rbac.yaml
   - operator.yaml
   - envoy.yaml
+  - certificate.yaml

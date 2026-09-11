@@ -27,6 +27,15 @@ type ResourceUsage struct {
 	Instances int
 }
 
+type ValkeyReservation struct {
+	ID           uuid.UUID                 `gorm:"column:id"`
+	Mode         domain.ValkeyInstanceMode `gorm:"column:mode"`
+	VCPU         int                       `gorm:"column:vcpu"`
+	RAMGB        int                       `gorm:"column:ram_gb"`
+	AppliedVCPU  int                       `gorm:"column:applied_vcpu"`
+	AppliedRAMGB int                       `gorm:"column:applied_ram_gb"`
+}
+
 type QuotaUsage struct {
 	MaxVCPU   int `gorm:"column:max_vcpu"`
 	MaxRAMGB  int `gorm:"column:max_ram_gb"`
@@ -193,6 +202,23 @@ func (s *Store) ValkeyUsage(
 	}
 
 	return usage, nil
+}
+
+func (s *Store) ValkeyReservations(
+	ctx context.Context,
+	tx *gorm.DB,
+) ([]ValkeyReservation, error) {
+	var reservations []ValkeyReservation
+	if err := tx.WithContext(ctx).
+		Model(&ValkeyInstance{}).
+		Select("id", "mode", "vcpu", "ram_gb", "applied_vcpu", "applied_ram_gb").
+		Where("deleted_at IS NULL").
+		Order("id").
+		Find(&reservations).Error; err != nil {
+		return nil, fmt.Errorf("прочитать резервы Valkey: %w", err)
+	}
+
+	return reservations, nil
 }
 
 func (s *Store) GetQuotaInTx(ctx context.Context, tx *gorm.DB, userID uuid.UUID) (UserQuota, error) {

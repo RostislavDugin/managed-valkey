@@ -34,6 +34,7 @@ independent = {
     "test-e2e",
     "build-api",
     "build-web",
+    "build-operator",
 }
 if not independent.issubset(job):
     missing = ", ".join(sorted(independent - job.keys()))
@@ -93,6 +94,21 @@ if published_e2e is None:
     raise SystemExit("в test-e2e отсутствует публикация диагностики")
 if "e2e-secret-values" in published_e2e.group(1):
     raise SystemExit("файл контрольных секретов e2e попал в публикуемый артефакт")
+
+operator_build = job["build-operator"]
+for required in (
+    "packages: write",
+    "ghcr.io/rostislavdugin/managed-valkey-operator:${{ github.sha }}",
+    "--platform linux/amd64",
+    "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY",
+    "org.opencontainers.image.revision=$GITHUB_SHA",
+    "docker push \"$OPERATOR_IMAGE\"",
+    "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+):
+    if required not in operator_build:
+        raise SystemExit(f"в build-operator отсутствует {required}")
+if ":latest" in operator_build:
+    raise SystemExit("build-operator использует запрещённый тег latest")
 
 barrier_name = "ci-success"
 if barrier_name not in job:

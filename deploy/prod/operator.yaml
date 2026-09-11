@@ -24,7 +24,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: operator
-          image: managed-valkey/operator:v1
+          image: ghcr.io/rostislavdugin/managed-valkey-operator:0000000000000000000000000000000000000000
           imagePullPolicy: IfNotPresent
           env:
             - name: APP_ENV

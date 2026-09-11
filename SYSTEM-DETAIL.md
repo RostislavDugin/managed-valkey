@@ -185,9 +185,11 @@ DTO содержит маску `password_hint = password_prefix + "*****"`, в�
 
 ### Квота кластера
 
-Лимиты в таблицах не хранятся: `MANAGED_K8S_NODE_VCPU` и `MANAGED_K8S_NODE_RAM_GB` задают общий бюджет Valkey всего кластера, несмотря на NODE в имени. На число Kubernetes-нод бюджет не умножается. Использование считается запросом по всем строкам с `deleted_at is null` независимо от фазы: сумма `nodes * greatest(vcpu, applied_vcpu)` и `nodes * greatest(ram_gb, applied_ram_gb)`, где `nodes` равно 1 для `single` и 3 для `ha`. Дополнительно проверяется предел 32 инстанса на одном Gateway. Так квота не освобождается раньше, чем оператор фактически уменьшил поды или удалил namespace. Инстансы в provisioning, error и deleting квоту занимают до заполнения deleted_at. Изменение размера заменяет собственный резерв покомпонентным максимумом нового desired и прежнего applied. При снижении лимита ниже занятого объёма каждая размерность допускается, если результат помещается в лимит либо не увеличивает прежнее использование.
+Лимиты в таблицах не хранятся. Количество одинаковых нод и их физические ресурсы задают `MANAGED_K8S_NODE_COUNT`, `MANAGED_K8S_NODE_CAPACITY_VCPU` и `MANAGED_K8S_NODE_CAPACITY_RAM_GB`. Из каждой ноды вычитаются `MANAGED_K8S_NODE_RESERVED_CPU_MILLI` и `MANAGED_K8S_NODE_RESERVED_RAM_MIB`. Рабочая конфигурация 3 × 4 vCPU / 16 GiB с резервом 1000m / 2048 MiB даёт Valkey по 3000m / 14336 MiB на ноду и 9000m / 43008 MiB на кластер.
 
-Если создание не помещается в общий CPU/RAM-бюджет или превышает 32 инстанса, исходный HTTP POST немедленно возвращает `422 NOT_ENOUGH_RESOURCES` до записи инстанса и связанных данных. Не создаём заявку в ожидании расширения кластера и не ждём операторского таймаута. Проверка идёт по PostgreSQL и env под общим lock; Kubernetes не вызывается. Неожиданный отказ размещения после принятия запроса остаётся задачей диагностики оператора.
+Использование считается запросом по всем строкам с `deleted_at is null` независимо от фазы: сумма `nodes * greatest(vcpu, applied_vcpu)` и `nodes * greatest(ram_gb, applied_ram_gb)`, где `nodes` равно 1 для `single` и 3 для `ha`. Дополнительно проверяется предел 32 инстанса на одном `Gateway` и существование точной раскладки CPU/RAM. Процессы `ha` размещаются на разных нодах. Так квота не освобождается раньше, чем оператор фактически уменьшил `Pod` или удалил пространство имён. Инстансы в `provisioning`, `error` и `deleting` занимают квоту до заполнения `deleted_at`. Изменение размера заменяет собственный резерв покомпонентным максимумом нового желаемого и прежнего применённого размера.
+
+Если создание превышает общий CPU/RAM-бюджет, предел 32 инстанса или не имеет допустимой раскладки, исходный HTTP POST немедленно возвращает `422 NOT_ENOUGH_RESOURCES` до записи инстанса и связанных данных. `details.reason` равен `cluster_quota`, `instance_limit` или `placement_capacity`. Поиск ограничен 100 мс; истечение срока даёт `503 UNAVAILABLE` с `placement_check_timeout`. Проверка идёт по PostgreSQL и настройкам под общей блокировкой, без вызовов Kubernetes.
 
 ## Транзакции API
 
@@ -1477,9 +1479,13 @@ dev-тома, общий PostgreSQL и ресурсы соседнего зап�
 
 Caddy обслуживает `app.h3llo-demo.com` и `logs.h3llo-demo.com` по HTTPS. Он отдаёт SPA из собственного образа, передаёт `/v1/*`, `/livez` и `/readyz` в API. Маршрут OTLP и `/select/*` с `vmui` временно открыты без пароля; остальные пути домена логов возвращают 404. Публичного доступа к порту VictoriaLogs в обход Caddy нет. Облачная база и резервные копии запланированы после v1 ([раздел 9](SYSTEM.md#9-отказоустойчивость-и-цель-по-доступности)).
 
-В managed k8s h3llo стоят CRD, namespace `valkey-system` с оператором (StatefulSet, 1 реплика, `OnDelete`, headless Service и leader election), Envoy Gateway с `EnvoyProxy` на две реплики и Service типа LoadBalancer, общая `ClientTrafficPolicy valkey-connections`, cert-manager. Манифесты лежат в `deploy/prod` (kustomize). До подготовки отдельного kubeconfig API запускается с `KUBERNETES_SYNC_ENABLED=false`. После включения синхронизации kubeconfig монтируется в контейнер только для чтения и даёт права из [раздела 3](SYSTEM.md#3-кто-с-кем-разговаривает-и-где-авторизация). PostgreSQL доступен API по сети compose и администратору через внешний порт; у оператора нет конфигурации БД и адреса API сервиса. Оператор получает права Kubernetes через in-cluster ServiceAccount и отправляет логи через Caddy по HTTPS без отдельного секрета. Восстановление после удаления worker-ноды через ЛК следует [правилам раздела 6](SYSTEM.md#поды-на-недоступной-ноде); собственного клиента API h3llo и отдельной службы выключения VM в v1 нет.
+В Managed Kubernetes h3llo сценарий выпуска устанавливает CRD, пространство имён `valkey-system`, оператор, Envoy Gateway и `cert-manager`. Оператор работает как `StatefulSet` с одной репликой и `OnDelete`, использует свою учётную запись Kubernetes и не получает адрес PostgreSQL или API. Его образ `ghcr.io/rostislavdugin/managed-valkey-operator:<sha>` общедоступен; кластер скачивает его без `imagePullSecrets`. API работает на VM и получает отдельный файл подключения с правами из [раздела 3](SYSTEM.md#3-кто-с-кем-разговаривает-и-где-авторизация).
 
-GitHub Actions передаёт готовые образы и рабочие файлы по SSH во временный каталог. Сценарий `scripts/install_release.sh` загружает образы и размещает `.env`, `docker-compose.prod.yml`, `release.env` и собственную копию непосредственно в `/opt/managed-valkey`. Файл `release.env` содержит SHA и полные имена образов. Пока `KUBERNETES_SYNC_ENABLED=false`, kubeconfig для установки не требуется. Постоянное имя проекта Docker Compose `managed-valkey` сохраняет тома PostgreSQL, VictoriaLogs и Caddy между запусками.
+Перед изменением кластера `scripts/deploy_kubernetes.sh` проверяет доступность образа оператора, `ContainerRestartRules` на каждой рабочей ноде и готовность Kubernetes API. Затем он ставит Gateway API `v1.5.1`, Envoy Gateway `v1.8.4`, `cert-manager` `v1.21.1`, CRD и RBAC. Сценарий создаёт отдельный файл подключения API с режимом `0600`, проверяет его права, ждёт сертификат и внешний адрес Envoy и сверяет DNS. Он не создаёт пользовательские `ValkeyInstance`.
+
+Кластер, созданный 11 сентября 2026 года, работает на `v1.34.1`. API-сервер принимает поле `restartPolicy: Never` контейнера, но `kubelet` перезапускает проверочный контейнер. Пока провайдер не включит `ContainerRestartRules` на рабочих нодах или не обновит кластер, сценарий останавливается до установки компонентов и API продолжает работать с прежней конфигурацией.
+
+GitHub Actions передаёт готовые образы API и Caddy и рабочие файлы по SSH во временный каталог. Образ оператора отдельное задание публикует в `GHCR`. Сценарий `scripts/install_release.sh` загружает образы и размещает `.env`, `docker-compose.prod.yml`, `release.env`, файл подключения API и собственную копию непосредственно в `/opt/managed-valkey`. Постоянное имя проекта Docker Compose `managed-valkey` сохраняет тома PostgreSQL, VictoriaLogs и Caddy между запусками.
 
 Пользователь `PRODUCTION_SSH_USER` должен иметь доступ к Docker Compose и право записи в `/opt/managed-valkey`.
 
@@ -1493,7 +1499,7 @@ GitHub Actions передаёт готовые образы и рабочие ф
   secrets/kubeconfig/api.kubeconfig
 ```
 
-После загрузки образов сценарий проверяет конфигурацию, запускает Docker Compose с ожиданием миграций и готовности сервисов, затем запрашивает `https://app.h3llo-demo.com/readyz`. Файл `.deployed-sha` меняется только после успешного ответа. Каждый запуск заменяет файлы в том же каталоге; предыдущая ревизия на сервере не хранится, автоматического возврата нет. Миграции `goose down` не выполняются.
+После загрузки образов сценарий проверяет конфигурацию, запускает Docker Compose с ожиданием миграций и готовности сервисов, проверяет монтирование файла подключения только для чтения, затем запрашивает `https://app.h3llo-demo.com/readyz`. Файл `.deployed-sha` меняется только после успешной подготовки Kubernetes и ответа API. Каждый запуск заменяет файлы в том же каталоге; предыдущая ревизия на сервере не хранится, автоматического возврата нет. Миграции `goose down` не выполняются.
 
 Виртуалка отделяет API и PostgreSQL от control plane Kubernetes: вход, чтение последнего состояния и запись намерения удаления не требуют доступного kube-apiserver. VM и compose остаются собственной точкой отказа. Нужно обслуживать VM и доступ API к публичному endpoint Kubernetes. При потере этой связи доставка и импорт остановятся, после чего конфигурационные изменения блокируются по `is_stale`; запущенные Valkey и failover по существующим CR от связи с VM не зависят. Восстановление доступа запускает повторную сверку, но не возвращает пропущенную историю метрик.
 
@@ -1510,7 +1516,7 @@ GitHub Actions передаёт готовые образы и рабочие ф
 | Gateway API CRD          | `v1.5.1`, experimental bundle с `TCPRoute`; один владелец установки CRD, без параллельной установки другой версии chart |
 | cert-manager             | [`v1.21.1`](https://cert-manager.io/docs/installation/kubectl/)                                                         |
 | k3s                      | [`v1.35.7+k3s1`](https://docs.k3s.io/release-notes/v1.35.X)                                                             |
-| Managed Kubernetes h3llo | `1.35.x`; доступную patch-версию и включённый `ContainerRestartRules` на API server и worker-нодах проверяем до развёртывания |
+| Managed Kubernetes h3llo | Не ниже `1.35.x` с работающим `ContainerRestartRules` на API-сервере и рабочих нодах; текущий `v1.34.1` проверку не проходит |
 
 
 v1 поддерживает эту комбинацию; более старые версии не поддерживаются. Совместимость Envoy Gateway с Gateway API и Kubernetes берётся из [матрицы релизов](https://gateway.envoyproxy.io/news/releases/matrix/). Остальные образы и инструменты также закрепляются конкретным тегом/digest или ревизией в манифестах и CI; `latest` не используется. Обновление комбинации проходит интеграционную проверку перед развёртыванием.
@@ -1523,7 +1529,7 @@ v1 поддерживает эту комбинацию; более старые
 | Переменная                                                        | Кто      | Назначение                                                                                                                                                                                          |
 | ----------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL` | `api` | PostgreSQL: в среде разработки `127.0.0.1:45432`, в рабочем окружении сеть Docker Compose; оператор переменную не использует |
-| `KUBERNETES_SYNC_ENABLED` | `api` | `true` по умолчанию; в рабочем окружении временно `false`, чтобы API запускался без kubeconfig |
+| `KUBERNETES_SYNC_ENABLED` | `api` | В новой рабочей конфигурации `true`; выпуск не обновляет API, пока Kubernetes и отдельный файл подключения не готовы |
 | `VL_OTLP_URL` | оба | Полный URL `/insert/opentelemetry/v1/logs`: API в рабочем окружении использует HTTP внутри Docker Compose, в среде разработки URL не задаётся, оператор в рабочем окружении использует HTTPS на `logs.h3llo-demo.com`. Экспорт независим от синхронизации через CR |
 | `LOG_LEVEL`                                                       | оба      | Уровень логов                                                                                                                                                                                       |
 | `VALKEY_BASE_DOMAIN`                                              | оба      | Базовый домен инстансов                                                                                                                                                                             |
@@ -1532,9 +1538,11 @@ v1 поддерживает эту комбинацию; более старые
 | `VALKEY_INSTANCE_MAX_VCPU`, `VALKEY_INSTANCE_MAX_RAM_GB` | `api` | Верхняя граница размера одного инстанса Valkey |
 | `VALKEY_INSTANCE_VCPU_PRICE_COINS_PER_HOUR` | `api` | Ставка за vCPU, по умолчанию `125` копеек в час |
 | `VALKEY_INSTANCE_RAM_GB_PRICE_COINS_PER_HOUR` | `api` | Ставка за GB RAM, по умолчанию `50` копеек в час |
-| `MANAGED_K8S_NODE_VCPU`, `MANAGED_K8S_NODE_RAM_GB` | `api` | Общие доступные Valkey vCPU и RAM всего кластера Managed Kubernetes; без умножения на число нод |
+| `MANAGED_K8S_NODE_COUNT` | `api` | Число одинаковых рабочих нод; в рабочей среде `3` |
+| `MANAGED_K8S_NODE_CAPACITY_VCPU`, `MANAGED_K8S_NODE_CAPACITY_RAM_GB` | `api` | Физические ресурсы одной ноды; в рабочей среде `4` vCPU / `16` GiB |
+| `MANAGED_K8S_NODE_RESERVED_CPU_MILLI`, `MANAGED_K8S_NODE_RESERVED_RAM_MIB` | `api` | Резерв инфраструктуры одной ноды; в рабочей среде `1000m` / `2048 MiB` |
 | `VALKEY_METRICS_RETENTION` | `api` | Хранение метрик, по умолчанию `168h`; VictoriaLogs получает тот же срок напрямую из `docker-compose.prod.yml` |
-| `KUBECONFIG` | `api`; оператор в среде разработки | API использует отдельный kubeconfig. Оператор в среде разработки использует свой kubeconfig, а в рабочем окружении получает права через ServiceAccount внутри кластера |
+| `KUBECONFIG` | `api`; оператор в среде разработки | API использует отдельный файл подключения. Оператор в среде разработки использует свой файл, а в рабочем окружении получает права через `ServiceAccount` внутри кластера |
 | `VALKEY_SYSTEM_NAMESPACE`                                         | оператор | По умолчанию `valkey-system`                                                                                                                                                                        |
 | `VALKEY_IMAGE`                                                    | оператор | Закреплённый образ Valkey, по умолчанию `valkey/valkey:8.1.9`; в v1 не меняется при активных инстансах, обновления относятся к v2                                                                   |
 
@@ -1542,7 +1550,11 @@ Integration-сборка оператора принимает `VALKEY_ENVOY_PRO
 изолированных тестовых стендов. Рабочая сборка не читает эту переменную и всегда
 проверяет обе штатные реплики Envoy.
 
-Окружение GitHub `production` хранит обычные переменные `PRODUCTION_HOST`, `PRODUCTION_SSH_USER`, `PRODUCTION_SSH_PORT` и `PRODUCTION_SSH_KNOWN_HOSTS`. Закрытый ключ `PRODUCTION_SSH_PRIVATE_KEY`, пароль `POSTGRES_PASSWORD` и ключ `JWT_SECRET` хранятся в секретах того же окружения. Перед подключением к серверу задание `deploy` проверяет все семь значений и допустимые в URL символы пароля PostgreSQL.
+Окружение GitHub `production` хранит обычные переменные `PRODUCTION_HOST`, `PRODUCTION_SSH_USER`, `PRODUCTION_SSH_PORT` и `PRODUCTION_SSH_KNOWN_HOSTS`. В секретах находятся `PRODUCTION_SSH_PRIVATE_KEY`, `POSTGRES_PASSWORD`, `JWT_SECRET`, административный `PRODUCTION_KUBECONFIG` и `CLOUDFLARE_API_TOKEN`. Административный файл остаётся только на временном диске исполнителя GitHub и не передаётся на VM. Токен Cloudflare попадает только в `Secret cloudflare-api-token` пространства имён `cert-manager`.
+
+После первой успешной публикации пакету `ghcr.io/rostislavdugin/managed-valkey-operator` один раз задают видимость `Public` в GitHub. Следующие выпуски используют встроенный `GITHUB_TOKEN` с правом `packages: write`; отдельный пароль реестра не нужен. Задание развёртывания проверяет скачивание без учётных данных до изменения кластера.
+
+Для ротации административного файла заменяют `PRODUCTION_KUBECONFIG`. Для ротации токена Cloudflare заменяют `CLOUDFLARE_API_TOKEN` и повторяют выпуск. Токен API Kubernetes меняют в окно обслуживания: удаляют `Secret managed-valkey-api-token`, повторно применяют `deploy/prod/rbac.yaml` и сразу повторяют выпуск. До перезапуска API с новым файлом фоновая синхронизация получает ошибки авторизации, но HTTP и уже работающие Valkey продолжают работать.
 
 Передаваемый на сервер `.env` содержит только `POSTGRES_PASSWORD` и `JWT_SECRET` и имеет режим `0600`. Обычные значения находятся в `docker-compose.prod.yml`, а `release.env` содержит `RELEASE_SHA`, `API_IMAGE`, `MIGRATE_IMAGE` и `CADDY_IMAGE`.
 

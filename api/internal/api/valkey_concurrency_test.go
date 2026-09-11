@@ -11,6 +11,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/apierr"
 	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
+	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
 type concurrentRequest struct {
@@ -94,6 +95,67 @@ func Test_CreateAndResizeValkey_WithConcurrentRequestsAtClusterLimit_ShareCluste
 	}
 	if usedVCPU > 2 {
 		t.Fatalf("конкурентные запросы превысили общий резерв: %d", usedVCPU)
+	}
+}
+
+func Test_CreateValkeys_WithConcurrentRequestsAtPlacementLimit_AcceptsOnlyOne(t *testing.T) {
+	topology := valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 12288}
+	config := testAPIConfig{clusterTopology: &topology}
+	first := newHTTPTestAPI(t, config)
+	second := newHTTPTestAPI(t, config)
+	seedOwner := first.registerAccount(t, "")
+	firstCandidate := first.registerAccount(t, "")
+	secondCandidate := first.registerAccount(t, "")
+	setUserQuota(t, first, seedOwner.ID, 32, 128)
+	setUserQuota(t, first, firstCandidate.ID, 8, 32)
+	setUserQuota(t, first, secondCandidate.ID, 8, 32)
+	createValkey(t, first, seedOwner, map[string]any{"name": "placement-seed-one", "vcpu": 2, "ram_gb": 8})
+	createValkey(t, first, seedOwner, map[string]any{"name": "placement-seed-two", "vcpu": 2, "ram_gb": 8})
+
+	responses := runConcurrentRequests(t,
+		createSizedRequest(first, firstCandidate, "placement-first", 2, 8, uuid.NewString()),
+		createSizedRequest(second, secondCandidate, "placement-second", 2, 8, uuid.NewString()),
+	)
+
+	assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
+	assertOnePlacementCapacityError(t, responses)
+	assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).Where(
+		"user_id IN ?", []uuid.UUID{firstCandidate.ID, secondCandidate.ID},
+	), 1)
+	assertDatabaseCount(t, first.database.DB().Model(&store.IdempotencyKey{}).Where(
+		"user_id IN ?", []uuid.UUID{firstCandidate.ID, secondCandidate.ID},
+	), 1)
+}
+
+func Test_CreateAndResizeValkey_WithConcurrentRequestsAtPlacementLimit_AcceptsOnlyOne(t *testing.T) {
+	topology := valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 12288}
+	config := testAPIConfig{clusterTopology: &topology}
+	first := newHTTPTestAPI(t, config)
+	second := newHTTPTestAPI(t, config)
+	fixedOwner := first.registerAccount(t, "")
+	resizeOwner := first.registerAccount(t, "")
+	createOwner := first.registerAccount(t, "")
+	setUserQuota(t, first, fixedOwner.ID, 32, 128)
+	setUserQuota(t, first, resizeOwner.ID, 8, 32)
+	setUserQuota(t, first, createOwner.ID, 8, 32)
+	createValkey(t, first, fixedOwner, map[string]any{"name": "fixed-one", "vcpu": 2, "ram_gb": 8})
+	createValkey(t, first, fixedOwner, map[string]any{"name": "fixed-two", "vcpu": 2, "ram_gb": 8})
+	resizable := createValkey(t, first, resizeOwner, map[string]any{
+		"name": "resizable", "vcpu": 1, "ram_gb": 4,
+	})
+	makeValkeyReady(t, first, resizable.ID)
+
+	responses := runConcurrentRequests(t,
+		resizeRequest(2, 8)(first, resizeOwner, resizable.ID),
+		createSizedRequest(second, createOwner, "create-competing-for-node", 2, 8, uuid.NewString()),
+	)
+
+	assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
+	assertOnePlacementCapacityError(t, responses)
+	created := countRows(t, first, &store.ValkeyInstance{}, "user_id = ?", createOwner.ID)
+	resized := loadValkey(t, first, resizable.ID)
+	if (created == 1 && resized.VCPU != 1) || (created == 0 && resized.VCPU != 2) {
+		t.Fatalf("приняты обе операции или ни одной: создано=%d, размер=%d/%d", created, resized.VCPU, resized.RAMGB)
 	}
 }
 
@@ -373,17 +435,47 @@ func Test_CreateValkey_WithConcurrentRequestsAtInstanceLimit_AcceptsOnlyRemainin
 }
 
 func createRequest(app *testAPI, owner testAccount, name, key string) concurrentRequest {
+	return createSizedRequest(app, owner, name, 1, 1, key)
+}
+
+func createSizedRequest(
+	app *testAPI,
+	owner testAccount,
+	name string,
+	vcpu int,
+	ramGB int,
+	key string,
+) concurrentRequest {
 	return concurrentRequest{
 		app: app, method: http.MethodPost, path: "/v1/managed/valkey/instances",
 		body: fmt.Sprintf(
-			`{"name":%q,"prefix":"race","mode":"single","vcpu":1,"ram_gb":1,"password":%q}`,
+			`{"name":%q,"prefix":"race","mode":"single","vcpu":%d,"ram_gb":%d,"password":%q}`,
 			name,
+			vcpu,
+			ramGB,
 			testValkeyPassword,
 		),
 		headers: mergeHeaders(bearer(owner.Token), map[string]string{
 			"Content-Type": "application/json", "Idempotency-Key": key,
 		}),
 	}
+}
+
+func assertOnePlacementCapacityError(t *testing.T, responses []testResponse) {
+	t.Helper()
+
+	for _, response := range responses {
+		if response.StatusCode < 400 {
+			continue
+		}
+		errorBody := assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
+		if errorBody.Error.Details["reason"] != "placement_capacity" {
+			t.Fatalf("неверная причина отказа: %+v", errorBody)
+		}
+
+		return
+	}
+	t.Fatal("ответ с ошибкой размещения отсутствует")
 }
 
 func resizeRequest(vcpu, ramGB int) func(*testAPI, testAccount, uuid.UUID) concurrentRequest {

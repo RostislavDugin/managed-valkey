@@ -338,6 +338,44 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  build-operator:
+    name: Сборка и публикация оператора
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      OPERATOR_IMAGE: ghcr.io/rostislavdugin/managed-valkey-operator:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Собрать образ
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag "$OPERATOR_IMAGE" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --load \
+            --file operator/Dockerfile .
+      - name: Проверить образ
+        run: |
+          test "$(docker image inspect "$OPERATOR_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$OPERATOR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$OPERATOR_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          container=$(docker create "$OPERATOR_IMAGE")
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/usr/local/bin/operator" /tmp/operator
+          test -x /tmp/operator
+      - name: Войти в GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'RostislavDugin/managed-valkey'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Опубликовать образ
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'RostislavDugin/managed-valkey'
+        run: docker push "$OPERATOR_IMAGE"
+
   ci-success:
     name: Итоговая проверка CI
     if: always()
@@ -352,6 +390,7 @@ jobs:
       - test-e2e
       - build-api
       - build-web
+      - build-operator
     runs-on: ubuntu-24.04
     steps:
       - name: Проверить результаты обязательных заданий
@@ -366,6 +405,7 @@ jobs:
           TEST_E2E_RESULT: ${{ needs.test-e2e.result }}
           BUILD_API_RESULT: ${{ needs.build-api.result }}
           BUILD_WEB_RESULT: ${{ needs.build-web.result }}
+          BUILD_OPERATOR_RESULT: ${{ needs.build-operator.result }}
         run: |
           results=(
             "lint-api=$LINT_API_RESULT"
@@ -378,6 +418,7 @@ jobs:
             "test-e2e=$TEST_E2E_RESULT"
             "build-api=$BUILD_API_RESULT"
             "build-web=$BUILD_WEB_RESULT"
+            "build-operator=$BUILD_OPERATOR_RESULT"
           )
           failed=0
           for result in "${results[@]}"; do
@@ -390,7 +431,7 @@ jobs:
 
   deploy:
     name: Развёртывание рабочего окружения
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'RostislavDugin/managed-valkey'
     needs: [ci-success]
     runs-on: ubuntu-24.04
     environment: production
@@ -403,6 +444,8 @@ jobs:
       PRODUCTION_SSH_PORT: ${{ vars.PRODUCTION_SSH_PORT }}
       PRODUCTION_SSH_KNOWN_HOSTS: ${{ vars.PRODUCTION_SSH_KNOWN_HOSTS }}
       PRODUCTION_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+      PRODUCTION_KUBECONFIG: ${{ secrets.PRODUCTION_KUBECONFIG }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
     steps:
@@ -423,6 +466,8 @@ jobs:
             PRODUCTION_SSH_PORT
             PRODUCTION_SSH_KNOWN_HOSTS
             PRODUCTION_SSH_PRIVATE_KEY
+            PRODUCTION_KUBECONFIG
+            CLOUDFLARE_API_TOKEN
             POSTGRES_PASSWORD
             JWT_SECRET
           )
@@ -454,7 +499,13 @@ jobs:
           fi
 
           umask 077
-          mkdir -p deploy-bundle/images "$HOME/.ssh"
+          mkdir -p deploy-bundle/images deploy-bundle/secrets/kubeconfig "$HOME/.ssh"
+          printf '%s' "$PRODUCTION_KUBECONFIG" >"$RUNNER_TEMP/production.kubeconfig"
+          chmod 0600 "$RUNNER_TEMP/production.kubeconfig"
+          scripts/deploy_kubernetes.sh \
+            "$GITHUB_SHA" \
+            "$RUNNER_TEMP/production.kubeconfig" \
+            deploy-bundle/secrets/kubeconfig/api.kubeconfig
           jwt_secret_escaped=${JWT_SECRET//\'/\\\'}
           printf "POSTGRES_PASSWORD=%s\nJWT_SECRET='%s'\n" "$POSTGRES_PASSWORD" "$jwt_secret_escaped" >deploy-bundle/.env
           cat >deploy-bundle/release.env <<EOF
@@ -470,6 +521,7 @@ jobs:
           chmod 0600 "$HOME/.ssh/production" "$HOME/.ssh/known_hosts" deploy-bundle/.env
           test "$(find deploy-bundle/images -maxdepth 1 -name '*.tar.gz' -type f | wc -l)" -eq 3
           test "$(stat -c '%a' deploy-bundle/.env)" = 600
+          test "$(stat -c '%a' deploy-bundle/secrets/kubeconfig/api.kubeconfig)" = 600
       - name: Передать и установить
         run: |
           ssh_options=(
@@ -494,3 +546,9 @@ jobs:
             -r deploy-bundle/. "$remote:$staging/"
           ssh "${ssh_options[@]}" "$remote" \
             "trap 'rm -rf \"$staging\"' EXIT; bash '$staging/install_release.sh' '$GITHUB_SHA' '$staging'"
+      - name: Удалить временные файлы подключения Kubernetes
+        if: always()
+        run: |
+          rm -f -- \
+            "$RUNNER_TEMP/production.kubeconfig" \
+            deploy-bundle/secrets/kubeconfig/api.kubeconfig

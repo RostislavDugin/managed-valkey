@@ -16,6 +16,15 @@ import (
 
 const InstanceLimit = 32
 
+const DefaultPlacementCheckTimeout = 100 * time.Millisecond
+
+type ClusterTopology struct {
+	NodeCount        int
+	NodeCPUMilli     int64
+	NodeRAMMiB       int64
+	PlacementTimeout time.Duration
+}
+
 type Repository interface {
 	ListActiveValkeyInstances(context.Context, uuid.UUID) ([]store.ValkeyInstance, error)
 	FindActiveValkeyInstance(context.Context, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
@@ -33,6 +42,7 @@ type Repository interface {
 	UpdateValkeyIntent(context.Context, *gorm.DB, uuid.UUID, map[string]any) error
 	AcquireValkeyMutationLock(context.Context, *gorm.DB) error
 	ValkeyUsage(context.Context, *gorm.DB, *uuid.UUID) (store.ResourceUsage, error)
+	ValkeyReservations(context.Context, *gorm.DB) ([]store.ValkeyReservation, error)
 	GetQuotaInTx(context.Context, *gorm.DB, uuid.UUID) (store.UserQuota, error)
 	CreateBillingPeriod(context.Context, *gorm.DB, *store.BillingPeriod) error
 	CloseBillingPeriod(context.Context, *gorm.DB, uuid.UUID, time.Time, domain.BillingPeriodEndReason) error
@@ -64,8 +74,7 @@ type Service struct {
 	databaseClock DatabaseClock
 	clock         Clock
 	catalog       Catalog
-	clusterVCPU   int
-	clusterRAM    int
+	topology      ClusterTopology
 	slugs         SlugGenerator
 }
 
@@ -76,13 +85,16 @@ func NewService(
 	databaseClock DatabaseClock,
 	clock Clock,
 	catalog Catalog,
-	clusterVCPU int,
-	clusterRAMGB int,
+	topology ClusterTopology,
 	slugs SlugGenerator,
 ) *Service {
+	if topology.PlacementTimeout == 0 {
+		topology.PlacementTimeout = DefaultPlacementCheckTimeout
+	}
+
 	return &Service{
 		repository: repository, txRunner: txRunner, audit: auditWriter, databaseClock: databaseClock, clock: clock,
-		catalog: catalog, clusterVCPU: clusterVCPU, clusterRAM: clusterRAMGB, slugs: slugs,
+		catalog: catalog, topology: topology, slugs: slugs,
 	}
 }
 

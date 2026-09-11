@@ -80,8 +80,11 @@ func run() error {
 		database,
 		clock,
 		catalog,
-		cfg.ManagedK8SNodeVCPU,
-		cfg.ManagedK8SNodeRAMGB,
+		valkey.ClusterTopology{
+			NodeCount:    cfg.ManagedK8SNodeCount,
+			NodeCPUMilli: cfg.ManagedK8SNodeAvailableCPUMilli,
+			NodeRAMMiB:   cfg.ManagedK8SNodeAvailableRAMMiB,
+		},
 		valkey.CryptoSlugGenerator{},
 	)
 	stopKubernetesSync := func() {}

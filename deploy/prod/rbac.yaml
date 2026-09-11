@@ -18,6 +18,49 @@ subjects:
     name: managed-valkey-operator
     namespace: valkey-system
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: managed-valkey-api
+  namespace: valkey-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: managed-valkey-api-token
+  namespace: valkey-system
+  annotations:
+    kubernetes.io/service-account.name: managed-valkey-api
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: managed-valkey-api
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, get, list, watch, patch, delete]
+  - apiGroups: [valkey.h3llo-demo.com]
+    resources: [valkeyinstances]
+    verbs: [create, get, list, watch, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: managed-valkey-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: managed-valkey-api
+subjects:
+  - kind: ServiceAccount
+    name: managed-valkey-api
+    namespace: valkey-system
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

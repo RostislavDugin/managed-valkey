@@ -20,6 +20,7 @@ required_files=(
     "$source_dir/docker-compose.prod.yml"
     "$source_dir/release.env"
     "$source_dir/install_release.sh"
+    "$source_dir/secrets/kubeconfig/api.kubeconfig"
     "$source_dir/images/api.tar.gz"
     "$source_dir/images/migrate.tar.gz"
     "$source_dir/images/caddy.tar.gz"
@@ -66,6 +67,13 @@ done
 
 mkdir -p "$deploy_root"
 install -m 0600 "$source_dir/.env" "$deploy_root/.env"
+install -d -m 0700 "$deploy_root/secrets" "$deploy_root/secrets/kubeconfig"
+install -m 0600 \
+    "$source_dir/secrets/kubeconfig/api.kubeconfig" \
+    "$deploy_root/secrets/kubeconfig/api.kubeconfig"
+if ((EUID == 0)); then
+    chown 65532:65532 "$deploy_root/secrets/kubeconfig/api.kubeconfig"
+fi
 install -m 0644 "$source_dir/docker-compose.prod.yml" "$deploy_root/docker-compose.prod.yml"
 install -m 0644 "$source_dir/release.env" "$deploy_root/release.env"
 install -m 0755 "$source_dir/install_release.sh" "$deploy_root/install_release.sh"
@@ -80,6 +88,13 @@ compose=(
 
 "${compose[@]}" config --quiet
 "${compose[@]}" up --detach --remove-orphans --wait --wait-timeout 180
+
+kubeconfig_mount_read_write=$(docker inspect managed-valkey-api-1 \
+    --format '{{range .Mounts}}{{if eq .Destination "/run/secrets/kubeconfig/api.kubeconfig"}}{{.RW}}{{end}}{{end}}')
+if [[ $kubeconfig_mount_read_write != false ]]; then
+    echo "kubeconfig API не смонтирован только для чтения" >&2
+    exit 1
+fi
 
 ready_url=${READY_URL:-https://app.h3llo-demo.com/readyz}
 ready_attempts=${READY_ATTEMPTS:-30}

@@ -18,6 +18,13 @@ spec:
               externalTrafficPolicy: Local
       envoyDeployment:
         replicas: 2
+        container:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
         pod:
           affinity:
             podAntiAffinity:

@@ -18,6 +18,9 @@ printf '%s\n' "$*" >>"$TEST_DOCKER_LOG"
 if [[ ${1:-} == load ]]; then
     cat >/dev/null
 fi
+if [[ ${1:-} == inspect ]]; then
+    printf '%s\n' false
+fi
 EOF
 
 cat >"$fake_bin/curl" <<'EOF'
@@ -37,7 +40,7 @@ make_source() {
     local release_sha=$1
     local source_dir=$2
 
-    mkdir -p "$source_dir/images"
+    mkdir -p "$source_dir/images" "$source_dir/secrets/kubeconfig"
     cp "$repo_root/docker-compose.prod.yml" "$source_dir/docker-compose.prod.yml"
     cp "$repo_root/scripts/install_release.sh" "$source_dir/install_release.sh"
     printf '%s\n' 'POSTGRES_PASSWORD=test-password' 'JWT_SECRET=test-jwt-secret' >"$source_dir/.env"
@@ -50,6 +53,8 @@ EOF
     for image in api migrate caddy; do
         printf '%s\n' "$image-$release_sha" | gzip >"$source_dir/images/$image.tar.gz"
     done
+    printf '%s\n' 'apiVersion: v1' 'kind: Config' >"$source_dir/secrets/kubeconfig/api.kubeconfig"
+    chmod 0600 "$source_dir/secrets/kubeconfig/api.kubeconfig"
 }
 
 sha_a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -72,6 +77,7 @@ printf '%s\n' legacy >"$deploy_root/shared/.env"
 "$repo_root/scripts/install_release.sh" "$sha_a" "$source_a" "$deploy_root"
 [[ $(cat "$deploy_root/.deployed-sha") == "$sha_a" ]]
 [[ $(stat -c '%a' "$deploy_root/.env") == 600 ]]
+[[ $(stat -c '%a' "$deploy_root/secrets/kubeconfig/api.kubeconfig") == 600 ]]
 [[ ! -e $deploy_root/current && ! -L $deploy_root/current ]]
 [[ ! -d $deploy_root/bin ]]
 [[ ! -d $deploy_root/releases ]]

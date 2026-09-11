@@ -39,6 +39,7 @@ type testAPIConfig struct {
 	catalog              *valkeydomain.Catalog
 	clusterVCPU          int
 	clusterRAMGB         int
+	clusterTopology      *valkeydomain.ClusterTopology
 	slugGenerator        valkeydomain.SlugGenerator
 	wrapDatabaseClock    func(valkeydomain.DatabaseClock) valkeydomain.DatabaseClock
 	wrapValkeyRepository func(valkeydomain.Repository) valkeydomain.Repository
@@ -167,14 +168,7 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 		}
 		catalog = &value
 	}
-	clusterVCPU := config.clusterVCPU
-	if clusterVCPU == 0 {
-		clusterVCPU = 1024
-	}
-	clusterRAMGB := config.clusterRAMGB
-	if clusterRAMGB == 0 {
-		clusterRAMGB = 8192
-	}
+	topology := testClusterTopology(config)
 	slugGenerator := config.slugGenerator
 	if slugGenerator == nil {
 		slugGenerator = valkeydomain.CryptoSlugGenerator{}
@@ -194,8 +188,7 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 		databaseClock,
 		clock,
 		*catalog,
-		clusterVCPU,
-		clusterRAMGB,
+		topology,
 		slugGenerator,
 	)
 	probe := config.probe
@@ -214,6 +207,27 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	t.Cleanup(server.Close)
 
 	return &testAPI{server: server, client: server.Client(), database: database, logs: logs, logger: logger}
+}
+
+func testClusterTopology(config testAPIConfig) valkeydomain.ClusterTopology {
+	if config.clusterTopology != nil {
+		return *config.clusterTopology
+	}
+
+	clusterVCPU := config.clusterVCPU
+	clusterRAMGB := config.clusterRAMGB
+	nodeCount := 1
+	if clusterVCPU == 0 && clusterRAMGB == 0 {
+		clusterVCPU = 1024
+		clusterRAMGB = 8192
+		nodeCount = 32
+	}
+
+	return valkeydomain.ClusterTopology{
+		NodeCount:    nodeCount,
+		NodeCPUMilli: int64(clusterVCPU * 1000 / nodeCount),
+		NodeRAMMiB:   int64(clusterRAMGB * 1024 / nodeCount),
+	}
 }
 
 func (app *testAPI) startSync(t *testing.T) {

@@ -75,8 +75,11 @@ run_script() {
         MANAGED_VALKEY_CA_FILE="$state/ca.crt" \
         MANAGED_VALKEY_COMPOSE_PROJECT=managed-valkey-e2e-shell-test \
         MANAGED_VALKEY_ENVOY_REPLICAS=2 \
-        MANAGED_K8S_NODE_RAM_GB=23 \
-        MANAGED_K8S_NODE_VCPU=7 \
+        MANAGED_K8S_NODE_COUNT=3 \
+        MANAGED_K8S_NODE_CAPACITY_VCPU=7 \
+        MANAGED_K8S_NODE_CAPACITY_RAM_GB=23 \
+        MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123 \
+        MANAGED_K8S_NODE_RESERVED_RAM_MIB=456 \
         MANAGED_VALKEY_PUBLIC_ADDRESS=127.0.0.1:31379 \
         MANAGED_VALKEY_VALKEY_IMAGE=valkey/valkey:8.1.9 \
         VALKEY_INTEGRATION_REQUEST_CPU=100m \
@@ -105,16 +108,22 @@ rg -q '^VALKEY_ENVOY_PROCESSES=2$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_INTEGRATION_REQUEST_CPU=100m$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_INTEGRATION_REQUEST_MEMORY=128Mi$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_PUBLIC_PORT=41379$' "$normal_state/started/operator.env"
-rg -q '^MANAGED_K8S_NODE_RAM_GB=23$' "$normal_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_VCPU=7$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=7$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=23$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=456$' "$normal_state/started/api.env"
 rg -q '^MANAGED_VALKEY_E2E_ACTION_DELAY_MS=0$' "$normal_state/started/playwright.env"
 rg -q '^MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS=0$' "$normal_state/started/playwright.env"
 rg -q ' test$' "$normal_state/started/playwright.args"
 rg -q '^MANAGED_VALKEY_E2E_ADMIN_KUBECONFIG=' "$normal_state/started/playwright.env"
 rg -q '^MANAGED_VALKEY_E2E_COMPOSE_PROJECT=managed-valkey-e2e-shell-test$' \
     "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_RAM_GB=23$' "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_VCPU=7$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=7$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=23$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=456$' "$normal_state/started/playwright.env"
 secret_values_file="$normal_state/e2e-secret-values"
 rg --fixed-strings --line-regexp --quiet testpassword "$secret_values_file"
 jwt_secret=$(awk -F= '$1 == "JWT_SECRET" { print $2 }' "$normal_state/started/api.env")

@@ -23,6 +23,13 @@ import (
 
 const idempotencyTTL = 24 * time.Hour
 
+type placementCandidate struct {
+	instanceID *uuid.UUID
+	mode       domain.ValkeyInstanceMode
+	desired    Size
+	applied    Size
+}
+
 func (s *Service) Create(ctx context.Context, actor Actor, input CreateInput) (InstanceResult, error) {
 	normalizedCIDRs, err := s.validateCreate(input)
 	if err != nil {
@@ -75,6 +82,7 @@ func (s *Service) Create(ctx context.Context, actor Actor, input CreateInput) (I
 			Size{},
 			reserveFor(input.Mode, input.Size, Size{}),
 			true,
+			placementCandidate{mode: input.Mode, desired: input.Size},
 		); quotaErr != nil {
 			return quotaErr
 		}
@@ -254,7 +262,12 @@ func (s *Service) Resize(
 		candidate := reserveFor(record.Mode, input.Size, Size{
 			VCPU: record.AppliedVCPU, RAMGB: record.AppliedRAMGB,
 		})
-		if quotaErr := s.checkQuota(ctx, tx, actor.ID, current, candidate, false); quotaErr != nil {
+		if quotaErr := s.checkQuota(ctx, tx, actor.ID, current, candidate, false, placementCandidate{
+			instanceID: &record.ID,
+			mode:       record.Mode,
+			desired:    input.Size,
+			applied:    Size{VCPU: record.AppliedVCPU, RAMGB: record.AppliedRAMGB},
+		}); quotaErr != nil {
 			return quotaErr
 		}
 
@@ -552,6 +565,7 @@ func (s *Service) checkQuota(
 	current Size,
 	candidate Size,
 	isCreate bool,
+	placement placementCandidate,
 ) error {
 	quota, err := s.repository.GetQuotaInTx(ctx, tx, userID)
 	if err != nil {
@@ -596,19 +610,159 @@ func (s *Service) checkQuota(
 		VCPU:  clusterUsage.VCPU - current.VCPU + candidate.VCPU,
 		RAMGB: clusterUsage.RAMGB - current.RAMGB + candidate.RAMGB,
 	}
-	if exceeds(clusterRequested.VCPU, clusterUsage.VCPU, s.clusterVCPU) ||
-		exceeds(clusterRequested.RAMGB, clusterUsage.RAMGB, s.clusterRAM) {
-		return resourceError(
-			apierr.CodeNotEnoughResources,
+	clusterCPUMilli := s.topology.NodeCPUMilli * int64(s.topology.NodeCount)
+	clusterRAMMiB := s.topology.NodeRAMMiB * int64(s.topology.NodeCount)
+	if exceedsUnits(int64(clusterRequested.VCPU)*1000, int64(clusterUsage.VCPU)*1000, clusterCPUMilli) ||
+		exceedsUnits(int64(clusterRequested.RAMGB)*1024, int64(clusterUsage.RAMGB)*1024, clusterRAMMiB) {
+		return clusterResourceError(
 			"Недостаточно свободной квоты кластера",
 			"cluster_quota",
-			Size{VCPU: s.clusterVCPU, RAMGB: s.clusterRAM},
+			clusterCPUMilli,
+			clusterRAMMiB,
 			Size{VCPU: clusterUsage.VCPU, RAMGB: clusterUsage.RAMGB},
 			clusterRequested,
 		)
 	}
+	if candidate.VCPU <= current.VCPU && candidate.RAMGB <= current.RAMGB {
+		return nil
+	}
+
+	reservations, err := s.repository.ValkeyReservations(ctx, tx)
+	if err != nil {
+		return err
+	}
+	groups, err := placementGroups(reservations, placement)
+	if err != nil {
+		return err
+	}
+	placementContext, cancelPlacement := context.WithTimeout(ctx, s.topology.PlacementTimeout)
+	defer cancelPlacement()
+	placed, err := canPlaceReservations(placementContext, s.topology, groups)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return apierr.New(
+				apierr.CodeUnavailable,
+				"Проверка размещения не успела завершиться",
+				map[string]any{"reason": "placement_check_timeout"},
+			)
+		}
+
+		return err
+	}
+	if !placed {
+		return placementResourceError(
+			clusterCPUMilli,
+			clusterRAMMiB,
+			Size{VCPU: clusterUsage.VCPU, RAMGB: clusterUsage.RAMGB},
+			clusterRequested,
+			s.topology,
+			placement,
+		)
+	}
 
 	return nil
+}
+
+func placementGroups(
+	reservations []store.ValkeyReservation,
+	candidate placementCandidate,
+) ([]placementGroup, error) {
+	groups := make([]placementGroup, 0, len(reservations)+1)
+	for _, reservation := range reservations {
+		if candidate.instanceID != nil && reservation.ID == *candidate.instanceID {
+			continue
+		}
+		processes, err := NodeCount(reservation.Mode)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, placementGroup{
+			processes: processes,
+			cpuMilli:  int64(max(reservation.VCPU, reservation.AppliedVCPU)) * 1000,
+			ramMiB:    int64(max(reservation.RAMGB, reservation.AppliedRAMGB)) * 1024,
+		})
+	}
+
+	processes, err := NodeCount(candidate.mode)
+	if err != nil {
+		return nil, err
+	}
+	groups = append(groups, placementGroup{
+		processes: processes,
+		cpuMilli:  int64(max(candidate.desired.VCPU, candidate.applied.VCPU)) * 1000,
+		ramMiB:    int64(max(candidate.desired.RAMGB, candidate.applied.RAMGB)) * 1024,
+	})
+
+	return groups, nil
+}
+
+func placementResourceError(
+	limitCPUMilli int64,
+	limitRAMMiB int64,
+	used Size,
+	requested Size,
+	topology ClusterTopology,
+	candidate placementCandidate,
+) error {
+	details := clusterResourceDetails("placement_capacity", limitCPUMilli, limitRAMMiB, used, requested)
+	processes, _ := NodeCount(candidate.mode)
+	details["placement"] = map[string]any{
+		"node_count":              topology.NodeCount,
+		"required_distinct_nodes": processes,
+		"process": map[string]int64{
+			"cpu_milli": int64(max(candidate.desired.VCPU, candidate.applied.VCPU)) * 1000,
+			"ram_mib":   int64(max(candidate.desired.RAMGB, candidate.applied.RAMGB)) * 1024,
+		},
+		"node_budget": map[string]int64{
+			"cpu_milli": topology.NodeCPUMilli,
+			"ram_mib":   topology.NodeRAMMiB,
+		},
+	}
+
+	return apierr.New(
+		apierr.CodeNotEnoughResources,
+		"Процессы Valkey нельзя разместить по нодам кластера",
+		details,
+	)
+}
+
+func clusterResourceError(
+	message string,
+	reason string,
+	limitCPUMilli int64,
+	limitRAMMiB int64,
+	used Size,
+	requested Size,
+) error {
+	return apierr.New(
+		apierr.CodeNotEnoughResources,
+		message,
+		clusterResourceDetails(reason, limitCPUMilli, limitRAMMiB, used, requested),
+	)
+}
+
+func clusterResourceDetails(
+	reason string,
+	limitCPUMilli int64,
+	limitRAMMiB int64,
+	used Size,
+	requested Size,
+) map[string]any {
+	return map[string]any{
+		"reason": reason,
+		"limit": map[string]float64{
+			"vcpu":   float64(limitCPUMilli) / 1000,
+			"ram_gb": float64(limitRAMMiB) / 1024,
+		},
+		"used": map[string]int{"vcpu": used.VCPU, "ram_gb": used.RAMGB},
+		"requested": map[string]int{
+			"vcpu": requested.VCPU, "ram_gb": requested.RAMGB,
+		},
+		"missing": map[string]float64{
+			"vcpu":   float64(max(int64(0), int64(requested.VCPU)*1000-limitCPUMilli)) / 1000,
+			"ram_gb": float64(max(int64(0), int64(requested.RAMGB)*1024-limitRAMMiB)) / 1024,
+		},
+	}
 }
 
 func resourceError(code apierr.Code, message, reason string, limit, used, requested Size) error {
@@ -625,6 +779,10 @@ func resourceError(code apierr.Code, message, reason string, limit, used, reques
 }
 
 func exceeds(requested, used, limit int) bool {
+	return requested > limit && requested > used
+}
+
+func exceedsUnits(requested, used, limit int64) bool {
 	return requested > limit && requested > used
 }
 
