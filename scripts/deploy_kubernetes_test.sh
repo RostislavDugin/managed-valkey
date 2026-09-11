@@ -28,7 +28,11 @@ if [[ ${1:-} == get && ${2:-} == statefulsets.apps ]]; then
     exit 0
 fi
 if [[ ${1:-} == get && ${2:-} == nodes ]]; then
-    printf '%s\n' node-a node-b
+    if [[ $* == *InternalIP* ]]; then
+        printf '%s\n' 10.17.0.26 10.17.0.27
+    else
+        printf '%s\n' node-a node-b
+    fi
     exit 0
 fi
 if [[ ${1:-} == -n && ${3:-} == delete && ${4:-} == pod ]]; then
@@ -99,12 +103,23 @@ cat >"$fake_bin/helm" <<'EOF'
 exit 2
 EOF
 
+cat >"$fake_bin/getent" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${1:-} == ahostsv4 && ${2:-} == cert-manager-webhook.valkey.h3llo-demo.com ]]
+printf '%s\n' '10.17.0.26 STREAM webhook' '10.17.0.27 STREAM webhook'
+if [[ $TEST_KUBECTL_MODE == stale-webhook-dns ]]; then
+    printf '%s\n' '10.17.0.28 STREAM webhook'
+fi
+EOF
+
 cat >"$fake_bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
 
-chmod 0755 "$fake_bin/kubectl" "$fake_bin/docker" "$fake_bin/helm" "$fake_bin/sleep"
+chmod 0755 \
+    "$fake_bin/kubectl" "$fake_bin/docker" "$fake_bin/getent" "$fake_bin/helm" "$fake_bin/sleep"
 
 run_case() {
     local mode=$1
@@ -150,6 +165,15 @@ grep -Fq 'обнаружены пользовательские StatefulSet пр
 grep -Fq 'tenant-a/valkey-a' "$work_dir/legacy.log"
 if grep -Fq 'get nodes' "$state_dir/kubectl.log"; then
     echo "проверка продолжилась при наличии прежнего StatefulSet" >&2
+    exit 1
+fi
+
+run_case stale-webhook-dns "$work_dir/stale-webhook-dns.log"
+[[ $case_status == 1 ]]
+grep -Fq 'должен содержать внутренние адреса всех рабочих нод' \
+    "$work_dir/stale-webhook-dns.log"
+if grep -Fq 'managed-valkey-restart-check' "$state_dir/kubectl.log"; then
+    echo "проверка продолжилась при неверном DNS cert-manager-webhook" >&2
     exit 1
 fi
 

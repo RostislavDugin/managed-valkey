@@ -146,8 +146,8 @@ set +a
 managed_k8s_node_count=${MANAGED_K8S_NODE_COUNT:-3}
 managed_k8s_node_capacity_vcpu=${MANAGED_K8S_NODE_CAPACITY_VCPU:-4}
 managed_k8s_node_capacity_ram_gb=${MANAGED_K8S_NODE_CAPACITY_RAM_GB:-16}
-managed_k8s_node_reserved_cpu_milli=${MANAGED_K8S_NODE_RESERVED_CPU_MILLI:-3000}
-managed_k8s_node_reserved_ram_mib=${MANAGED_K8S_NODE_RESERVED_RAM_MIB:-15360}
+managed_k8s_node_reserved_cpu_milli=${MANAGED_K8S_NODE_RESERVED_CPU_MILLI:-2000}
+managed_k8s_node_reserved_ram_mib=${MANAGED_K8S_NODE_RESERVED_RAM_MIB:-8192}
 valkey_gateway_port=${VALKEY_LISTENER_PORT:-41379}
 
 trap finish EXIT

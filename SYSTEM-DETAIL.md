@@ -1515,10 +1515,11 @@ GitHub Actions передаёт готовые образы API и Caddy и ра
 #### Первый выпуск
 
 1. Проверить переменные и секреты окружения GitHub `production`. `PRODUCTION_KUBECONFIG` должен открывать нужный кластер, а `CLOUDFLARE_API_TOKEN` должен иметь доступ к зоне `h3llo-demo.com`. `CLOUDFLARE_ACCOUNT_ID` нужен только для ручной проверки токена.
-2. Отправить ревизию в `main`. Задание `build-operator` опубликует первый образ, после чего пакету `ghcr.io/rostislavdugin/managed-valkey-operator` нужно вручную задать видимость `Public` в GitHub. Затем следует повторить неуспешный выпуск.
-3. Убедиться, что сценарий развёртывания больше не проверяет `ContainerRestartRules`, а CRD содержит `status.valkeyImage` и права на создание `Pod`.
-4. После появления внешнего адреса Envoy направить `*.valkey.h3llo-demo.com` на этот адрес в режиме `DNS only` и повторить выпуск.
-5. Проверить SHA образа оператора, готовность `Certificate` `valkey-wildcard` и `Gateway` `valkey`, внешний `/readyz` API и содержимое `/opt/managed-valkey/.deployed-sha`.
+2. Создать в Cloudflare записи A `cert-manager-webhook.valkey.h3llo-demo.com` для всех текущих `InternalIP` рабочих нод в режиме `DNS only`. После замены ноды обновить этот набор и повторить выпуск.
+3. Отправить ревизию в `main`. Задание `build-operator` опубликует первый образ, после чего пакету `ghcr.io/rostislavdugin/managed-valkey-operator` нужно вручную задать видимость `Public` в GitHub. Затем следует повторить неуспешный выпуск.
+4. Убедиться, что сценарий развёртывания больше не проверяет `ContainerRestartRules`, а CRD содержит `status.valkeyImage` и права на создание `Pod`.
+5. После появления внешнего адреса Envoy направить `*.valkey.h3llo-demo.com` на этот адрес в режиме `DNS only` и повторить выпуск.
+6. Проверить SHA образа оператора, готовность `Certificate` `valkey-wildcard` и `Gateway` `valkey`, внешний `/readyz` API и содержимое `/opt/managed-valkey/.deployed-sha`.
 
 Если выпуск остановился после частичного применения Kubernetes, его повторяют с тем же SHA. Сценарий повторно применяет системные ресурсы и не удаляет пользовательские CR.
 

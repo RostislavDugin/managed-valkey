@@ -723,9 +723,10 @@ PostgreSQL хранит историю в пределах `VALKEY_METRICS_RETEN
 | `app.h3llo-demo.com`      | A   | внешний IP виртуалки с Caddy |
 | `logs.h3llo-demo.com`     | A   | внешний IP виртуалки с Caddy |
 | `*.valkey.h3llo-demo.com` | A   | внешний IP шлюза Envoy       |
+| `cert-manager-webhook.valkey.h3llo-demo.com` | A | внутренние IP всех рабочих нод |
 
 
-Все записи в режиме DNS only (серое облако в Cloudflare). TLS завершается на нашей стороне; обычное проксирование Cloudflare не поддерживает TCP на нестандартном порту (часть 2). Сертификаты для `app` и `logs` получает Caddy, wildcard-сертификат для инстансов — cert-manager.
+Все записи в режиме DNS only (серое облако в Cloudflare). TLS завершается на нашей стороне; обычное проксирование Cloudflare не поддерживает TCP на нестандартном порту (часть 2). Сертификаты для `app` и `logs` получает Caddy, wildcard-сертификат для инстансов — cert-manager. Служебная запись `cert-manager-webhook` нужна только плоскости управления Kubernetes и должна совпадать с текущими `InternalIP` нод.
 
 При создании инстанса DNS не меняется: все `<slug>` резолвятся в один IP, инстансы различает шлюз по SNI.
 
@@ -796,6 +797,8 @@ spec:
 Для адресов Valkey сертификат получает и продлевает cert-manager внутри Kubernetes. Его выдаёт Let's Encrypt; Caddy отдельно обслуживает сертификат админки `app.h3llo-demo.com`.
 
 При настройке продакшена устанавливаем cert-manager, сохраняем токен API Cloudflare в Secret и создаём `ClusterIssuer` Let's Encrypt с проверкой DNS-01. Токену нужен доступ к DNS-зоне `h3llo-demo.com`. В namespace `valkey-system` создаём `Certificate` на `*.<VALKEY_BASE_DOMAIN>` (на проде `*.valkey.h3llo-demo.com`).
+
+Плоскость управления h3llo не видит кластерный `Service` обработчика допуска. Поэтому `cert-manager-webhook` работает по одному экземпляру на каждой ноде с `hostNetwork` и портом `443`, а конфигурации допуска обращаются к `cert-manager-webhook.valkey.h3llo-demo.com`. Запись содержит внутренние адреса всех рабочих нод. Процесс выпуска сверяет её с текущими `InternalIP` и останавливается при расхождении. Только этот контейнер запускается с UID 0 и `NET_BIND_SERVICE`; повышение прав запрещено, остальные возможности Linux удалены, корневая файловая система доступна только для чтения.
 
 Для подтверждения владения доменом cert-manager через API Cloudflare создаёт временную TXT-запись `_acme-challenge.valkey.h3llo-demo.com`. Let's Encrypt проверяет её и выдаёт сертификат. Для этой проверки не нужно открывать HTTP-порт на шлюзе.
 

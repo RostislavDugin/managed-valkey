@@ -67,19 +67,26 @@ process_is_live() {
 
 run_script() {
     local state=$1
+    local topology=(
+        MANAGED_K8S_NODE_COUNT=3
+        MANAGED_K8S_NODE_CAPACITY_VCPU=7
+        MANAGED_K8S_NODE_CAPACITY_RAM_GB=23
+        MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123
+        MANAGED_K8S_NODE_RESERVED_RAM_MIB=456
+    )
 
-    PATH="$mock_bin:$PATH" \
+    if [[ ${MV_E2E_USE_DEFAULT_TOPOLOGY:-} == 1 ]]; then
+        topology=()
+    fi
+
+    env \
+        PATH="$mock_bin:$PATH" \
         ADMIN_KUBECONFIG="$state/admin.kubeconfig" \
         API_KUBECONFIG="$state/api.kubeconfig" \
         DIAGNOSTICS_DIR="$state/diagnostics" \
         MANAGED_VALKEY_CA_FILE="$state/ca.crt" \
         MANAGED_VALKEY_COMPOSE_PROJECT=managed-valkey-e2e-shell-test \
         MANAGED_VALKEY_ENVOY_REPLICAS=2 \
-        MANAGED_K8S_NODE_COUNT=3 \
-        MANAGED_K8S_NODE_CAPACITY_VCPU=7 \
-        MANAGED_K8S_NODE_CAPACITY_RAM_GB=23 \
-        MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123 \
-        MANAGED_K8S_NODE_RESERVED_RAM_MIB=456 \
         MANAGED_VALKEY_PUBLIC_ADDRESS=127.0.0.1:31379 \
         MANAGED_VALKEY_VALKEY_IMAGE=valkey/valkey:8.1.9 \
         VALKEY_INTEGRATION_REQUEST_CPU=100m \
@@ -94,6 +101,7 @@ run_script() {
         OPERATOR_KUBECONFIG="$state/operator.kubeconfig" \
         TEST_DATABASE_URL=postgres://test \
         VALKEY_BASE_DOMAIN=e2e.valkey.localhost \
+        "${topology[@]}" \
         "$repo_root/scripts/test_e2e.sh"
 }
 
@@ -135,6 +143,19 @@ done
 while IFS=$'\t' read -r pid name _; do
     [[ "$name" != api && "$name" != operator && "$name" != web ]] || ! process_is_live "$pid"
 done <"$normal_state/processes.tsv"
+
+defaults_state="$temporary/defaults"
+prepare_state "$defaults_state"
+MV_E2E_USE_DEFAULT_TOPOLOGY=1 run_script "$defaults_state"
+rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=4$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=16$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=2000$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=8192$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=2000$' \
+    "$defaults_state/started/playwright.env"
+rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=8192$' \
+    "$defaults_state/started/playwright.env"
 
 group_state="$temporary/group"
 prepare_state "$group_state"

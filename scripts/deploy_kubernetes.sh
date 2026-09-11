@@ -15,6 +15,7 @@ operator_placeholder=ghcr.io/rostislavdugin/managed-valkey-operator:000000000000
 gateway_api_version=v1.5.1
 envoy_gateway_version=v1.8.4
 cert_manager_version=v1.21.1
+cert_manager_webhook_host=cert-manager-webhook.valkey.h3llo-demo.com
 cloudflare_token_file=""
 restart_check_pods=()
 
@@ -61,6 +62,16 @@ legacy_statefulsets=$(kubectl get statefulsets.apps --all-namespaces \
 if [[ -n $legacy_statefulsets ]]; then
     echo "обнаружены пользовательские StatefulSet прежнего оператора:" >&2
     printf '%s\n' "$legacy_statefulsets" >&2
+    exit 1
+fi
+
+node_internal_ips=$(kubectl get nodes \
+    -o jsonpath='{range .items[*].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}' |
+    sort -u)
+webhook_dns_ips=$(getent ahostsv4 "$cert_manager_webhook_host" 2>/dev/null |
+    awk '{print $1}' | sort -u || true)
+if [[ -z $node_internal_ips || $webhook_dns_ips != "$node_internal_ips" ]]; then
+    echo "DNS $cert_manager_webhook_host должен содержать внутренние адреса всех рабочих нод" >&2
     exit 1
 fi
 
