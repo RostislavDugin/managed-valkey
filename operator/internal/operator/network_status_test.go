@@ -8,14 +8,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"slices"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -86,6 +89,29 @@ func Test_ReadOnlyRouteReady_WithMissingOrInvalidConditions_AllowsOnlyMissingRea
 	route.Status.Parents[0].Conditions[1].ObservedGeneration = 3
 	if routeAcceptedWithoutReadyEndpoints(route, "valkey-system", "cache-a1b2c3-ro") {
 		t.Fatal("устаревший статус маршрута принят")
+	}
+}
+
+func Test_ReplicaBackendAddress_WithUnadmittedEarlierReplica_ReturnsReplicaSelectedByService(t *testing.T) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.AcceptedConfiguration.PasswordVersion = 2
+	syncedAt := metav1.Now()
+	unadmitted := failoverNode(0, valkeyv1alpha1.NodeRoleReplica, "history-a", 10, &syncedAt)
+	unadmitted.AppEnabled = false
+	unadmitted.AppPasswordVersion = 2
+	admitted := failoverNode(2, valkeyv1alpha1.NodeRoleReplica, "history-a", 10, &syncedAt)
+	admitted.AppEnabled = true
+	admitted.AppPasswordVersion = 2
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{unadmitted, admitted}
+	unadmittedPod := testReplicaBackendPod(instance, unadmitted, "10.42.0.10", false)
+	admittedPod := testReplicaBackendPod(instance, admitted, "10.42.0.12", true)
+	k8s := fake.NewClientBuilder().WithScheme(NewScheme()).WithObjects(unadmittedPod, admittedPod).Build()
+
+	address, err := (&ValkeyInstanceReconciler{Client: k8s}).replicaBackendAddress(ctx, instance)
+	if err != nil || address != admittedPod.Status.PodIP {
+		t.Fatalf("выбрать адрес реплики из клиентского сервиса: адрес=%q ошибка=%v", address, err)
 	}
 }
 
@@ -355,4 +381,32 @@ func testCertificatePEM(
 	}
 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: encoded})
+}
+
+func testReplicaBackendPod(
+	instance *valkeyv1alpha1.ValkeyInstance,
+	process valkeyv1alpha1.NodeStatus,
+	address string,
+	selected bool,
+) *corev1.Pod {
+	labels := workloadLabels(instance.Status.AcceptedConfiguration.Slug)
+	if selected {
+		labels[applicationRoleLabel] = string(valkeyv1alpha1.NodeRoleReplica)
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, process.Ordinal),
+			Namespace: instance.Namespace,
+			UID:       types.UID(process.PodUID),
+			Labels:    labels,
+		},
+		Status: corev1.PodStatus{
+			PodIP: address,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:        "valkey",
+				ContainerID: process.ContainerID,
+				State:       corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
 }

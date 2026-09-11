@@ -388,8 +388,9 @@ type DeletionStatus struct {
 }
 
 type ValkeyInstanceStatus struct {
-	CredentialsInitialized bool `json:"credentialsInitialized,omitempty"`
-	Initialized            bool `json:"initialized,omitempty"`
+	CredentialsInitialized bool   `json:"credentialsInitialized,omitempty"`
+	Initialized            bool   `json:"initialized,omitempty"`
+	ValkeyImage            string `json:"valkeyImage,omitempty"`
 	// +kubebuilder:validation:Enum=provisioning;running;degraded;updating;unavailable;error
 	// +optional
 	Phase                  InstancePhase             `json:"phase,omitempty"`

@@ -30,6 +30,8 @@ services:
       - --service-cidr=${K3S_SERVICE_CIDR:-10.43.0.0/16}
       - --cluster-dns=${K3S_CLUSTER_DNS:-10.43.0.10}
       - --node-name=${K3S_SERVER_NAME:-k3s-server}
+      - --kube-apiserver-arg=feature-gates=ContainerRestartRules=false
+      - --kubelet-arg=feature-gates=ContainerRestartRules=false
       - --tls-san=k3s-server
       - --tls-san=127.0.0.1
     privileged: true
@@ -59,6 +61,7 @@ services:
     command:
       - agent
       - --node-name=k3s-agent-1
+      - --kubelet-arg=feature-gates=ContainerRestartRules=false
     privileged: true
     tmpfs:
       - /run
@@ -80,6 +83,7 @@ services:
     command:
       - agent
       - --node-name=k3s-agent-2
+      - --kubelet-arg=feature-gates=ContainerRestartRules=false
     networks:
       default:
         ipv4_address: 172.27.0.4
@@ -93,6 +97,7 @@ services:
     command:
       - agent
       - --node-name=k3s-agent-3
+      - --kubelet-arg=feature-gates=ContainerRestartRules=false
     networks:
       default:
         ipv4_address: 172.27.0.6

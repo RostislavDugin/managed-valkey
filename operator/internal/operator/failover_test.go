@@ -119,6 +119,47 @@ func Test_OP03_ReconcileFailoverReconfiguring_WhenNewPrimaryFails_RestartsFailov
 	}
 }
 
+func Test_PW04_MaybeStartFailureFailover_WhenPrimaryWasReplacedBeforeFailoverStarts_UsesPreviousPrimaryIdentity(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.Initialized = true
+	source := failoverNode(0, valkeyv1alpha1.NodeRolePrimary, "history-a", 100, nil)
+	source.Termination = &valkeyv1alpha1.ProcessTermination{
+		Reason: "Completed", FinishedAt: metav1.Now(), Evidence: "container_status",
+	}
+	replacement := failoverNode(0, valkeyv1alpha1.NodeRoleReplica, "", emptyReplicaInitialOffset, nil)
+	replacement.PodUID = "replacement-pod"
+	replacement.ContainerID = "replacement-container"
+	replacement.RunID = "replacement-run"
+	replacement.AppEnabled = false
+	replacement.Replication.LinkUp = false
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{replacement}
+	instance.Status.PreviousProcesses = []valkeyv1alpha1.NodeStatus{source}
+	setPrimaryIdentity(&instance.Status, source)
+	k8s := fake.NewClientBuilder().
+		WithScheme(NewScheme()).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance).
+		Build()
+
+	result, err := (&ValkeyInstanceReconciler{Client: k8s}).maybeStartFailureFailover(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf(
+			"начать аварийное переключение по сохранённому основному процессу: результат=%+v ошибка=%v",
+			result,
+			err,
+		)
+	}
+	if instance.Status.Failover == nil ||
+		!sameIdentity(instance.Status.Failover.Source, processIdentity(source)) ||
+		instance.Status.Failover.Stage != valkeyv1alpha1.FailoverStageFencing {
+		t.Fatalf("аварийное переключение не сохранило прежний основной процесс: %+v", instance.Status)
+	}
+}
+
 func Test_FP11_ReconcileFailoverChoosing_WhenAllPreviousProcessesAreStopped_PermitsEmptyRecovery(t *testing.T) {
 	ctx := context.Background()
 	instance := completeAcceptedInstance()

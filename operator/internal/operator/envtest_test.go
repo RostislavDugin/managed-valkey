@@ -664,8 +664,8 @@ func Test_Envtest_ReconcileCredentials_AfterManagerRestart_PreservesGeneratedSer
 		t.Fatal("сохранённые служебные пароли были заменены")
 	}
 
-	assertCredentialsPrecedeStatefulSet(ctx, t, k8s, fresh)
-	assertCredentialsPrecedeStatefulSet(ctx, t, k8s, persisted)
+	assertCredentialsPrecedePod(ctx, t, k8s, fresh)
+	assertCredentialsPrecedePod(ctx, t, k8s, persisted)
 }
 
 func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIdempotently(t *testing.T) {
@@ -703,13 +703,16 @@ func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIde
 		t.Fatal("cache manager не синхронизировался")
 	}
 
-	statefulSet := waitForStatefulSet(t, ctx, k8s, client.ObjectKeyFromObject(instance))
-	if statefulSet.Spec.UpdateStrategy.Type != appsv1.OnDeleteStatefulSetStrategyType ||
-		statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 1 {
-		t.Fatalf("неверный StatefulSet: %+v", statefulSet.Spec)
+	pod := waitForPod(t, ctx, k8s, client.ObjectKey{
+		Namespace: instance.Namespace, Name: instance.Name + "-0",
+	})
+	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever || pod.Spec.Hostname != pod.Name ||
+		pod.Spec.Subdomain != instance.Name+"-hl" || pod.Spec.Containers[0].RestartPolicy != nil ||
+		len(pod.Spec.Containers[0].RestartPolicyRules) != 0 {
+		t.Fatalf("неверный Pod: %+v", pod.Spec)
 	}
-	if len(statefulSet.OwnerReferences) != 1 || statefulSet.OwnerReferences[0].UID != instance.UID {
-		t.Fatalf("StatefulSet не принадлежит CR: %v", statefulSet.OwnerReferences)
+	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].UID != instance.UID {
+		t.Fatalf("Pod не принадлежит CR: %v", pod.OwnerReferences)
 	}
 
 	configMaps, services, policies := waitForSingleResources(t, ctx, k8s, instance.Namespace)
@@ -757,14 +760,14 @@ func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIde
 	if err := k8s.Create(ctx, ha); err != nil {
 		t.Fatalf("создать HA: %v", err)
 	}
-	haStatefulSet := waitForStatefulSet(t, ctx, k8s, client.ObjectKeyFromObject(ha))
-	if haStatefulSet.Spec.Replicas == nil || *haStatefulSet.Spec.Replicas != 3 ||
-		haStatefulSet.Spec.Template.Spec.Affinity == nil ||
-		haStatefulSet.Spec.Template.Spec.Affinity.PodAntiAffinity == nil ||
-		len(
-			haStatefulSet.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution,
-		) != 1 {
-		t.Fatalf("неверный StatefulSet HA: %+v", haStatefulSet.Spec)
+	haPods := waitForPods(t, ctx, k8s, ha.Namespace, 3)
+	for index := range haPods.Items {
+		affinity := haPods.Items[index].Spec.Affinity
+		if affinity == nil || affinity.PodAntiAffinity == nil ||
+			len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+			t.Fatalf("неверный Pod HA: %+v", haPods.Items[index].Spec)
+		}
+		assertOwnedBy(t, &haPods.Items[index], ha.UID)
 	}
 	haPDB := waitForPodDisruptionBudget(t, ctx, k8s, client.ObjectKeyFromObject(ha))
 	if haPDB.Spec.MinAvailable == nil || haPDB.Spec.MinAvailable.IntVal != 2 {
@@ -822,7 +825,7 @@ func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIde
 	}
 
 	assertResourceVersion(t, context.Background(), k8s, currentInstance, instanceVersion)
-	assertResourceVersion(t, context.Background(), k8s, statefulSet, statefulSet.ResourceVersion)
+	assertResourceVersion(t, context.Background(), k8s, pod, pod.ResourceVersion)
 	assertResourceVersion(t, context.Background(), k8s, &configMaps.Items[0], configMaps.Items[0].ResourceVersion)
 	for index := range services.Items {
 		assertResourceVersion(
@@ -948,27 +951,52 @@ func waitForConditionReason(
 	})
 }
 
-func waitForStatefulSet(
+func waitForPod(
 	t *testing.T,
 	ctx context.Context,
 	k8s client.Client,
 	key client.ObjectKey,
-) *appsv1.StatefulSet {
+) *corev1.Pod {
 	t.Helper()
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		statefulSet := &appsv1.StatefulSet{}
-		if err := k8s.Get(ctx, key, statefulSet); err == nil {
-			return statefulSet
+		pod := &corev1.Pod{}
+		if err := k8s.Get(ctx, key, pod); err == nil {
+			return pod
 		} else if !apierrors.IsNotFound(err) {
-			t.Fatalf("прочитать StatefulSet: %v", err)
+			t.Fatalf("прочитать Pod: %v", err)
 		}
 
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	t.Fatalf("StatefulSet %s не появился", key)
+	t.Fatalf("Pod %s не появился", key)
+	return nil
+}
+
+func waitForPods(
+	t *testing.T,
+	ctx context.Context,
+	k8s client.Client,
+	namespace string,
+	count int,
+) *corev1.PodList {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		pods := &corev1.PodList{}
+		if err := k8s.List(ctx, pods, client.InNamespace(namespace)); err != nil {
+			t.Fatalf("прочитать Pod: %v", err)
+		}
+		if len(pods.Items) == count {
+			return pods
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("в namespace %s не появилось Pod: %d", namespace, count)
 	return nil
 }
 
@@ -1030,7 +1058,7 @@ func waitForSingleResources(
 	return nil, nil, nil
 }
 
-func assertCredentialsPrecedeStatefulSet(
+func assertCredentialsPrecedePod(
 	ctx context.Context,
 	t *testing.T,
 	k8s client.Client,
@@ -1038,11 +1066,12 @@ func assertCredentialsPrecedeStatefulSet(
 ) {
 	t.Helper()
 
-	statefulSet := &appsv1.StatefulSet{}
-	if err := k8s.Get(ctx, client.ObjectKeyFromObject(instance), statefulSet); apierrors.IsNotFound(err) {
+	pod := &corev1.Pod{}
+	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name + "-0"}
+	if err := k8s.Get(ctx, key, pod); apierrors.IsNotFound(err) {
 		return
 	} else if err != nil {
-		t.Fatalf("прочитать StatefulSet: %v", err)
+		t.Fatalf("прочитать Pod: %v", err)
 	}
 
 	observed := &valkeyv1alpha1.ValkeyInstance{}
@@ -1051,11 +1080,11 @@ func assertCredentialsPrecedeStatefulSet(
 	}
 	condition := apimeta.FindStatusCondition(observed.Status.Conditions, "CredentialsReady")
 	if !observed.Status.CredentialsInitialized || condition == nil ||
-		condition.LastTransitionTime.After(statefulSet.CreationTimestamp.Time) {
+		condition.LastTransitionTime.After(pod.CreationTimestamp.Time) {
 		t.Fatalf(
-			"StatefulSet создан до фиксации credentialsInitialized: condition=%+v created=%s",
+			"Pod создан до фиксации credentialsInitialized: condition=%+v created=%s",
 			condition,
-			statefulSet.CreationTimestamp,
+			pod.CreationTimestamp,
 		)
 	}
 }

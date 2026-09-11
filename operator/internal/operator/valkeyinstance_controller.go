@@ -84,10 +84,10 @@ const (
 // +kubebuilder:rbac:groups=valkey.h3llo-demo.com,resources=valkeyinstances/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps;services,verbs=create;get;list;watch;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=create;get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=create;get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=create;get;list;watch;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=create;get;list;watch;patch;delete
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -137,6 +137,14 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if err != nil || changed {
 			return requeueIf(changed), err
 		}
+		blocked, changed, err := r.reconcileLegacyStatefulSet(ctx, instance)
+		if err != nil || changed || blocked {
+			return requeueIf(changed), err
+		}
+		blocked, changed, err = r.reconcileValkeyImage(ctx, instance)
+		if err != nil || changed || blocked {
+			return requeueIf(changed), err
+		}
 		if !instance.Status.Initialized && instance.Status.Phase == valkeyv1alpha1.InstancePhaseError {
 			return ctrl.Result{}, nil
 		}
@@ -146,7 +154,8 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 
 		result, err := r.reconcileCredentials(ctx, instance)
-		if err != nil || !result.IsZero() || !instance.Status.CredentialsInitialized {
+		if err != nil || !result.IsZero() || !instance.Status.CredentialsInitialized ||
+			!apimeta.IsStatusConditionTrue(instance.Status.Conditions, conditionTypeCredentialsReady) {
 			return result, err
 		}
 
@@ -274,15 +283,15 @@ func (r *ValkeyInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 func (r *ValkeyInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&valkeyv1alpha1.ValkeyInstance{}, builder.WithPredicates(valkeyInstancePredicate())).
-		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&gatewayv1alpha2.TCPRoute{}).
 		Owns(&envoyv1alpha1.SecurityPolicy{}).
+		Watches(&appsv1.StatefulSet{}, handler.EnqueueRequestsFromMapFunc(statefulSetInstanceRequests)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretRequests)).
-		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(podInstanceRequests)).
 		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(endpointSliceInstanceRequests)).
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.gatewayRequests)).
 		Watches(
@@ -646,7 +655,7 @@ func (r *ValkeyInstanceReconciler) allInstanceRequests(ctx context.Context) []re
 	return requests
 }
 
-func podInstanceRequests(_ context.Context, object client.Object) []reconcile.Request {
+func statefulSetInstanceRequests(_ context.Context, object client.Object) []reconcile.Request {
 	slug := object.GetLabels()[instanceLabelKey]
 	if slug == "" {
 		return nil

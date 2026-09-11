@@ -61,19 +61,94 @@ func Test_PodTemplateMatchesRollout_WithReducedRequests_UsesLimits(t *testing.T)
 		corev1.ResourceCPU:    resource.MustParse("100m"),
 		corev1.ResourceMemory: resource.MustParse("128Mi"),
 	}
-	statefulSet := desiredStatefulSet(
+	pod := desiredPod(
 		instance,
+		0,
 		rolloutConfigMapName(instance),
 		instance.Status.Rollout.Image,
 		requests,
 	)
 
-	if !statefulSetTemplateMatchesRollout(statefulSet, instance) {
-		t.Fatal("шаблон с уменьшенными запросами ресурсов не совпал с лимитами перекатки")
+	if !podTemplateMatchesRollout(&pod.Spec, instance) {
+		t.Fatal("Pod с уменьшенными запросами ресурсов не совпал с лимитами замены")
 	}
-	statefulSet.Spec.Template.Spec.Containers[0].Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
-	if statefulSetTemplateMatchesRollout(statefulSet, instance) {
-		t.Fatal("шаблон с неверным лимитом CPU принят")
+	pod.Spec.Containers[0].Resources.Limits[corev1.ResourceCPU] = resource.MustParse("2")
+	if podTemplateMatchesRollout(&pod.Spec, instance) {
+		t.Fatal("Pod с неверным лимитом CPU принят")
+	}
+}
+
+func Test_ReconcileRollout_WhenCompositionIsReadyButRoleLabelsAreMissing_UpdatesPodBeforeConfirmingAppliedConfiguration(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.PasswordVersion = 1
+	instance.Status.Initialized = true
+	instance.Status.Applied = &valkeyv1alpha1.AppliedConfiguration{
+		Mode: valkeyv1alpha1.ValkeyModeSingle, VCPU: 1, RAMGB: 2,
+	}
+	instance.Status.Rollout = &valkeyv1alpha1.RolloutStatus{
+		DesiredGeneration: 2,
+		VCPU:              instance.Status.AcceptedConfiguration.VCPU,
+		RAMGB:             instance.Status.AcceptedConfiguration.RAMGB,
+		Image:             instance.Status.ValkeyImage,
+		Stage:             valkeyv1alpha1.RolloutStageVerifying,
+	}
+	primaryOrdinal := int32(0)
+	instance.Status.PrimaryOrdinal = &primaryOrdinal
+	instance.Status.Conditions = []metav1.Condition{{
+		Type: conditionTypePublicReady, Status: metav1.ConditionTrue, Reason: "Ready",
+	}}
+	pod := desiredPod(
+		instance,
+		primaryOrdinal,
+		rolloutConfigMapName(instance),
+		instance.Status.Rollout.Image,
+		nil,
+	)
+	pod.UID = "pod-uid"
+	pod.Spec.NodeName = "worker-1"
+	pod.Status.PodIP = "10.42.0.10"
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "valkey", ContainerID: "containerd://current",
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+	}}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{{
+		Ordinal: primaryOrdinal, PodUID: string(pod.UID), ContainerID: "containerd://current",
+		NodeName: "worker-1", NodeUID: "node-uid",
+		Role: valkeyv1alpha1.NodeRolePrimary, Readiness: true, AppEnabled: true, AppPasswordVersion: 1,
+	}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1", UID: "node-uid"}}
+	scheme := NewScheme()
+	k8s := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}).
+		WithObjects(instance, pod, node).
+		Build()
+	reconciler := &ValkeyInstanceReconciler{Client: k8s, APIReader: k8s, Scheme: scheme}
+
+	result, err := reconciler.reconcileRollout(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("назначить роль до подтверждения применения: result=%+v error=%v", result, err)
+	}
+	if instance.Status.Rollout == nil || instance.Status.Applied.VCPU != 1 || instance.Status.Applied.RAMGB != 2 {
+		t.Fatalf("конфигурация подтверждена до назначения роли: %+v", instance.Status)
+	}
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
+		t.Fatalf("прочитать Pod после назначения роли: %v", err)
+	}
+	if pod.Labels[applicationRoleLabel] != string(valkeyv1alpha1.NodeRolePrimary) ||
+		pod.Labels[valkeyv1alpha1.RoleLabelKey] != string(valkeyv1alpha1.NodeRolePrimary) {
+		t.Fatalf("Pod не получил метки основного процесса: %v", pod.Labels)
+	}
+
+	result, err = reconciler.reconcileRollout(ctx, instance)
+	if err != nil || result.IsZero() {
+		t.Fatalf("подтвердить конфигурацию после назначения роли: result=%+v error=%v", result, err)
+	}
+	if instance.Status.Rollout != nil || instance.Status.Applied.VCPU != 2 || instance.Status.Applied.RAMGB != 4 {
+		t.Fatalf("целевая конфигурация не подтверждена: %+v", instance.Status)
 	}
 }
 
@@ -89,16 +164,16 @@ func Test_RZ03_ReconcileFullStop_WhenClientAccessIsOpen_ScalesDownOnlyAfterAcces
 		DesiredGeneration: 2, VCPU: 2, RAMGB: 2,
 		Stage: valkeyv1alpha1.RolloutStageStopping,
 	}
-	if replicas := rolloutWorkloadReplicas(instance, 3); replicas != 3 {
-		t.Fatalf("StatefulSet остановлен до закрытия доступа: %d", replicas)
+	if count := rolloutWorkloadProcessCount(instance); count != 3 {
+		t.Fatalf("процессы остановлены до закрытия доступа: %d", count)
 	}
 	instance.Status.Rollout.AccessClosed = true
-	if replicas := rolloutWorkloadReplicas(instance, 3); replicas != 0 {
-		t.Fatalf("StatefulSet не остановлен после закрытия доступа: %d", replicas)
+	if count := rolloutWorkloadProcessCount(instance); count != 0 {
+		t.Fatalf("процессы не остановлены после закрытия доступа: %d", count)
 	}
 	instance.Status.Rollout.Stage = valkeyv1alpha1.RolloutStageStarting
-	if replicas := rolloutWorkloadReplicas(instance, 3); replicas != 3 {
-		t.Fatalf("StatefulSet не запущен на целевом шаблоне: %d", replicas)
+	if count := rolloutWorkloadProcessCount(instance); count != 3 {
+		t.Fatalf("процессы не запущены с целевой конфигурацией: %d", count)
 	}
 }
 
@@ -251,8 +326,8 @@ func Test_RZ02_ReconcileHAGrowth_WhenResourcesIncrease_UsesRollingTemplate(t *te
 	if rolloutRequiresFullStop(instance) {
 		t.Fatal("рост RAM HA ошибочно требует полной остановки")
 	}
-	if replicas := rolloutWorkloadReplicas(instance, 3); replicas != 3 {
-		t.Fatalf("rolling resize уменьшил состав до %d", replicas)
+	if count := rolloutWorkloadProcessCount(instance); count != 3 {
+		t.Fatalf("последовательное изменение размера уменьшило состав до %d", count)
 	}
 	instance.Status.Rollout.RAMGB = 2
 	if !rolloutRequiresFullStop(instance) {

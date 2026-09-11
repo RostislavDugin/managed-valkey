@@ -80,8 +80,8 @@ func (r *ValkeyInstanceReconciler) maybeStartFailureFailover(
 		}
 		return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 	}
-	primary, found := nodeStatusAtOrdinal(instance.Status.Nodes, *instance.Status.PrimaryOrdinal)
-	if !found || !primaryIdentityMatches(instance, primary) {
+	primary, found := failoverPrimaryProcess(instance)
+	if !found {
 		if emptyRecoverySafe(instance) {
 			return r.beginEmptyRecovery(ctx, instance, false)
 		}
@@ -729,6 +729,9 @@ func (r *ValkeyInstanceReconciler) currentProcessPod(
 	}
 	if err := reader.Get(ctx, key, pod); err != nil {
 		return nil, err
+	}
+	if !podOwnedByInstance(pod, instance) {
+		return nil, apierrors.NewNotFound(corev1.Resource("pods"), pod.Name)
 	}
 	container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 	if pod.Status.PodIP == "" || container == nil || container.State.Running == nil ||

@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -42,34 +41,59 @@ func (r *ValkeyInstanceReconciler) reconcileWorkloadResources(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	valkeyImage, changed, err := r.protectedValkeyImage(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if instance.Status.Rollout != nil && instance.Status.Rollout.Image != "" {
-		valkeyImage = instance.Status.Rollout.Image
-	}
-	desiredWorkload := desiredStatefulSet(
-		workloadInstance,
+	changed := false
+	desiredCount := rolloutWorkloadProcessCount(instance)
+	if err := runRolloutActionControl(
+		ctx,
+		"before-workload-reconcile",
+		instance,
+		desiredCount,
 		configMap.Name,
-		valkeyImage,
-		r.ResourceRequests,
-	)
-	desiredWorkload.Spec.Replicas = new(rolloutWorkloadReplicas(instance, *desiredWorkload.Spec.Replicas))
-	if err := runRolloutActionControl(ctx, "before-statefulset-update", instance, desiredWorkload); err != nil {
+	); err != nil {
 		return ctrl.Result{}, err
 	}
-	statefulSetChanged, err := r.ensureStatefulSet(ctx, desiredWorkload)
-	if err != nil {
-		return ctrl.Result{}, err
+	if desiredCount == 0 {
+		podsChanged, err := r.requestWorkloadStop(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		changed = changed || podsChanged
+	} else {
+		for ordinal := range desiredCount {
+			if !processCreationAllowed(instance, ordinal) {
+				continue
+			}
+			desired := desiredPod(
+				workloadInstance,
+				ordinal,
+				configMap.Name,
+				instance.Status.ValkeyImage,
+				r.ResourceRequests,
+			)
+			podChanged, blocked, err := r.ensurePod(ctx, instance, desired)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			changed = changed || podChanged
+			if blocked {
+				if changed {
+					return requeueIf(true), nil
+				}
+				return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
+			}
+		}
 	}
-	if statefulSetChanged {
-		if err := runRolloutActionControl(ctx, "after-statefulset-update", instance, desiredWorkload); err != nil {
+	if changed {
+		if err := runRolloutActionControl(
+			ctx,
+			"after-workload-reconcile",
+			instance,
+			desiredCount,
+			configMap.Name,
+		); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
-	changed = changed || statefulSetChanged
 
 	for _, service := range desiredServices(instance) {
 		serviceChanged, err := r.ensureService(ctx, service)
@@ -125,7 +149,8 @@ func rolloutUsesTargetTemplate(stage valkeyv1alpha1.RolloutStage) bool {
 	}
 }
 
-func rolloutWorkloadReplicas(instance *valkeyv1alpha1.ValkeyInstance, normal int32) int32 {
+func rolloutWorkloadProcessCount(instance *valkeyv1alpha1.ValkeyInstance) int32 {
+	normal := expectedProcessCount(instance)
 	rollout := instance.Status.Rollout
 	if rollout == nil || !rolloutRequiresFullStop(instance) {
 		return normal
@@ -145,64 +170,69 @@ func rolloutRequiresFullStop(instance *valkeyv1alpha1.ValkeyInstance) bool {
 		instance.Status.Rollout.RAMGB < instance.Status.Applied.RAMGB
 }
 
-func (r *ValkeyInstanceReconciler) protectedValkeyImage(
+func (r *ValkeyInstanceReconciler) reconcileValkeyImage(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
-) (string, bool, error) {
-	statefulSet := &appsv1.StatefulSet{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Status.AcceptedConfiguration.Slug}
-	if err := r.Get(ctx, key, statefulSet); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.ValkeyImage, false, nil
+) (bool, bool, error) {
+	if instance.Status.ValkeyImage == "" {
+		if instanceHasProcessHistory(instance.Status) {
+			changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+				setCondition(
+					instance,
+					status,
+					conditionTypeRecoveryRequired,
+					metav1.ConditionTrue,
+					"ValkeyImageMissing",
+					"сохранённый образ Valkey отсутствует у инстанса с историей процессов",
+				)
+			})
+
+			return true, changed, err
 		}
 
-		return "", false, fmt.Errorf("прочитать StatefulSet перед проверкой образа: %w", err)
-	}
-
-	currentImage := ""
-	for _, container := range statefulSet.Spec.Template.Spec.Containers {
-		if container.Name == "valkey" {
-			currentImage = container.Image
-			break
-		}
-	}
-	if currentImage == "" {
-		return r.ValkeyImage, false, nil
-	}
-	if currentImage != r.ValkeyImage {
 		changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+			status.ValkeyImage = r.ValkeyImage
+		})
+
+		return false, changed, err
+	}
+
+	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		condition := apimeta.FindStatusCondition(status.Conditions, conditionTypeRecoveryRequired)
+		if status.ValkeyImage != r.ValkeyImage {
 			setCondition(
 				instance,
 				status,
 				conditionTypeRecoveryRequired,
 				metav1.ConditionTrue,
 				"ValkeyImageChanged",
-				"VALKEY_IMAGE отличается от образа существующего StatefulSet",
+				"VALKEY_IMAGE отличается от сохранённого образа инстанса",
 			)
-		})
-
-		return currentImage, changed, err
-	}
-
-	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
-		condition := apimeta.FindStatusCondition(status.Conditions, conditionTypeRecoveryRequired)
-		if condition != nil && condition.Reason == "ValkeyImageChanged" {
+			return
+		}
+		if condition != nil && (condition.Reason == "ValkeyImageChanged" || condition.Reason == "ValkeyImageMissing") {
 			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeRecoveryRequired)
 		}
 	})
 
-	return currentImage, changed, err
+	return false, changed, err
 }
 
-func desiredStatefulSet(
+func instanceHasProcessHistory(status valkeyv1alpha1.ValkeyInstanceStatus) bool {
+	return status.Initialized || status.Applied != nil || len(status.Nodes) > 0 || len(status.PreviousProcesses) > 0
+}
+
+func desiredPod(
 	instance *valkeyv1alpha1.ValkeyInstance,
+	ordinal int32,
 	configMapName string,
 	image string,
 	requestOverrides corev1.ResourceList,
-) *appsv1.StatefulSet {
+) *corev1.Pod {
 	accepted := instance.Status.AcceptedConfiguration
 	selectorLabels := workloadLabels(accepted.Slug)
 	labels := workloadResourceLabels(instance)
+	name := fmt.Sprintf("%s-%d", accepted.Slug, ordinal)
 	defaultMode := int32(0o555)
 	terminationGracePeriod := int64(30)
 	limits := corev1.ResourceList{
@@ -243,10 +273,8 @@ func desiredStatefulSet(
 			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
 		},
 	}
-	replicas := int32(1)
 	var affinity *corev1.Affinity
 	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-		replicas = 3
 		affinity = &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
 				LabelSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
@@ -255,54 +283,36 @@ func desiredStatefulSet(
 		}}
 	}
 
-	statefulSet := &appsv1.StatefulSet{
-		Spec: appsv1.StatefulSetSpec{
-			Replicas:            new(replicas),
-			ServiceName:         accepted.Slug + "-hl",
-			PodManagementPolicy: appsv1.ParallelPodManagement,
-			UpdateStrategy:      appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType},
-			Selector:            &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      maps.Clone(labels),
-					Annotations: workloadAnnotations(instance),
-					Finalizers:  []string{processFinalizer},
+	pod := &corev1.Pod{
+		ObjectMeta: ownedObjectMeta(instance, name, labels),
+		Spec: corev1.PodSpec{
+			Hostname:                      name,
+			Subdomain:                     accepted.Slug + "-hl",
+			RestartPolicy:                 corev1.RestartPolicyNever,
+			TerminationGracePeriodSeconds: &terminationGracePeriod,
+			Affinity:                      affinity,
+			Containers: []corev1.Container{{
+				Name:            "valkey",
+				Image:           image,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				Command:         []string{"/bin/sh", "/etc/valkey-config/start.sh"},
+				Ports: []corev1.ContainerPort{{
+					Name: "valkey", ContainerPort: valkeyPort, Protocol: corev1.ProtocolTCP,
+				}},
+				Resources:      resources,
+				ReadinessProbe: readinessProbe,
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "config", MountPath: "/etc/valkey-config", ReadOnly: true},
+					{Name: "auth", MountPath: "/etc/valkey-auth", ReadOnly: true},
+					{Name: "runtime", MountPath: "/run/valkey"},
 				},
-				Spec: corev1.PodSpec{
-					RestartPolicy:                 corev1.RestartPolicyAlways,
-					TerminationGracePeriodSeconds: &terminationGracePeriod,
-					Affinity:                      affinity,
-					Containers: []corev1.Container{{
-						Name:            "valkey",
-						Image:           image,
-						ImagePullPolicy: corev1.PullIfNotPresent,
-						Command:         []string{"/bin/sh", "/etc/valkey-config/start.sh"},
-						Ports: []corev1.ContainerPort{{
-							Name: "valkey", ContainerPort: valkeyPort, Protocol: corev1.ProtocolTCP,
-						}},
-						Resources:      resources,
-						RestartPolicy:  ptr.To(corev1.ContainerRestartPolicyNever),
-						ReadinessProbe: readinessProbe,
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "config", MountPath: "/etc/valkey-config", ReadOnly: true},
-							{Name: "auth", MountPath: "/etc/valkey-auth", ReadOnly: true},
-							{Name: "runtime", MountPath: "/run/valkey"},
-						},
-					}},
-					Volumes: []corev1.Volume{configVolume, authVolume, runtimeVolume},
-				},
-			},
+			}},
+			Volumes: []corev1.Volume{configVolume, authVolume, runtimeVolume},
 		},
 	}
-	statefulSet.Name = accepted.Slug
-	statefulSet.Namespace = instance.Namespace
-	statefulSet.Labels = maps.Clone(labels)
-	statefulSet.Annotations = workloadAnnotations(instance)
-	statefulSet.OwnerReferences = []metav1.OwnerReference{
-		*metav1.NewControllerRef(instance, valkeyv1alpha1.GroupVersion.WithKind("ValkeyInstance")),
-	}
+	pod.Finalizers = []string{processFinalizer}
 
-	return statefulSet
+	return pod
 }
 
 func desiredPodDisruptionBudget(instance *valkeyv1alpha1.ValkeyInstance) *policyv1.PodDisruptionBudget {
@@ -426,41 +436,158 @@ func desiredNetworkPolicy(
 	}
 }
 
-func (r *ValkeyInstanceReconciler) ensureStatefulSet(
+func (r *ValkeyInstanceReconciler) reconcileLegacyStatefulSet(
 	ctx context.Context,
-	desired *appsv1.StatefulSet,
-) (bool, error) {
-	r.Scheme.Default(desired)
-	current := &appsv1.StatefulSet{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("прочитать StatefulSet: %w", err)
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (bool, bool, error) {
+	statefulSet := &appsv1.StatefulSet{}
+	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Status.AcceptedConfiguration.Slug}
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	err := reader.Get(ctx, key, statefulSet)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return false, false, fmt.Errorf("проверить прежний StatefulSet: %w", err)
+	}
+	found := err == nil
+	changed, updateErr := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		condition := apimeta.FindStatusCondition(status.Conditions, conditionTypeRecoveryRequired)
+		if found {
+			setCondition(
+				instance,
+				status,
+				conditionTypeRecoveryRequired,
+				metav1.ConditionTrue,
+				"LegacyStatefulSet",
+				"прежний пользовательский StatefulSet нужно штатно удалить совместимой версией оператора",
+			)
+			return
 		}
+		if condition != nil && condition.Reason == "LegacyStatefulSet" {
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeRecoveryRequired)
+		}
+	})
+
+	return found, changed, updateErr
+}
+
+func processCreationAllowed(instance *valkeyv1alpha1.ValkeyInstance, ordinal int32) bool {
+	for _, previous := range instance.Status.PreviousProcesses {
+		if previous.Ordinal == ordinal && previous.Termination == nil {
+			return false
+		}
+	}
+	current, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+	return !found || current.Termination != nil
+}
+
+func (r *ValkeyInstanceReconciler) ensurePod(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	desired *corev1.Pod,
+) (bool, bool, error) {
+	r.Scheme.Default(desired)
+	current := &corev1.Pod{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), current)
+	if apierrors.IsNotFound(err) {
 		if err := r.Create(ctx, desired); err != nil {
-			return false, fmt.Errorf("создать StatefulSet: %w", err)
+			if !apierrors.IsAlreadyExists(err) {
+				return false, false, fmt.Errorf("создать Pod %s: %w", desired.Name, err)
+			}
+			reader := r.APIReader
+			if reader == nil {
+				reader = r.Client
+			}
+			if err := reader.Get(ctx, client.ObjectKeyFromObject(desired), current); err != nil {
+				return false, false, fmt.Errorf("перечитать Pod %s после конфликта создания: %w", desired.Name, err)
+			}
+		} else {
+			return true, false, nil
+		}
+	} else if err != nil {
+		return false, false, fmt.Errorf("прочитать Pod %s: %w", desired.Name, err)
+	}
+	if podOwnedByInstance(current, instance) {
+		changed, err := r.clearPodOwnershipConflict(ctx, instance)
+		return changed, false, err
+	}
+
+	changed, err := r.setPodOwnershipConflict(ctx, instance, current.Name)
+	return changed, true, err
+}
+
+func podOwnedByInstance(pod *corev1.Pod, instance *valkeyv1alpha1.ValkeyInstance) bool {
+	owner := metav1.GetControllerOf(pod)
+	return owner != nil && owner.APIVersion == valkeyv1alpha1.GroupVersion.String() &&
+		owner.Kind == "ValkeyInstance" && owner.Name == instance.Name && owner.UID == instance.UID
+}
+
+func (r *ValkeyInstanceReconciler) setPodOwnershipConflict(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+	podName string,
+) (bool, error) {
+	return r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		setCondition(
+			instance,
+			status,
+			conditionTypeRecoveryRequired,
+			metav1.ConditionTrue,
+			"PodOwnershipConflict",
+			fmt.Sprintf("имя Pod %s занято объектом другого владельца", podName),
+		)
+	})
+}
+
+func (r *ValkeyInstanceReconciler) clearPodOwnershipConflict(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (bool, error) {
+	return r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
+		condition := apimeta.FindStatusCondition(status.Conditions, conditionTypeRecoveryRequired)
+		if condition != nil && condition.Reason == "PodOwnershipConflict" {
+			apimeta.RemoveStatusCondition(&status.Conditions, conditionTypeRecoveryRequired)
+		}
+	})
+}
+
+func (r *ValkeyInstanceReconciler) requestWorkloadStop(
+	ctx context.Context,
+	instance *valkeyv1alpha1.ValkeyInstance,
+) (bool, error) {
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, fmt.Errorf("прочитать Pod для полной остановки: %w", err)
+		}
+		if !podOwnedByInstance(pod, instance) {
+			_, err := r.setPodOwnershipConflict(ctx, instance, pod.Name)
+			return false, err
+		}
+		if !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		uid := pod.UID
+		resourceVersion := pod.ResourceVersion
+		if err := r.Delete(ctx, pod, &client.DeleteOptions{
+			GracePeriodSeconds: ptr.To(config.ProcessDeletionGracePeriod),
+			Preconditions:      &metav1.Preconditions{UID: &uid, ResourceVersion: &resourceVersion},
+		}); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("остановить Pod %s: %w", pod.Name, err)
 		}
 
 		return true, nil
 	}
 
-	before := current.DeepCopy()
-	if managedMetadataMatches(current, desired) &&
-		reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) &&
-		apiequality.Semantic.DeepDerivative(desired.Spec, current.Spec) {
-		return false, nil
-	}
-	mergeManagedMetadata(current, desired)
-	current.OwnerReferences = slices.Clone(desired.OwnerReferences)
-	current.Spec.Replicas = new(*desired.Spec.Replicas)
-	current.Spec.ServiceName = desired.Spec.ServiceName
-	current.Spec.PodManagementPolicy = desired.Spec.PodManagementPolicy
-	current.Spec.UpdateStrategy = desired.Spec.UpdateStrategy
-	current.Spec.Template = *desired.Spec.Template.DeepCopy()
-	if err := r.Patch(ctx, current, client.MergeFrom(before)); err != nil {
-		return false, fmt.Errorf("обновить StatefulSet: %w", err)
-	}
-
-	return current.ResourceVersion != before.ResourceVersion, nil
+	return false, nil
 }
 
 func (r *ValkeyInstanceReconciler) ensureService(ctx context.Context, desired *corev1.Service) (bool, error) {

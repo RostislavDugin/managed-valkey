@@ -871,6 +871,8 @@ spec:
                 - stage
                 - vcpu
                 type: object
+              valkeyImage:
+                type: string
             type: object
         required:
         - spec

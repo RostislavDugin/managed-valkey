@@ -402,23 +402,6 @@ func Test_CT10_ReconcileProcesses_WithHAMode_ObservesOtherProcessesWhileOneCallB
 	}
 }
 
-func Test_PodInstanceRequests_WithAndWithoutInstanceLabel_ReturnsRequestOnlyForLabeledPod(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Name: "cache-a1b2c3-0", Namespace: "valkey-cache-a1b2c3",
-		Labels: map[string]string{instanceLabelKey: "cache-a1b2c3"},
-	}}
-	requests := podInstanceRequests(context.Background(), pod)
-	if len(requests) != 1 || requests[0].Name != "cache-a1b2c3" ||
-		requests[0].Namespace != "valkey-cache-a1b2c3" {
-		t.Fatalf("неверный запрос reconcile для Pod: %+v", requests)
-	}
-
-	pod.Labels = nil
-	if requests := podInstanceRequests(context.Background(), pod); len(requests) != 0 {
-		t.Fatalf("Pod без метки поставлен в очередь: %+v", requests)
-	}
-}
-
 func processObservationObjects() (
 	*valkeyv1alpha1.ValkeyInstance,
 	*corev1.Pod,
@@ -431,6 +414,9 @@ func processObservationObjects() (
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: instance.Name + "-0", Namespace: instance.Namespace, UID: types.UID("pod-1"),
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(instance, valkeyv1alpha1.GroupVersion.WithKind("ValkeyInstance")),
+			},
 		},
 		Spec: corev1.PodSpec{NodeName: "worker-1"},
 		Status: corev1.PodStatus{

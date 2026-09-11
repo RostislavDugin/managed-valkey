@@ -423,7 +423,9 @@ func (r *ValkeyInstanceReconciler) replicaBackendAddress(
 	for _, node := range instance.Status.Nodes {
 		if node.Role != valkeyv1alpha1.NodeRoleReplica || node.Termination != nil ||
 			node.Observation != nil || !node.Readiness || node.Replication == nil ||
-			!node.Replication.LinkUp || node.Replication.SyncInProgress || node.Replication.SyncedAt == nil {
+			!node.Replication.LinkUp || node.Replication.SyncInProgress || node.Replication.SyncedAt == nil ||
+			!node.AppEnabled ||
+			node.AppPasswordVersion != instance.Status.AcceptedConfiguration.PasswordVersion {
 			continue
 		}
 		pod := &corev1.Pod{}
@@ -439,7 +441,8 @@ func (r *ValkeyInstanceReconciler) replicaBackendAddress(
 		}
 		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 		if pod.Status.PodIP != "" && container != nil && container.State.Running != nil &&
-			node.PodUID == string(pod.UID) && node.ContainerID == container.ContainerID {
+			node.PodUID == string(pod.UID) && node.ContainerID == container.ContainerID &&
+			pod.Labels[applicationRoleLabel] == string(valkeyv1alpha1.NodeRoleReplica) {
 			return pod.Status.PodIP, nil
 		}
 	}

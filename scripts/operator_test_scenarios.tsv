@@ -22,6 +22,7 @@ fp06-fp07-op08-sigstop-single	^Test_FP06FP07OP08_RecoverSingle_WhenProcessReceiv
 fp08-fp09-op08-busy	^Test_FP08FP09OP08_RecoverBusySingle_WhenCommandsAreKillableOrUnkillable_KillsCommandOrReplacesProcess$	1	1	2048	360	22m
 fp10-replicas-lost	^Test_FP10_RecoverBothLostReplicas_WhenReplacementsAreSynchronizing_RemainsDegradedUntilSafe$	3	1	2560	300	22m
 fp05-fp11-operator-down	^Test_FP05FP11_RecoverHA_WhenAllProcessesStopWhileOperatorIsDown_RebuildsClusterWithEmptyCache$	3	1	2560	240	22m
+fp05-clean-exit-single	^Test_FP05_RecoverSingle_WhenProcessExitsCleanlyWhileOperatorIsDown_ReplacesWithoutRestart$	1	1	2048	120	20m
 op01-operator-sigkill	^Test_OP01_RecoverClusterOperator_AfterSIGKILL_ResumesWithNewLeaseHolderWithoutDataLoss$	3	1	2560	180	22m
 ct06-manual-fencing	^Test_CT06_ResumeFailover_AfterManualFencingConfirmsStoppedAgent_PreservesData$	4	2	3072	300	22m
 nd04-operator-primary-loss	^Test_ND04_RecoverHA_WhenOperatorAndPrimaryWorkerAreDestroyed_ReplacesOperatorAndFailsOver$	4	2	3072	360	22m

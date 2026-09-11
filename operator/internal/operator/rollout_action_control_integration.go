@@ -6,17 +6,15 @@ import (
 	"context"
 	"sync"
 
-	appsv1 "k8s.io/api/apps/v1"
-
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
 type IntegrationRolloutActionEvent struct {
 	Name              string
 	Namespace         string
-	StatefulSetName   string
+	InstanceName      string
 	Stage             valkeyv1alpha1.RolloutStage
-	DesiredReplicas   int32
+	DesiredProcesses  int32
 	DesiredConfigName string
 }
 
@@ -50,7 +48,8 @@ func runRolloutActionControl(
 	ctx context.Context,
 	name string,
 	instance *valkeyv1alpha1.ValkeyInstance,
-	statefulSet *appsv1.StatefulSet,
+	desiredProcesses int32,
+	desiredConfigName string,
 ) error {
 	integrationRolloutActionControl.Lock()
 	control := integrationRolloutActionControl.control
@@ -62,20 +61,9 @@ func runRolloutActionControl(
 	if instance.Status.Rollout != nil {
 		stage = instance.Status.Rollout.Stage
 	}
-	desiredReplicas := int32(0)
-	if statefulSet.Spec.Replicas != nil {
-		desiredReplicas = *statefulSet.Spec.Replicas
-	}
-	configName := ""
-	for _, volume := range statefulSet.Spec.Template.Spec.Volumes {
-		if volume.Name == "config" && volume.ConfigMap != nil {
-			configName = volume.ConfigMap.Name
-			break
-		}
-	}
 	return control(ctx, IntegrationRolloutActionEvent{
-		Name: name, Namespace: statefulSet.Namespace, StatefulSetName: statefulSet.Name,
-		Stage: stage, DesiredReplicas: desiredReplicas, DesiredConfigName: configName,
+		Name: name, Namespace: instance.Namespace, InstanceName: instance.Name,
+		Stage: stage, DesiredProcesses: desiredProcesses, DesiredConfigName: desiredConfigName,
 	})
 }
 
@@ -95,6 +83,6 @@ func runRolloutStatusActionControl(
 		stage = instance.Status.Rollout.Stage
 	}
 	return control(ctx, IntegrationRolloutActionEvent{
-		Name: name, Namespace: instance.Namespace, StatefulSetName: instance.Name, Stage: stage,
+		Name: name, Namespace: instance.Namespace, InstanceName: instance.Name, Stage: stage,
 	})
 }

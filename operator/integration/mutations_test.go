@@ -25,7 +25,6 @@ import (
 	"time"
 
 	envoyv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -153,12 +152,22 @@ func (p *appAccessActionPoint) waitFor(
 	timeout time.Duration,
 ) operatorcontroller.IntegrationAppAccessActionEvent {
 	t.Helper()
+	event, reached := p.wait(timeout)
+	if reached {
+		return event
+	}
+	t.Fatal("управляемая граница клиентского допуска не достигнута")
+	return operatorcontroller.IntegrationAppAccessActionEvent{}
+}
+
+func (p *appAccessActionPoint) wait(
+	timeout time.Duration,
+) (operatorcontroller.IntegrationAppAccessActionEvent, bool) {
 	select {
 	case event := <-p.reached:
-		return event
+		return event, true
 	case <-time.After(timeout):
-		t.Fatal("управляемая граница допуска app не достигнута")
-		return operatorcontroller.IntegrationAppAccessActionEvent{}
+		return operatorcontroller.IntegrationAppAccessActionEvent{}, false
 	}
 }
 
@@ -942,8 +951,11 @@ func Test_PW04_RotatePassword_WhenPrimaryFails_UsesTargetPasswordDuringFailover(
 	h.sigkillValkeyProcess(t, instance, source)
 	closeConnections([]*persistentConnection{connection})
 	afterFirstReplica.close()
-	event := newPrimaryAdmission.waitFor(t, 2*time.Minute)
+	event, reached := newPrimaryAdmission.wait(2 * time.Minute)
 	current = h.getInstance(t, instance)
+	if !reached {
+		t.Fatalf("PW-04 не достигла допуска нового основного процесса: %+v", current.Status)
+	}
 	if current.Status.Failover == nil || current.Status.PrimaryOrdinal == nil ||
 		current.Status.PrimaryPodUID == source.PodUID {
 		t.Fatalf("PW-04 допустила app вне аварийного нового primary: %+v", current.Status)
@@ -1213,7 +1225,7 @@ func verifyPW10DeletionPreemption(
 				ctx,
 				pods,
 				client.InNamespace(instance.namespace),
-				client.MatchingLabels{"app.kubernetes.io/instance": instance.slug},
+				client.MatchingLabels{valkeyv1alpha1.InstanceLabelKey: instance.slug},
 			); listErr != nil {
 				return false, listErr
 			}
@@ -1405,7 +1417,7 @@ func assertDeletionFinalizerBoundary(
 		t.Context(),
 		pods,
 		client.InNamespace(instance.namespace),
-		client.MatchingLabels{"app.kubernetes.io/instance": instance.slug},
+		client.MatchingLabels{valkeyv1alpha1.InstanceLabelKey: instance.slug},
 	); err != nil {
 		t.Fatalf("прочитать Pod перед снятием finalizer: %v", err)
 	}
@@ -1616,7 +1628,7 @@ func Test_DL04_ResumeHADeletion_WhenOperatorRestartsAtEveryStage_CompletesSafely
 	stopOperatorAtDeletionBoundary(t, h, instance, beforeStopping, valkeyv1alpha1.DeletionStageStopping, func(
 		_ *valkeyv1alpha1.ValkeyInstance,
 	) {
-		assertStatefulSetReplicas(t, h, instance, 3)
+		assertPodLifecycleCounts(t, h, instance, 3, 0)
 	})
 
 	afterStopping := newDeletionActionPoint(
@@ -1629,7 +1641,7 @@ func Test_DL04_ResumeHADeletion_WhenOperatorRestartsAtEveryStage_CompletesSafely
 	stopOperatorAtDeletionBoundary(t, h, instance, afterStopping, valkeyv1alpha1.DeletionStageStopping, func(
 		_ *valkeyv1alpha1.ValkeyInstance,
 	) {
-		assertStatefulSetReplicas(t, h, instance, 0)
+		assertPodDeletionStarted(t, h, instance)
 	})
 
 	beforeVerifying := newDeletionActionPoint(
@@ -1642,7 +1654,7 @@ func Test_DL04_ResumeHADeletion_WhenOperatorRestartsAtEveryStage_CompletesSafely
 	stopOperatorAtDeletionBoundary(t, h, instance, beforeVerifying, valkeyv1alpha1.DeletionStageVerifying, func(
 		_ *valkeyv1alpha1.ValkeyInstance,
 	) {
-		assertStatefulSetReplicas(t, h, instance, 0)
+		assertNoActivePods(t, h, instance)
 	})
 
 	beforeFinalizer := newDeletionActionPoint(
@@ -1725,11 +1737,51 @@ func assertDeletionNetworkState(t *testing.T, h *harness, instance *testInstance
 	}
 }
 
-func assertStatefulSetReplicas(t *testing.T, h *harness, instance *testInstance, expected int32) {
+func instancePods(t *testing.T, h *harness, instance *testInstance) []corev1.Pod {
 	t.Helper()
-	statefulSet := h.getInstanceStatefulSet(t, instance)
-	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != expected {
-		t.Fatalf("DL-04 StatefulSet replicas=%v вместо %d", statefulSet.Spec.Replicas, expected)
+	pods := &corev1.PodList{}
+	if err := h.k8s.List(
+		t.Context(),
+		pods,
+		client.InNamespace(instance.namespace),
+		client.MatchingLabels{valkeyv1alpha1.InstanceLabelKey: instance.slug},
+	); err != nil {
+		t.Fatalf("прочитать Pod инстанса: %v", err)
+	}
+	return pods.Items
+}
+
+func assertPodLifecycleCounts(t *testing.T, h *harness, instance *testInstance, total, deleting int) {
+	t.Helper()
+	pods := instancePods(t, h, instance)
+	actualDeleting := 0
+	for index := range pods {
+		if !pods[index].DeletionTimestamp.IsZero() {
+			actualDeleting++
+		}
+	}
+	if len(pods) != total || actualDeleting != deleting {
+		t.Fatalf("DL-04 получила Pod=%d, удаляются=%d; ожидала Pod=%d, удаляются=%d",
+			len(pods), actualDeleting, total, deleting)
+	}
+}
+
+func assertPodDeletionStarted(t *testing.T, h *harness, instance *testInstance) {
+	t.Helper()
+	for _, pod := range instancePods(t, h, instance) {
+		if !pod.DeletionTimestamp.IsZero() {
+			return
+		}
+	}
+	t.Fatal("DL-04 не запросила удаление ни одного Pod")
+}
+
+func assertNoActivePods(t *testing.T, h *harness, instance *testInstance) {
+	t.Helper()
+	for _, pod := range instancePods(t, h, instance) {
+		if pod.DeletionTimestamp.IsZero() {
+			t.Fatalf("DL-04 оставила активный Pod %s", pod.Name)
+		}
 	}
 }
 
@@ -2048,12 +2100,11 @@ func assertInstanceValkeyImage(
 	expected string,
 ) string {
 	t.Helper()
-	statefulSet := h.getInstanceStatefulSet(t, instance)
-	image := valkeyContainer(t, statefulSet.Spec.Template.Spec.Containers).Image
-	if image != expected {
-		t.Fatalf("CT-11 StatefulSet %s использует образ %q вместо %q", instance.slug, image, expected)
-	}
 	status := h.getInstance(t, instance)
+	image := status.Status.ValkeyImage
+	if image != expected {
+		t.Fatalf("CT-11 инстанс %s хранит образ %q вместо %q", instance.slug, image, expected)
+	}
 	for _, process := range status.Status.Nodes {
 		pod := h.getPodOrdinal(t, instance, process.Ordinal)
 		if podImage := valkeyContainer(t, pod.Spec.Containers).Image; podImage != expected {
@@ -2296,21 +2347,24 @@ func Test_RZ08_ResumeHAShrink_AfterRestarts_KeepsWorkloadStoppedUntilTargetTempl
 	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
 	setValue(t, connection, "rz08-key", "discarded")
 	assertKeyOnAllReplicas(t, h, instance, status, "rz08-key", "discarded")
-	oldStatefulSet := h.getInstanceStatefulSet(t, instance)
-	oldConfigName := podConfigMapName(t, &oldStatefulSet.Spec.Template.Spec)
+	oldConfigName := podConfigMapName(t, &h.getPodOrdinal(t, instance, 0).Spec)
 
 	beforeZero := newRolloutActionPoint(t, valkeyv1alpha1.RolloutStageStopping, 0)
 	h.resize(t, instance, 1, 1, 2)
-	beforeZero.waitFor(t, 3*time.Minute)
+	beforeZeroEvent := beforeZero.waitFor(t, 3*time.Minute)
 	status = h.getInstance(t, instance)
 	if status.Status.Rollout == nil || status.Status.Rollout.Stage != valkeyv1alpha1.RolloutStageStopping ||
 		!status.Status.Rollout.AccessClosed {
 		t.Fatalf("RZ-08 не сохранила закрытый полный останов: %+v", status.Status.Rollout)
 	}
-	statefulSet := h.getInstanceStatefulSet(t, instance)
-	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 3 ||
-		podConfigMapName(t, &statefulSet.Spec.Template.Spec) != oldConfigName {
-		t.Fatalf("RZ-08 изменила StatefulSet до сохранённого replicas=0: %+v", statefulSet.Spec)
+	if beforeZeroEvent.DesiredConfigName != oldConfigName {
+		t.Fatalf("RZ-08 выбрала конфигурацию %s до полной остановки вместо %s",
+			beforeZeroEvent.DesiredConfigName, oldConfigName)
+	}
+	for _, pod := range instancePods(t, h, instance) {
+		if !pod.DeletionTimestamp.IsZero() || podConfigMapName(t, &pod.Spec) != oldConfigName {
+			t.Fatalf("RZ-08 изменила Pod %s до границы полной остановки", pod.Name)
+		}
 	}
 	h.stopOperator(t)
 	beforeZero.close()
@@ -2319,27 +2373,17 @@ func Test_RZ08_ResumeHAShrink_AfterRestarts_KeepsWorkloadStoppedUntilTargetTempl
 
 	beforeStart := newRolloutActionPoint(t, valkeyv1alpha1.RolloutStageStarting, 3)
 	h.startOperator(t)
-	beforeStart.waitFor(t, 3*time.Minute)
+	beforeStartEvent := beforeStart.waitFor(t, 3*time.Minute)
 	status = h.getInstance(t, instance)
 	if status.Status.Rollout == nil || status.Status.Rollout.Stage != valkeyv1alpha1.RolloutStageStarting {
 		t.Fatalf("RZ-08 не сохранила стадию запуска после полного останова: %+v", status.Status.Rollout)
 	}
-	statefulSet = h.getInstanceStatefulSet(t, instance)
-	targetConfigName := podConfigMapName(t, &statefulSet.Spec.Template.Spec)
-	if statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 0 || targetConfigName == oldConfigName {
-		t.Fatalf("RZ-08 не удержала ноль реплик на целевом шаблоне: %+v", statefulSet.Spec)
+	targetConfigName := beforeStartEvent.DesiredConfigName
+	if targetConfigName == oldConfigName {
+		t.Fatalf("RZ-08 не выбрала целевую ConfigMap после полной остановки: %s", targetConfigName)
 	}
-	pods := &corev1.PodList{}
-	if err := h.k8s.List(
-		t.Context(),
-		pods,
-		client.InNamespace(instance.namespace),
-		client.MatchingLabels{"app.kubernetes.io/instance": instance.slug},
-	); err != nil {
-		t.Fatalf("RZ-08 прочитать Pod полного останова: %v", err)
-	}
-	if len(pods.Items) != 0 {
-		t.Fatalf("RZ-08 преждевременно сохранила Pod при replicas=0: %+v", pods.Items)
+	if pods := instancePods(t, h, instance); len(pods) != 0 {
+		t.Fatalf("RZ-08 преждевременно создала Pod после полной остановки: %+v", pods)
 	}
 	for _, name := range []string{oldConfigName, targetConfigName} {
 		configMap := &corev1.ConfigMap{}
@@ -2388,37 +2432,44 @@ func Test_RZ08_ResumeHARollingResize_AfterRestartsAtMutationBoundaries_Preserves
 	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
 	setValue(t, connection, "rz08-rolling-key", "preserved")
 	assertKeyOnAllReplicas(t, h, instance, status, "rz08-rolling-key", "preserved")
-	oldStatefulSet := h.getInstanceStatefulSet(t, instance)
-	oldConfigName := podConfigMapName(t, &oldStatefulSet.Spec.Template.Spec)
+	oldConfigName := podConfigMapName(t, &h.getPodOrdinal(t, instance, 0).Spec)
 
 	beforeTemplate := newRolloutActionPoint(t, valkeyv1alpha1.RolloutStageUpdatingTemplate, 3)
 	h.resize(t, instance, 2, 2, 2)
-	beforeTemplate.waitFor(t, 3*time.Minute)
+	beforeTemplateEvent := beforeTemplate.waitFor(t, 3*time.Minute)
 	status = h.getInstance(t, instance)
-	statefulSet := h.getInstanceStatefulSet(t, instance)
 	if status.Status.Rollout == nil || status.Status.Rollout.Stage != valkeyv1alpha1.RolloutStageUpdatingTemplate ||
-		podConfigMapName(t, &statefulSet.Spec.Template.Spec) != oldConfigName {
-		t.Fatalf("RZ-08 изменила шаблон до управляемого рестарта: rollout=%+v", status.Status.Rollout)
+		beforeTemplateEvent.DesiredConfigName == oldConfigName {
+		t.Fatalf("RZ-08 не подготовила целевую конфигурацию: операция=%+v", status.Status.Rollout)
+	}
+	for _, pod := range instancePods(t, h, instance) {
+		if podConfigMapName(t, &pod.Spec) != oldConfigName {
+			t.Fatalf("RZ-08 изменила Pod %s до управляемой замены", pod.Name)
+		}
 	}
 	h.stopOperator(t)
 	beforeTemplate.close()
 
 	afterTemplate := newNamedRolloutActionPoint(
 		t,
-		"after-statefulset-update",
+		"workload-plan-saved",
 		valkeyv1alpha1.RolloutStageUpdatingTemplate,
 		3,
 	)
 	h.startOperator(t)
-	afterTemplate.waitFor(t, 3*time.Minute)
+	afterTemplateEvent := afterTemplate.waitFor(t, 3*time.Minute)
 	status = h.getInstance(t, instance)
-	statefulSet = h.getInstanceStatefulSet(t, instance)
-	targetConfigName := podConfigMapName(t, &statefulSet.Spec.Template.Spec)
+	targetConfigName := afterTemplateEvent.DesiredConfigName
 	if status.Status.Rollout == nil || status.Status.Rollout.Stage != valkeyv1alpha1.RolloutStageUpdatingTemplate ||
 		targetConfigName == oldConfigName {
-		t.Fatalf("RZ-08 не сохранила применённый целевой шаблон: rollout=%+v", status.Status.Rollout)
+		t.Fatalf("RZ-08 не сохранила целевую конфигурацию: операция=%+v", status.Status.Rollout)
 	}
 	assertProcessIdentities(t, before, status.Status.Nodes)
+	for _, pod := range instancePods(t, h, instance) {
+		if podConfigMapName(t, &pod.Spec) != oldConfigName {
+			t.Fatalf("RZ-08 изменила Pod %s при сохранении плана", pod.Name)
+		}
+	}
 	h.stopOperator(t)
 	afterTemplate.close()
 
@@ -2898,7 +2949,7 @@ func Test_RZ11_ProcessCompetingGenerationAndDeletion_WhenHARolloutIsInProgress_P
 				ctx,
 				pods,
 				client.InNamespace(instance.namespace),
-				client.MatchingLabels{"app.kubernetes.io/instance": instance.slug},
+				client.MatchingLabels{valkeyv1alpha1.InstanceLabelKey: instance.slug},
 			); err != nil {
 				return false, err
 			}
@@ -2951,17 +3002,6 @@ func (h *harness) waitForPendingReplacement(
 	return result.DeepCopy()
 }
 
-func (h *harness) getInstanceStatefulSet(t *testing.T, instance *testInstance) *appsv1.StatefulSet {
-	t.Helper()
-	statefulSet := &appsv1.StatefulSet{}
-	if err := h.k8s.Get(t.Context(), client.ObjectKey{
-		Name: instance.slug, Namespace: instance.namespace,
-	}, statefulSet); err != nil {
-		t.Fatalf("прочитать StatefulSet %s: %v", instance.slug, err)
-	}
-	return statefulSet
-}
-
 func Test_RZ09_RestartOldPod_WhenHARolloutIsInProgress_UsesOriginalConfiguration(t *testing.T) {
 	h := newHarness(t)
 	h.startOperator(t)
@@ -2987,19 +3027,13 @@ func Test_RZ09_RestartOldPod_WhenHARolloutIsInProgress_UsesOriginalConfiguration
 	oldConfigName := podConfigMapName(t, &oldPod.Spec)
 	oldImage := valkeyContainer(t, oldPod.Spec.Containers).Image
 
-	statefulSet := &appsv1.StatefulSet{}
-	if err := h.k8s.Get(t.Context(), client.ObjectKey{
-		Name: instance.slug, Namespace: instance.namespace,
-	}, statefulSet); err != nil {
-		t.Fatalf("RZ-09 прочитать StatefulSet: %v", err)
-	}
-	targetConfigName := podConfigMapName(t, &statefulSet.Spec.Template.Spec)
+	targetConfigName := otherInstanceConfigMapName(t, h, instance, oldConfigName)
 	if targetConfigName == oldConfigName {
-		t.Fatalf("RZ-09 шаблон StatefulSet сохранил старую ConfigMap %s", oldConfigName)
+		t.Fatalf("RZ-09 не сохранила целевую ConfigMap вместо %s", oldConfigName)
 	}
-	if image := valkeyContainer(t, statefulSet.Spec.Template.Spec.Containers).Image; image != oldImage ||
-		status.Status.Rollout.Image != oldImage {
-		t.Fatalf("RZ-09 изменила образ: pod=%q template=%q rollout=%q", oldImage, image, status.Status.Rollout.Image)
+	if status.Status.ValkeyImage != oldImage || status.Status.Rollout.Image != oldImage {
+		t.Fatalf("RZ-09 изменила образ: процесс=%q сохранённый=%q операция=%q",
+			oldImage, status.Status.ValkeyImage, status.Status.Rollout.Image)
 	}
 	for _, name := range []string{oldConfigName, targetConfigName} {
 		configMap := &corev1.ConfigMap{}
@@ -3200,6 +3234,31 @@ func podConfigMapName(t *testing.T, podSpec *corev1.PodSpec) string {
 		}
 	}
 	t.Fatal("Pod не содержит том config из ConfigMap")
+	return ""
+}
+
+func otherInstanceConfigMapName(
+	t *testing.T,
+	h *harness,
+	instance *testInstance,
+	excluded string,
+) string {
+	t.Helper()
+	configMaps := &corev1.ConfigMapList{}
+	if err := h.k8s.List(
+		t.Context(),
+		configMaps,
+		client.InNamespace(instance.namespace),
+		client.MatchingLabels{valkeyv1alpha1.InstanceLabelKey: instance.slug},
+	); err != nil {
+		t.Fatalf("прочитать ConfigMap инстанса: %v", err)
+	}
+	for _, configMap := range configMaps.Items {
+		if configMap.Name != excluded {
+			return configMap.Name
+		}
+	}
+	t.Fatalf("не найдена целевая ConfigMap, отличная от %s", excluded)
 	return ""
 }
 

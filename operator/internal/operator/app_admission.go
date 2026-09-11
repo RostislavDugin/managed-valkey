@@ -51,6 +51,9 @@ func (r *ValkeyInstanceReconciler) reconcilePodMetadata(
 
 			return ctrl.Result{}, fmt.Errorf("прочитать Pod для primary Service: %w", err)
 		}
+		if !podOwnedByInstance(pod, instance) {
+			continue
+		}
 		before := pod.DeepCopy()
 		if !setPodMetadata(instance, pod, ordinal) {
 			continue

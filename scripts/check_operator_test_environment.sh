@@ -50,6 +50,35 @@ fi
 KUBECONFIG="$ADMIN_KUBECONFIG" kubectl wait \
     --for=condition=Ready node --all --timeout=60s >/dev/null
 
+assert_k3s_argument() {
+    local service=$1 expected=$2 container arguments
+
+    container=$(docker ps -q \
+        --filter "label=com.docker.compose.project=$MANAGED_VALKEY_COMPOSE_PROJECT" \
+        --filter "label=com.docker.compose.service=$service" | head -n 1)
+    if [[ -z "$container" ]]; then
+        echo "не найден контейнер $service" >&2
+        exit 1
+    fi
+    arguments=$(docker inspect "$container" --format '{{range .Args}}{{println .}}{{end}}')
+    if ! rg -Fxq -- "$expected" <<<"$arguments"; then
+        echo "$service запущен без $expected" >&2
+        exit 1
+    fi
+}
+
+assert_k3s_argument k3s-server \
+    --kube-apiserver-arg=feature-gates=ContainerRestartRules=false
+for ((node_index = 0; node_index < expected_nodes; node_index++)); do
+    if ((node_index == 0)); then
+        node_service=k3s-server
+    else
+        node_service="k3s-agent-$node_index"
+    fi
+    assert_k3s_argument "$node_service" \
+        --kubelet-arg=feature-gates=ContainerRestartRules=false
+done
+
 mapfile -t envoy_nodes < <(
     KUBECONFIG="$ADMIN_KUBECONFIG" kubectl -n envoy-gateway-system get pods \
         -l gateway.envoyproxy.io/owning-gateway-name=valkey \

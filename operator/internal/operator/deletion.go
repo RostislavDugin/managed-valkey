@@ -6,7 +6,6 @@ import (
 	"net"
 	"slices"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -84,7 +83,7 @@ func (r *ValkeyInstanceReconciler) reconcileDeletion(
 
 		return r.advanceDeletion(ctx, instance, valkeyv1alpha1.DeletionStageStopping)
 	case valkeyv1alpha1.DeletionStageStopping:
-		changed, err := r.stopStatefulSet(ctx, instance)
+		changed, err := r.requestDeletionPods(ctx, instance)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -153,6 +152,9 @@ func (r *ValkeyInstanceReconciler) disableAppForDeletion(
 
 			return false, fmt.Errorf("прочитать Pod при удалении: %w", err)
 		}
+		if !podOwnedByInstance(pod, instance) {
+			continue
+		}
 		if _, exists := pod.Labels[applicationRoleLabel]; exists {
 			before := pod.DeepCopy()
 			pod.Labels = cloneWithoutKey(pod.Labels, applicationRoleLabel)
@@ -200,7 +202,9 @@ func (r *ValkeyInstanceReconciler) deletionProcessExists(
 			}
 			return false, fmt.Errorf("проверить Pod перед удалением без Secret: %w", err)
 		}
-		return true, nil
+		if podOwnedByInstance(pod, instance) {
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -216,30 +220,39 @@ func cloneWithoutKey(values map[string]string, key string) map[string]string {
 	return result
 }
 
-func (r *ValkeyInstanceReconciler) stopStatefulSet(
+func (r *ValkeyInstanceReconciler) requestDeletionPods(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (bool, error) {
-	statefulSet := &appsv1.StatefulSet{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Spec.Slug}
-	if err := r.Get(ctx, key, statefulSet); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
+	for ordinal := range expectedProcessCount(instance) {
+		pod := &corev1.Pod{}
+		key := client.ObjectKey{
+			Namespace: instance.Namespace,
+			Name:      fmt.Sprintf("%s-%d", instance.Status.AcceptedConfiguration.Slug, ordinal),
+		}
+		if err := r.Get(ctx, key, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, fmt.Errorf("прочитать Pod при удалении: %w", err)
+		}
+		if !podOwnedByInstance(pod, instance) || !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		uid := pod.UID
+		resourceVersion := pod.ResourceVersion
+		gracePeriod := config.ProcessDeletionGracePeriod
+		if err := r.Delete(ctx, pod, &client.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+			Preconditions:      &metav1.Preconditions{UID: &uid, ResourceVersion: &resourceVersion},
+		}); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("остановить Pod при удалении: %w", err)
 		}
 
-		return false, fmt.Errorf("прочитать StatefulSet при удалении: %w", err)
-	}
-	if statefulSet.Spec.Replicas != nil && *statefulSet.Spec.Replicas == 0 {
-		return false, nil
-	}
-	before := statefulSet.DeepCopy()
-	replicas := int32(0)
-	statefulSet.Spec.Replicas = &replicas
-	if err := r.Patch(ctx, statefulSet, client.MergeFrom(before)); err != nil {
-		return false, fmt.Errorf("остановить StatefulSet при удалении: %w", err)
+		return true, nil
 	}
 
-	return true, nil
+	return false, nil
 }
 
 func (r *ValkeyInstanceReconciler) verifyDeletion(
@@ -269,6 +282,21 @@ func (r *ValkeyInstanceReconciler) verifyDeletion(
 				return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 			}
 			continue
+		}
+		if !podOwnedByInstance(pod, instance) {
+			current, found := nodeStatusAtOrdinal(instance.Status.Nodes, ordinal)
+			if !found || current.Termination != nil {
+				continue
+			}
+			deleted, checkErr := r.previousNodeDeleted(ctx, current)
+			if checkErr != nil {
+				return ctrl.Result{}, checkErr
+			}
+			if deleted {
+				return r.saveNodeDeletionTermination(ctx, instance, current)
+			}
+
+			return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 		}
 		container := valkeyContainerStatus(pod.Status.ContainerStatuses)
 		if container != nil && container.State.Terminated != nil {

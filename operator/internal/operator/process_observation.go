@@ -119,6 +119,10 @@ func (r *ValkeyInstanceReconciler) reconcileProcessOrdinal(
 
 		return ctrl.Result{}, fmt.Errorf("прочитать Pod Valkey: %w", err)
 	}
+	if !podOwnedByInstance(pod, instance) {
+		changed, err := r.setPodOwnershipConflict(ctx, instance, pod.Name)
+		return requeueIf(changed), err
+	}
 	if !slices.Contains(pod.Finalizers, processFinalizer) && pod.DeletionTimestamp.IsZero() {
 		before := pod.DeepCopy()
 		pod.Finalizers = append(pod.Finalizers, processFinalizer)

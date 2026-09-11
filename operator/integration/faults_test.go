@@ -878,7 +878,6 @@ func Test_OP07_TakeOverOperator_WithDelayedAdministrativeConnection_ClosesPrevio
 	primary := primaryProcess(t, status)
 	primaryPod := h.getPodOrdinal(t, instance, primary.Ordinal)
 	operatorPassword := h.servicePasswords(t, instance)[0]
-	beforeObservedAt := status.Status.ObservedAt.DeepCopy()
 
 	h.stopOperator(t)
 	connection, err := net.DialTimeout("tcp", net.JoinHostPort(primaryPod.Status.PodIP, "6379"), 3*time.Second)
@@ -892,12 +891,20 @@ func Test_OP07_TakeOverOperator_WithDelayedAdministrativeConnection_ClosesPrevio
 	}
 	pingConnections(t, []*persistentConnection{delayed})
 
+	takeoverStartedAt := time.Now().UTC()
 	h.startOperator(t)
 	h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
-		return beforeObservedAt != nil && current.Status.ObservedAt != nil &&
-			current.Status.ObservedAt.After(beforeObservedAt.Time) &&
-			current.Status.PrimaryPodUID == primary.PodUID &&
-			current.Status.Phase == valkeyv1alpha1.InstancePhaseRunning
+		if current.Status.PrimaryPodUID != primary.PodUID ||
+			current.Status.Phase != valkeyv1alpha1.InstancePhaseRunning {
+			return false
+		}
+		for _, process := range current.Status.Nodes {
+			if process.PodUID == primary.PodUID && process.ContainerID == primary.ContainerID &&
+				process.Replication != nil && process.Replication.ObservedAt.After(takeoverStartedAt) {
+				return true
+			}
+		}
+		return false
 	}, "OP-07 приёма управления новым оператором")
 	assertConnectionClosed(t, delayed, false)
 	closeConnections([]*persistentConnection{delayed})
@@ -1047,10 +1054,10 @@ func assertCT10IndependentInstanceObservation(
 	lastObservedAt := beforeObservedAt.Time
 	heartbeats := make([]time.Time, 0, 2)
 	sawTransportFailure := false
-	observationDeadline := 4*operatorconfig.ValkeyCommandTimeout + 4*operatorconfig.HealthCheckInterval
+	observationDeadline := 8*operatorconfig.ValkeyCommandTimeout + 8*operatorconfig.HealthCheckInterval
 	err := wait.PollUntilContextTimeout(
 		t.Context(),
-		50*time.Millisecond,
+		operatorconfig.HealthCheckInterval,
 		observationDeadline,
 		true,
 		func(ctx context.Context) (bool, error) {
@@ -2219,6 +2226,53 @@ func Test_FP05FP11_RecoverHA_WhenAllProcessesStopWhileOperatorIsDown_RebuildsClu
 	h.deleteInstance(t, instance)
 }
 
+func Test_FP05_RecoverSingle_WhenProcessExitsCleanlyWhileOperatorIsDown_ReplacesWithoutRestart(t *testing.T) {
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
+
+	instance := h.createSingle(t, "cleanexit", valkeyv1alpha1.WhitelistSpec{})
+	status := h.waitRunning(t, instance)
+	before := status.Status.Nodes[0]
+	servicePasswords := h.servicePasswords(t, instance)
+	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	setValue(t, connection, "clean-exit-key", "discarded")
+
+	h.stopOperator(t)
+	h.signalValkeyProcess(t, instance, before, "TERM")
+	closeConnections([]*persistentConnection{connection})
+	termination := h.waitValkeyTerminatedWithoutReplacement(t, instance, before)
+	if termination.ExitCode != 0 {
+		t.Fatalf("FP-05 чистое завершение вернуло код %d: %+v", termination.ExitCode, termination)
+	}
+
+	h.startOperator(t)
+	status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		if !current.Status.Initialized || current.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
+			len(current.Status.Nodes) != 1 {
+			return false
+		}
+		after := current.Status.Nodes[0]
+		return after.PodUID != before.PodUID && after.ContainerID != before.ContainerID && after.RunID != before.RunID &&
+			after.Termination == nil &&
+			after.Readiness
+	}, "FP-05 замены чисто завершённого процесса")
+	after := status.Status.Nodes[0]
+	if after.PodUID == before.PodUID || after.ContainerID == before.ContainerID || after.RunID == before.RunID {
+		t.Fatalf("FP-05 не заменила завершённый процесс: before=%+v after=%+v", before, after)
+	}
+	if current := h.servicePasswords(t, instance); current != servicePasswords {
+		t.Fatal("FP-05 изменила служебные пароли")
+	}
+	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	defer closeConnections([]*persistentConnection{connection})
+	writeRESP(t, connection, "GET", "clean-exit-key")
+	if value := readRESP(t, connection); value != nil {
+		t.Fatalf("FP-05 восстановила данные завершённого single: %#v", value)
+	}
+	h.deleteInstance(t, instance)
+}
+
 func Test_OP01_RecoverClusterOperator_AfterSIGKILL_ResumesWithNewLeaseHolderWithoutDataLoss(t *testing.T) {
 	h := newHarness(t)
 	h.startClusterOperator(t)
@@ -3279,7 +3333,7 @@ type processActionPoint struct {
 }
 
 type rolloutActionPoint struct {
-	reached   chan struct{}
+	reached   chan operatorcontroller.IntegrationRolloutActionEvent
 	release   chan struct{}
 	triggered atomic.Bool
 	uninstall func()
@@ -3334,12 +3388,12 @@ func (p *processActionPoint) close() {
 func newRolloutActionPoint(
 	t *testing.T,
 	stage valkeyv1alpha1.RolloutStage,
-	desiredReplicas int32,
+	desiredProcesses int32,
 ) *rolloutActionPoint {
 	t.Helper()
 	return newRolloutEventPoint(t, func(event operatorcontroller.IntegrationRolloutActionEvent) bool {
-		return event.Name == "before-statefulset-update" && event.Stage == stage &&
-			event.DesiredReplicas == desiredReplicas
+		return event.Name == "before-workload-reconcile" && event.Stage == stage &&
+			event.DesiredProcesses == desiredProcesses
 	})
 }
 
@@ -3347,11 +3401,11 @@ func newNamedRolloutActionPoint(
 	t *testing.T,
 	name string,
 	stage valkeyv1alpha1.RolloutStage,
-	desiredReplicas int32,
+	desiredProcesses int32,
 ) *rolloutActionPoint {
 	t.Helper()
 	return newRolloutEventPoint(t, func(event operatorcontroller.IntegrationRolloutActionEvent) bool {
-		return event.Name == name && event.Stage == stage && event.DesiredReplicas == desiredReplicas
+		return event.Name == name && event.Stage == stage && event.DesiredProcesses == desiredProcesses
 	})
 }
 
@@ -3371,7 +3425,10 @@ func newRolloutEventPoint(
 	matches func(operatorcontroller.IntegrationRolloutActionEvent) bool,
 ) *rolloutActionPoint {
 	t.Helper()
-	point := &rolloutActionPoint{reached: make(chan struct{}), release: make(chan struct{})}
+	point := &rolloutActionPoint{
+		reached: make(chan operatorcontroller.IntegrationRolloutActionEvent, 1),
+		release: make(chan struct{}),
+	}
 	point.uninstall = operatorcontroller.InstallIntegrationRolloutActionControl(func(
 		ctx context.Context,
 		event operatorcontroller.IntegrationRolloutActionEvent,
@@ -3379,7 +3436,7 @@ func newRolloutEventPoint(
 		if !matches(event) || !point.triggered.CompareAndSwap(false, true) {
 			return nil
 		}
-		close(point.reached)
+		point.reached <- event
 		select {
 		case <-point.release:
 			return nil
@@ -3391,12 +3448,17 @@ func newRolloutEventPoint(
 	return point
 }
 
-func (p *rolloutActionPoint) waitFor(t *testing.T, timeout time.Duration) {
+func (p *rolloutActionPoint) waitFor(
+	t *testing.T,
+	timeout time.Duration,
+) operatorcontroller.IntegrationRolloutActionEvent {
 	t.Helper()
 	select {
-	case <-p.reached:
+	case event := <-p.reached:
+		return event
 	case <-time.After(timeout):
-		t.Fatal("управляемая граница StatefulSet не достигнута")
+		t.Fatal("управляемая граница ресурсов процесса не достигнута")
+		return operatorcontroller.IntegrationRolloutActionEvent{}
 	}
 }
 
@@ -4470,8 +4532,9 @@ func (h *harness) waitValkeyTerminatedWithoutReplacement(
 	t *testing.T,
 	instance *testInstance,
 	process valkeyv1alpha1.NodeStatus,
-) {
+) *corev1.ContainerStateTerminated {
 	t.Helper()
+	var result *corev1.ContainerStateTerminated
 	err := wait.PollUntilContextTimeout(
 		t.Context(), time.Second, time.Minute, true,
 		func(ctx context.Context) (bool, error) {
@@ -4484,13 +4547,21 @@ func (h *harness) waitValkeyTerminatedWithoutReplacement(
 				return false, err
 			}
 			container := namedContainerStatus(pod.Status.ContainerStatuses, "valkey")
-			return string(pod.UID) == process.PodUID && container != nil &&
-				container.ContainerID == process.ContainerID && container.State.Terminated != nil, nil
+			if string(pod.UID) != process.PodUID || container == nil ||
+				container.ContainerID != process.ContainerID || container.State.Terminated == nil {
+				return false, nil
+			}
+			if container.RestartCount != 0 {
+				return false, fmt.Errorf("Pod %s перезапустил Valkey %d раз", pod.Name, container.RestartCount)
+			}
+			result = container.State.Terminated.DeepCopy()
+			return true, nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("FP-05 дождаться остановленного ordinal %d без оператора: %v", process.Ordinal, err)
 	}
+	return result
 }
 
 func (h *harness) waitForPDBDisruptions(t *testing.T, instance *testInstance, expected int32) {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	envoyv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,11 +34,6 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 	pod.Finalizers = []string{processFinalizer}
 	pod.Labels = workloadLabels(instance.Name)
 	pod.Labels[applicationRoleLabel] = string(valkeyv1alpha1.NodeRolePrimary)
-	replicas := int32(1)
-	statefulSet := &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: instance.Name, Namespace: instance.Namespace},
-		Spec:       appsv1.StatefulSetSpec{Replicas: &replicas},
-	}
 	gateway := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: gatewayName, Namespace: "valkey-system"},
 		Spec: gatewayv1.GatewaySpec{
@@ -59,7 +53,7 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 	k8s := fake.NewClientBuilder().
 		WithScheme(NewScheme()).
 		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
-		WithObjects(instance, pod, node, secret, statefulSet, gateway, route, policy).
+		WithObjects(instance, pod, node, secret, gateway, route, policy).
 		Build()
 	disableCalls := 0
 	newReconciler := func() *ValkeyInstanceReconciler {
@@ -124,9 +118,8 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 	}
 
 	reconcile()
-	if err := k8s.Get(ctx, client.ObjectKeyFromObject(statefulSet), statefulSet); err != nil ||
-		statefulSet.Spec.Replicas == nil || *statefulSet.Spec.Replicas != 0 {
-		t.Fatalf("StatefulSet не остановлен: replicas=%v error=%v", statefulSet.Spec.Replicas, err)
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil || pod.DeletionTimestamp.IsZero() {
+		t.Fatalf("удаление Pod не запрошено: deletionTimestamp=%v error=%v", pod.DeletionTimestamp, err)
 	}
 	reconcile()
 	if instance.Status.Deletion.Stage != valkeyv1alpha1.DeletionStageVerifying {
@@ -254,12 +247,12 @@ func Test_ReconcileDeletion_BeforeWorkloadExists_RemovesInstanceWithoutCreatingR
 		unsupported bool
 	}{
 		{
-			name:  "при подготовке инстанса удаляет CR без создания StatefulSet",
+			name:  "при подготовке инстанса удаляет CR без создания Pod",
 			phase: valkeyv1alpha1.InstancePhaseProvisioning,
 		},
-		{name: "при ошибке инстанса удаляет CR без создания StatefulSet", phase: valkeyv1alpha1.InstancePhaseError},
+		{name: "при ошибке инстанса удаляет CR без создания Pod", phase: valkeyv1alpha1.InstancePhaseError},
 		{
-			name:        "при неподдерживаемом изменении удаляет CR без создания StatefulSet",
+			name:        "при неподдерживаемом изменении удаляет CR без создания Pod",
 			phase:       valkeyv1alpha1.InstancePhaseRunning,
 			unsupported: true,
 		},
@@ -298,10 +291,10 @@ func Test_ReconcileDeletion_BeforeWorkloadExists_RemovesInstanceWithoutCreatingR
 			) {
 				t.Fatalf("незавершённый CR остался: %v", err)
 			}
-			statefulSets := &appsv1.StatefulSetList{}
-			if err := k8s.List(ctx, statefulSets, client.InNamespace(instance.Namespace)); err != nil ||
-				len(statefulSets.Items) != 0 {
-				t.Fatalf("удаление создало StatefulSet: items=%d error=%v", len(statefulSets.Items), err)
+			pods := &corev1.PodList{}
+			if err := k8s.List(ctx, pods, client.InNamespace(instance.Namespace)); err != nil ||
+				len(pods.Items) != 0 {
+				t.Fatalf("удаление создало Pod: items=%d error=%v", len(pods.Items), err)
 			}
 		})
 	}

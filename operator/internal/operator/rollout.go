@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -62,6 +61,10 @@ func (r *ValkeyInstanceReconciler) reconcileRollout(
 			}
 			return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 		}
+		result, err := r.reconcilePodMetadata(ctx, instance)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
 		return r.finishRollout(ctx, instance)
 	default:
 		return ctrl.Result{}, fmt.Errorf("неизвестная стадия rollout %q", rollout.Stage)
@@ -72,22 +75,13 @@ func (r *ValkeyInstanceReconciler) prepareRollout(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	statefulSet := &appsv1.StatefulSet{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Status.AcceptedConfiguration.Slug}
-	if err := r.Get(ctx, key, statefulSet); err != nil {
-		return ctrl.Result{}, fmt.Errorf("прочитать StatefulSet перед rollout: %w", err)
-	}
-	image := valkeyContainerImage(statefulSet.Spec.Template.Spec.Containers)
-	if image == "" {
-		return ctrl.Result{}, fmt.Errorf("образ Valkey в StatefulSet отсутствует")
-	}
 	stage := valkeyv1alpha1.RolloutStageUpdatingTemplate
 	if rolloutRequiresFullStop(instance) {
 		stage = valkeyv1alpha1.RolloutStageStopping
 	}
 	changed, err := r.updateStatus(ctx, instance, func(status *valkeyv1alpha1.ValkeyInstanceStatus) {
 		if status.Rollout != nil {
-			status.Rollout.Image = image
+			status.Rollout.Image = status.ValkeyImage
 			status.Rollout.Stage = stage
 			status.Phase = valkeyv1alpha1.InstancePhaseUpdating
 			status.Reason = "ROLLOUT_" + string(stage)
@@ -224,13 +218,14 @@ func (r *ValkeyInstanceReconciler) reconcileRolloutTemplate(
 	ctx context.Context,
 	instance *valkeyv1alpha1.ValkeyInstance,
 ) (ctrl.Result, error) {
-	statefulSet := &appsv1.StatefulSet{}
-	key := client.ObjectKey{Namespace: instance.Namespace, Name: instance.Status.AcceptedConfiguration.Slug}
-	if err := r.Get(ctx, key, statefulSet); err != nil {
+	if err := runRolloutActionControl(
+		ctx,
+		"workload-plan-saved",
+		instance,
+		rolloutWorkloadProcessCount(instance),
+		rolloutConfigMapName(instance),
+	); err != nil {
 		return ctrl.Result{}, err
-	}
-	if !statefulSetTemplateMatchesRollout(statefulSet, instance) {
-		return ctrl.Result{RequeueAfter: config.HealthCheckInterval}, nil
 	}
 	next := valkeyv1alpha1.RolloutStageReplacingReplicas
 	if rolloutRequiresFullStop(instance) {
@@ -486,13 +481,6 @@ func rolloutCompositionReady(
 		readyReplicaCount(&instance.Status) == 2, nil
 }
 
-func statefulSetTemplateMatchesRollout(
-	statefulSet *appsv1.StatefulSet,
-	instance *valkeyv1alpha1.ValkeyInstance,
-) bool {
-	return podTemplateMatchesRollout(&statefulSet.Spec.Template.Spec, instance)
-}
-
 func podTemplateMatchesRollout(
 	podSpec *corev1.PodSpec,
 	instance *valkeyv1alpha1.ValkeyInstance,
@@ -524,15 +512,6 @@ func rolloutConfigMapName(instance *valkeyv1alpha1.ValkeyInstance) string {
 	accepted.RAMGB = instance.Status.Rollout.RAMGB
 	data := configMapData(accepted)
 	return accepted.Slug + "-config-" + configDigest(data)
-}
-
-func valkeyContainerImage(containers []corev1.Container) string {
-	for _, container := range containers {
-		if container.Name == "valkey" {
-			return container.Image
-		}
-	}
-	return ""
 }
 
 func (r *ValkeyInstanceReconciler) advanceRollout(

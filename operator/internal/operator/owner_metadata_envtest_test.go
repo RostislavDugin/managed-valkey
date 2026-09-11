@@ -7,7 +7,6 @@ import (
 	"maps"
 	"testing"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -19,7 +18,7 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
-func Test_Envtest_ReconcileOwnerMetadata_WithExistingWorkload_UpdatesWithoutReplacingProcesses(t *testing.T) {
+func Test_Envtest_ReconcileOwnerMetadata_WithExistingPod_UpdatesWithoutReplacingProcess(t *testing.T) {
 	restConfig := startOwnerMetadataEnvironment(t)
 	k8s, err := client.New(restConfig, client.Options{Scheme: NewScheme()})
 	if err != nil {
@@ -31,59 +30,42 @@ func Test_Envtest_ReconcileOwnerMetadata_WithExistingWorkload_UpdatesWithoutRepl
 	legacy.Labels = nil
 	legacy.Annotations = nil
 	legacy.Status.AcceptedConfiguration.InstanceID = ""
-	legacyStatefulSet := desiredStatefulSet(legacy, "cache-a1b2c3-config", "valkey/valkey:8.1.9", nil)
-	if err := k8s.Create(ctx, legacyStatefulSet); err != nil {
-		t.Fatalf("создать прежний StatefulSet: %v", err)
+	legacyPod := desiredPod(legacy, 0, "cache-a1b2c3-config", "valkey/valkey:8.1.9", nil)
+	if err := k8s.Create(ctx, legacyPod); err != nil {
+		t.Fatalf("создать прежний Pod: %v", err)
 	}
 	legacyService := desiredServices(legacy)[1]
 	if err := k8s.Create(ctx, legacyService); err != nil {
 		t.Fatalf("создать прежний Service: %v", err)
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: legacy.Name + "-0", Namespace: legacy.Namespace,
-			Labels: workloadLabels(legacy.Name),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "valkey", Image: "valkey/valkey:8.1.9"}}},
-	}
-	if err := k8s.Create(ctx, pod); err != nil {
-		t.Fatalf("создать работающий Pod: %v", err)
-	}
-	podUID := pod.UID
+	podUID := legacyPod.UID
 	serviceIP := legacyService.Spec.ClusterIP
 
 	instance := completeAcceptedInstance()
 	instance.Namespace = "default"
-	desiredStatefulSet := desiredStatefulSet(instance, "cache-a1b2c3-config", "valkey/valkey:8.1.9", nil)
 	reconciler := &ValkeyInstanceReconciler{Client: k8s, Scheme: NewScheme()}
-	if changed, err := reconciler.ensureStatefulSet(ctx, desiredStatefulSet); err != nil || !changed {
-		t.Fatalf("дополнить StatefulSet: changed=%t error=%v", changed, err)
+	if result, err := reconciler.reconcilePodMetadata(ctx, instance); err != nil || result.IsZero() {
+		t.Fatalf("дополнить Pod: result=%+v error=%v", result, err)
 	}
 	desiredService := desiredServices(instance)[1]
 	if changed, err := reconciler.ensureService(ctx, desiredService); err != nil || !changed {
 		t.Fatalf("дополнить Service: changed=%t error=%v", changed, err)
 	}
 
-	currentStatefulSet := &appsv1.StatefulSet{}
-	if err := k8s.Get(ctx, client.ObjectKeyFromObject(legacyStatefulSet), currentStatefulSet); err != nil {
-		t.Fatalf("перечитать StatefulSet: %v", err)
-	}
 	currentPod := &corev1.Pod{}
-	if err := k8s.Get(ctx, client.ObjectKeyFromObject(pod), currentPod); err != nil {
+	if err := k8s.Get(ctx, client.ObjectKeyFromObject(legacyPod), currentPod); err != nil {
 		t.Fatalf("перечитать Pod: %v", err)
 	}
 	currentService := &corev1.Service{}
 	if err := k8s.Get(ctx, client.ObjectKeyFromObject(legacyService), currentService); err != nil {
 		t.Fatalf("перечитать Service: %v", err)
 	}
-	if !maps.Equal(currentStatefulSet.Spec.Selector.MatchLabels, workloadLabels(instance.Name)) ||
-		currentPod.UID != podUID || currentService.Spec.ClusterIP != serviceIP ||
+	if currentPod.UID != podUID || currentService.Spec.ClusterIP != serviceIP ||
 		!maps.Equal(currentService.Spec.Selector, legacyService.Spec.Selector) {
-		t.Fatalf("описательные метаданные изменили процессы или маршрут: selector=%v podUID=%s service=%+v",
-			currentStatefulSet.Spec.Selector.MatchLabels, currentPod.UID, currentService.Spec)
+		t.Fatalf("описательные метаданные изменили процесс или маршрут: podUID=%s service=%+v",
+			currentPod.UID, currentService.Spec)
 	}
-	assertOwnerMetadata(t, currentStatefulSet, instance)
-	assertOwnerMetadata(t, &currentStatefulSet.Spec.Template.ObjectMeta, instance)
+	assertOwnerMetadata(t, currentPod, instance)
 	assertOwnerMetadata(t, currentService, instance)
 }
 
@@ -103,6 +85,12 @@ func Test_Envtest_ReconcilePodMetadata_WhenOwnerEmailAppears_UpdatesPodAndLeaves
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "cache-a1b2c3-0", Namespace: "default", Labels: workloadLabels("cache-a1b2c3"),
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(
+					completeAcceptedInstance(),
+					valkeyv1alpha1.GroupVersion.WithKind("ValkeyInstance"),
+				),
+			},
 		},
 		Spec: corev1.PodSpec{
 			NodeName:   node.Name,
