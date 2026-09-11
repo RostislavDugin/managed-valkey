@@ -42,10 +42,15 @@ export class UserActionGate {
 export class UserActions {
   private readonly gate: UserActionGate;
   private readonly page: Page;
+  private readonly scrollPauseMs: number;
 
-  constructor(page: Page, intervalMs: number, clock?: ActionClock) {
+  constructor(page: Page, intervalMs: number, scrollPauseMs = 0, clock?: ActionClock) {
+    if (!Number.isFinite(scrollPauseMs) || scrollPauseMs < 0) {
+      throw new Error('Пауза после прокрутки должна быть неотрицательным числом');
+    }
     this.page = page;
     this.gate = new UserActionGate(intervalMs, clock);
+    this.scrollPauseMs = scrollPauseMs;
   }
 
   goto(url: string): Promise<Response | null> {
@@ -53,26 +58,52 @@ export class UserActions {
   }
 
   click(locator: Locator): Promise<void> {
-    return this.gate.run(() => locator.click());
+    return this.runOnLocator(locator, () => locator.click());
   }
 
   fill(locator: Locator, value: string): Promise<void> {
-    return this.gate.run(() => locator.fill(value));
+    return this.runOnLocator(locator, () => locator.fill(value));
   }
 
   check(locator: Locator): Promise<void> {
-    return this.gate.run(() => locator.check());
+    return this.runOnLocator(locator, () => locator.check());
   }
 
   selectOption(locator: Locator, value: string): Promise<string[]> {
-    return this.gate.run(() => locator.selectOption(value));
+    return this.runOnLocator(locator, () => locator.selectOption(value));
+  }
+
+  private runOnLocator<T>(locator: Locator, action: () => Promise<T>): Promise<T> {
+    return this.gate.run(async () => {
+      await this.scrollTo(locator);
+      return action();
+    });
+  }
+
+  private async scrollTo(locator: Locator): Promise<void> {
+    if (this.scrollPauseMs === 0) {
+      await locator.scrollIntoViewIfNeeded();
+      return;
+    }
+    await locator.evaluate((element) => {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    });
+    await this.page.waitForTimeout(this.scrollPauseMs);
   }
 }
 
-export function actionDelayFromEnvironment() {
-  const value = process.env.MANAGED_VALKEY_E2E_ACTION_DELAY_MS ?? '0';
+function millisecondsFromEnvironment(name: string) {
+  const value = process.env[name] ?? '0';
   if (!/^\d+$/.test(value)) {
-    throw new Error('MANAGED_VALKEY_E2E_ACTION_DELAY_MS должен содержать целое число миллисекунд');
+    throw new Error(`${name} должен содержать целое число миллисекунд`);
   }
   return Number.parseInt(value, 10);
+}
+
+export function actionDelayFromEnvironment() {
+  return millisecondsFromEnvironment('MANAGED_VALKEY_E2E_ACTION_DELAY_MS');
+}
+
+export function scrollPauseFromEnvironment() {
+  return millisecondsFromEnvironment('MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS');
 }

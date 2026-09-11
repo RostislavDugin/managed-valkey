@@ -108,6 +108,7 @@ rg -q '^VALKEY_PUBLIC_PORT=41379$' "$normal_state/started/operator.env"
 rg -q '^MANAGED_K8S_NODE_RAM_GB=23$' "$normal_state/started/api.env"
 rg -q '^MANAGED_K8S_NODE_VCPU=7$' "$normal_state/started/api.env"
 rg -q '^MANAGED_VALKEY_E2E_ACTION_DELAY_MS=0$' "$normal_state/started/playwright.env"
+rg -q '^MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS=0$' "$normal_state/started/playwright.env"
 rg -q ' test$' "$normal_state/started/playwright.args"
 rg -q '^MANAGED_VALKEY_E2E_ADMIN_KUBECONFIG=' "$normal_state/started/playwright.env"
 rg -q '^MANAGED_VALKEY_E2E_COMPOSE_PROJECT=managed-valkey-e2e-shell-test$' \

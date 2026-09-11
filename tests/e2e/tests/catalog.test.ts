@@ -55,3 +55,10 @@ test('проверка группы отклоняет пустой набор',
 test('проверка каталога отклоняет неизвестную группу', () => {
   assert.throws(() => validateCatalog(completeCatalog(), 'unknown'), /Неизвестная группа e2e/);
 });
+
+test('проверка каталога отклоняет запуск без полного жизненного цикла single первым сценарием', () => {
+  const entries = completeCatalog();
+  [entries[0], entries[1]] = [entries[1], entries[0]];
+
+  assert.throws(() => validateCatalog(entries), /Первым сценарием e2e должен быть/);
+});

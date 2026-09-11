@@ -11,14 +11,17 @@ case "$mode" in
 test)
     command=test
     action_delay_ms=0
+    scroll_pause_ms=0
     ;;
 headed)
     command=test:headed
-    action_delay_ms=3000
+    action_delay_ms=1000
+    scroll_pause_ms=500
     ;;
 prod)
     command=test:prod
-    action_delay_ms=3000
+    action_delay_ms=0
+    scroll_pause_ms=0
     ;;
 *)
     echo "usage: $0 <test|headed|prod>" >&2
@@ -64,6 +67,7 @@ fi
 set +e
 MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD="$account_password" \
     MANAGED_VALKEY_E2E_ACTION_DELAY_MS="$action_delay_ms" \
+    MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS="$scroll_pause_ms" \
     MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
     MV_RUN_ID="$run_id" \
     pnpm --dir "$repo_root/tests/e2e" "$command"

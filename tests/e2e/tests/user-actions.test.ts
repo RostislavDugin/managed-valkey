@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { UserActionGate, type ActionClock } from '../src/user-actions.ts';
+import type { Locator, Page } from '@playwright/test';
+import { UserActionGate, UserActions, type ActionClock } from '../src/user-actions.ts';
 
-test('headed-планировщик начинает второе UI-действие не раньше чем через три секунды', async () => {
+test('headed-планировщик начинает второе UI-действие не раньше чем через одну секунду', async () => {
   let now = 0;
   const sleeps: number[] = [];
   const starts: number[] = [];
@@ -13,7 +14,7 @@ test('headed-планировщик начинает второе UI-дейст�
       now += milliseconds;
     },
   };
-  const gate = new UserActionGate(3_000, clock);
+  const gate = new UserActionGate(1_000, clock);
 
   await gate.run(async () => {
     starts.push(now);
@@ -23,8 +24,8 @@ test('headed-планировщик начинает второе UI-дейст�
     starts.push(now);
   });
 
-  assert.deepEqual(starts, [0, 3_000]);
-  assert.deepEqual(sleeps, [2_550]);
+  assert.deepEqual(starts, [0, 1_000]);
+  assert.deepEqual(sleeps, [550]);
 });
 
 test('headless-планировщик не ждёт между UI-действиями', async () => {
@@ -63,4 +64,73 @@ test('backend-проверка после UI-действия начинаетс
     { name: 'action', at: 100 },
     { name: 'check', at: 100 },
   ]);
+});
+
+test('пользовательские действия прокручивают страницу до элемента перед взаимодействием', async () => {
+  const events: string[] = [];
+  const locator = {
+    scrollIntoViewIfNeeded: async () => {
+      events.push('scroll');
+    },
+    click: async () => {
+      events.push('click');
+    },
+    fill: async () => {
+      events.push('fill');
+    },
+    check: async () => {
+      events.push('check');
+    },
+    selectOption: async () => {
+      events.push('selectOption');
+      return ['selected'];
+    },
+  } as unknown as Locator;
+  const actions = new UserActions({} as Page, 0);
+
+  await actions.click(locator);
+  await actions.fill(locator, 'value');
+  await actions.check(locator);
+  await actions.selectOption(locator, 'selected');
+
+  assert.deepEqual(events, [
+    'scroll',
+    'click',
+    'scroll',
+    'fill',
+    'scroll',
+    'check',
+    'scroll',
+    'selectOption',
+  ]);
+});
+
+test('headed-действие плавно прокручивает элемент в центр и ждёт 500 миллисекунд перед нажатием', async () => {
+  const events: string[] = [];
+  const page = {
+    waitForTimeout: async (milliseconds: number) => {
+      events.push(`wait:${milliseconds}`);
+    },
+  } as unknown as Page;
+  const locator = {
+    evaluate: async (
+      callback: (element: { scrollIntoView: (options: ScrollIntoViewOptions) => void }) => void
+    ) => {
+      callback({
+        scrollIntoView: (options) => {
+          events.push(
+            `scroll:${options.behavior}:${options.block}:${options.inline}`
+          );
+        },
+      });
+    },
+    click: async () => {
+      events.push('click');
+    },
+  } as unknown as Locator;
+  const actions = new UserActions(page, 1_000, 500);
+
+  await actions.click(locator);
+
+  assert.deepEqual(events, ['scroll:smooth:center:nearest', 'wait:500', 'click']);
 });

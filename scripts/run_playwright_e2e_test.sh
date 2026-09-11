@@ -28,7 +28,7 @@ printf '%s\n' \
 chmod +x "$mock_bin/pnpm"
 
 run_mode() {
-    local mode=$1 group=$2 command=$3 delay=$4
+    local mode=$1 group=$2 command=$3 delay=$4 scroll_pause=$5
     local run_id="runner-${mode}-${group}-${RANDOM}" capture="$temporary/$mode-$group"
     local secret_values_file="$temporary/$mode-$group-secret-values"
     local dynamic_secret="dynamic-${mode}-${group}-${RANDOM}"
@@ -47,6 +47,7 @@ run_mode() {
 
     rg -q " $command$" "$capture.args"
     rg -q "^MANAGED_VALKEY_E2E_ACTION_DELAY_MS=$delay$" "$capture.env"
+    rg -q "^MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS=$scroll_pause$" "$capture.env"
     rg -q "^MANAGED_VALKEY_E2E_SECRET_VALUES_FILE=$secret_values_file$" "$capture.env"
     rg --fixed-strings --line-regexp --quiet testpassword "$secret_values_file"
     [[ "$(stat -c '%a' "$secret_values_file")" == 600 ]]
@@ -55,12 +56,12 @@ run_mode() {
     rg --fixed-strings --quiet '<redacted>' "$artifact_dir/report/index.html"
 }
 
-run_mode test all test 0
-run_mode test lifecycle test:lifecycle 0
-run_mode test quotas test:quotas 0
-run_mode test failures test:failures 0
-run_mode headed all test:headed 3000
-run_mode prod all test:prod 3000
+run_mode test all test 0 0
+run_mode test lifecycle test:lifecycle 0 0
+run_mode test quotas test:quotas 0 0
+run_mode test failures test:failures 0 0
+run_mode headed all test:headed 1000 500
+run_mode prod all test:prod 0 0
 
 if PATH="$mock_bin:$PATH" "$repo_root/scripts/run_playwright_e2e.sh" unknown \
     >"$temporary/invalid.out" 2>"$temporary/invalid.err"; then

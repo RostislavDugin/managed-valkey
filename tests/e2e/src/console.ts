@@ -433,13 +433,18 @@ export async function cleanupAccounts(
   browser: Browser,
   baseURL: string,
   intervalMs: number,
+  scrollPauseMs: number,
   registry: AccountRegistry
 ) {
   const failures: string[] = [];
   for (const account of registry.all().filter((candidate) => candidate.registered)) {
     const context = await browser.newContext({ baseURL });
     const page = await context.newPage();
-    const console = new ConsoleDriver(page, new UserActions(page, intervalMs), registry);
+    const console = new ConsoleDriver(
+      page,
+      new UserActions(page, intervalMs, scrollPauseMs),
+      registry
+    );
     const observed = new Map(account.instances);
     try {
       await console.login(account);

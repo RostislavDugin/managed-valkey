@@ -2,12 +2,14 @@ import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const firstScenarioTitle = 'пользователь проходит полный жизненный цикл single-инстанса';
+
 export const requiredScenarios = [
+  { title: firstScenarioTitle, tag: 'prod' },
   {
     title: 'новый пользователь регистрируется через форму и попадает в авторизованную консоль',
     tag: 'prod',
   },
-  { title: 'пользователь проходит полный жизненный цикл single-инстанса', tag: 'prod' },
   { title: 'пользователь проходит полный жизненный цикл HA-инстанса', tag: 'prod' },
   {
     title: 'личная квота запрещает недопустимое создание и изменение размера',
@@ -86,6 +88,9 @@ export function validateCatalog(entries: readonly CatalogEntry[], value = 'all')
     if (matchedGroupTags.length !== 1) {
       throw new Error(`Сценарий «${required.title}» должен входить ровно в одну группу e2e`);
     }
+  }
+  if (entries[0].title !== firstScenarioTitle) {
+    throw new Error(`Первым сценарием e2e должен быть «${firstScenarioTitle}»`);
   }
   validateScenarioGroup(entries, group);
 }

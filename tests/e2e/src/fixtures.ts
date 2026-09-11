@@ -2,7 +2,11 @@ import { expect, test as base } from '@playwright/test';
 import { AccountRegistry } from './accounts.ts';
 import { cleanupAccounts, ConsoleDriver } from './console.ts';
 import { FaultRegistry, KubernetesController } from './kubernetes.ts';
-import { actionDelayFromEnvironment, UserActions } from './user-actions.ts';
+import {
+  actionDelayFromEnvironment,
+  scrollPauseFromEnvironment,
+  UserActions,
+} from './user-actions.ts';
 
 interface E2EFixtures {
   accounts: AccountRegistry;
@@ -21,10 +25,18 @@ export const test = base.extend<E2EFixtures>({
     }
     const registry = new AccountRegistry();
     await use(registry);
-    await cleanupAccounts(browser, baseURL, actionDelayFromEnvironment(), registry);
+    await cleanupAccounts(
+      browser,
+      baseURL,
+      actionDelayFromEnvironment(),
+      scrollPauseFromEnvironment(),
+      registry
+    );
   },
   actions: async ({ page }, use) => {
-    await use(new UserActions(page, actionDelayFromEnvironment()));
+    await use(
+      new UserActions(page, actionDelayFromEnvironment(), scrollPauseFromEnvironment())
+    );
   },
   console: async ({ page, actions, accounts }, use) => {
     await use(new ConsoleDriver(page, actions, accounts));
