@@ -1,0 +1,4 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+run *args:
+    cd {{ justfile_directory() }} && uv run python main.py {{ args }}
