@@ -35,6 +35,18 @@ if [[ ${1:-} == get && ${2:-} == nodes ]]; then
     fi
     exit 0
 fi
+if [[ $* == '-n kube-system get pods -l k8s-app=cilium --field-selector=status.phase=Running -o name' ]]; then
+    printf '%s\n' pod/cilium-a pod/cilium-b
+    exit 0
+fi
+if [[ ${1:-} == -n && ${2:-} == kube-system && ${3:-} == exec ]]; then
+    if [[ $TEST_KUBECTL_MODE == broken-node-network && ${4:-} == pod/cilium-a ]]; then
+        printf '%s\n' 'Cluster health: 1/2 reachable'
+    else
+        printf '%s\n' 'Cluster health: 2/2 reachable'
+    fi
+    exit 0
+fi
 if [[ ${1:-} == -n && ${3:-} == delete && ${4:-} == pod ]]; then
     rm -f -- "$TEST_KUBECTL_STATE/active/${5:-}"
     exit 0
@@ -177,6 +189,14 @@ if grep -Fq 'managed-valkey-restart-check' "$state_dir/kubectl.log"; then
     exit 1
 fi
 
+run_case broken-node-network "$work_dir/broken-node-network.log"
+[[ $case_status == 1 ]]
+grep -Fq 'межнодовая сеть Cilium недоступна' "$work_dir/broken-node-network.log"
+if grep -Fq 'managed-valkey-restart-check' "$state_dir/kubectl.log"; then
+    echo "проверка продолжилась при недоступной межнодовой сети" >&2
+    exit 1
+fi
+
 run_case wrong-exit "$work_dir/wrong-exit.log"
 [[ $case_status == 1 ]]
 grep -Fq 'завершился с неожиданным состоянием' "$work_dir/wrong-exit.log"
@@ -193,6 +213,15 @@ grep -Fq 'перезапустил контейнер' "$work_dir/restarted.log"
 
 if rg -n 'ContainerRestartRules|restartPolicy: Always' "$repo_root/scripts/deploy_kubernetes.sh"; then
     echo "в сценарии осталась зависимость от ContainerRestartRules" >&2
+    exit 1
+fi
+if ! rg -Fq 'valkeyinstances.valkey.h3llo-demo.com --subresource=status' \
+    "$repo_root/scripts/deploy_kubernetes.sh"; then
+    echo "проверка прав API не указывает status как дочерний ресурс" >&2
+    exit 1
+fi
+if ! rg -q '^podDnsPolicy: Default$' "$repo_root/deploy/prod/cert-manager-values.yaml"; then
+    echo "контроллер cert-manager не использует DNS рабочей ноды" >&2
     exit 1
 fi
 

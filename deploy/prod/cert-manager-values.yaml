@@ -8,6 +8,8 @@ resources:
   limits:
     memory: 256Mi
 
+podDnsPolicy: Default
+
 webhook:
   replicaCount: 3
   hostNetwork: true

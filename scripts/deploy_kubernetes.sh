@@ -65,6 +65,14 @@ if [[ -n $legacy_statefulsets ]]; then
     exit 1
 fi
 
+mapfile -t worker_nodes < <(
+    kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+)
+if ((${#worker_nodes[@]} == 0)); then
+    echo "в кластере нет рабочих нод" >&2
+    exit 1
+fi
+
 node_internal_ips=$(kubectl get nodes \
     -o jsonpath='{range .items[*].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}' |
     sort -u)
@@ -75,8 +83,28 @@ if [[ -z $node_internal_ips || $webhook_dns_ips != "$node_internal_ips" ]]; then
     exit 1
 fi
 
+mapfile -t cilium_pods < <(
+    kubectl -n kube-system get pods \
+        -l k8s-app=cilium \
+        --field-selector=status.phase=Running \
+        -o name
+)
+if ((${#cilium_pods[@]} != ${#worker_nodes[@]})); then
+    echo "число работающих агентов Cilium не совпадает с числом рабочих нод" >&2
+    exit 1
+fi
+expected_reachability="${#worker_nodes[@]}/${#worker_nodes[@]} reachable"
+for cilium_pod in "${cilium_pods[@]}"; do
+    cilium_health=$(kubectl -n kube-system exec "$cilium_pod" -- \
+        cilium-health status --succinct 2>/dev/null || true)
+    if [[ $cilium_health != *"Cluster health:"*"$expected_reachability"* ]]; then
+        echo "межнодовая сеть Cilium недоступна из $cilium_pod" >&2
+        exit 1
+    fi
+done
+
 restart_check_index=0
-while IFS= read -r node; do
+for node in "${worker_nodes[@]}"; do
     for expected_exit_code in 0 42; do
         restart_check_pod="managed-valkey-restart-check-${release_sha:0:8}-$restart_check_index-$expected_exit_code"
         restart_check_pods+=("$restart_check_pod")
@@ -160,11 +188,7 @@ YAML
         kubectl -n default delete pod "$restart_check_pod" --wait=true --timeout=60s >/dev/null
     done
     restart_check_index=$((restart_check_index + 1))
-done < <(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-if ((restart_check_index == 0)); then
-    echo "в кластере нет рабочих нод" >&2
-    exit 1
-fi
+done
 
 kubectl apply -f "$repo_root/deploy/prod/namespace.yaml"
 kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/valkey-system --timeout=60s
@@ -266,7 +290,8 @@ chmod 0600 "$api_kubeconfig"
 
 if [[ $(kubectl --kubeconfig "$api_kubeconfig" auth can-i create namespaces) != yes ]] ||
     [[ $(kubectl --kubeconfig "$api_kubeconfig" auth can-i update valkeyinstances.valkey.h3llo-demo.com) != yes ]] ||
-    [[ $(kubectl --kubeconfig "$api_kubeconfig" auth can-i update valkeyinstances.valkey.h3llo-demo.com/status) != no ]]; then
+    [[ $(kubectl --kubeconfig "$api_kubeconfig" auth can-i update \
+        valkeyinstances.valkey.h3llo-demo.com --subresource=status) != no ]]; then
     echo "права учётной записи API не соответствуют ожидаемым" >&2
     exit 1
 fi
