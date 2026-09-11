@@ -76,8 +76,29 @@ function installValkeyApi(instances: TestInstanceInput[]) {
     if (path === '/v1/me') {
       body = {
         user: { id: TEST_USER_ID, email: 'user@example.com' },
-        quota: { max_vcpu: 4, max_ram_gb: 16 },
+        quota: { max_vcpu: 4, max_ram_gb: 12 },
         usage: { used_vcpu: 0, used_ram_gb: 0 },
+      };
+    } else if (path === '/v1/managed/valkey/capacity') {
+      const usage = dtos.reduce(
+        (total, instance) => {
+          const nodes = instance.mode === 'ha' ? 3 : 1;
+          total.vcpu += nodes * Math.max(instance.vcpu, instance.applied_vcpu);
+          total.ramGb += nodes * Math.max(instance.ram_gb, instance.applied_ram_gb);
+          return total;
+        },
+        { vcpu: 0, ramGb: 0 }
+      );
+      body = {
+        user: {
+          limit: { vcpu: 4, ram_gb: 12 },
+          used: { vcpu: usage.vcpu, ram_gb: usage.ramGb },
+        },
+        cluster: {
+          limit: { vcpu: 12, ram_gb: 48 },
+          used: { vcpu: usage.vcpu, ram_gb: usage.ramGb },
+        },
+        instances: { limit: 32, used: dtos.length },
       };
     } else if (path === '/v1/managed/valkey/sizes') {
       body = {

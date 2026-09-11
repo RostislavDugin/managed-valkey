@@ -6,7 +6,6 @@ import { ApiError } from '@/shared/api';
 import { buttonVariants } from '@/shared/config';
 import { createUuidV7 } from '@/shared/lib';
 import { resizeInstance } from '../api/valkey-api';
-import type { ValkeyQuota } from '../model/quota';
 import {
   formatPriceWithPeriod,
   formatRam,
@@ -17,8 +16,9 @@ import {
   type ValkeyInstance,
   type ValkeySize,
 } from '../model/valkey';
+import { useValkeyCapacityPolling } from '../model/valkey-capacity-polling';
 import {
-  checkCandidateQuota,
+  checkCandidateCapacity,
   describeMissingQuota,
   getRequestErrorMessage,
   getResizeWarnings,
@@ -29,21 +29,21 @@ import { SizePlans } from './SizePlans';
 import styles from './ValkeyPage.module.css';
 
 interface ResizeInstanceModalProps {
+  accountId: string;
   catalog: ValkeyCatalog;
   instance: ValkeyInstance | null;
   onClose: () => void;
   onRefresh: () => void;
   onResized: (instance: ValkeyInstance) => void;
-  quota: ValkeyQuota;
 }
 
 export function ResizeInstanceModal({
+  accountId,
   catalog,
   instance,
   onClose,
   onRefresh,
   onResized,
-  quota: quotaSnapshot,
 }: ResizeInstanceModalProps) {
   const [size, setSize] = useState<ValkeySize>({ vcpu: 1, ramGb: 1 });
   const [loading, setLoading] = useState(false);
@@ -53,6 +53,11 @@ export function ResizeInstanceModal({
   const openedInstanceId = instance?.id ?? null;
   const openedVcpu = instance?.vcpu ?? 1;
   const openedRamGb = instance?.ramGb ?? 1;
+  const {
+    capacity: capacitySnapshot,
+    error: capacityError,
+    refresh: refreshCapacity,
+  } = useValkeyCapacityPolling(openedInstanceId ? `${accountId}:${openedInstanceId}` : null);
 
   useEffect(() => {
     if (!openedInstanceId) {
@@ -84,7 +89,9 @@ export function ResizeInstanceModal({
     return null;
   }
 
-  const quota = checkCandidateQuota(quotaSnapshot, { size, mode: instance.mode }, instance);
+  const capacity = capacitySnapshot
+    ? checkCandidateCapacity(capacitySnapshot, { size, mode: instance.mode }, instance)
+    : null;
   const changed = size.vcpu !== instance.vcpu || size.ramGb !== instance.ramGb;
   const warnings = getResizeWarnings(instance.mode, instance, size);
   const currentSize = { vcpu: instance.vcpu, ramGb: instance.ramGb } satisfies ValkeySize;
@@ -122,6 +129,7 @@ export function ResizeInstanceModal({
       }
 
       pendingRef.current = null;
+      void refreshCapacity();
       onResized(updated);
       notifications.show({
         message: `Новый тариф: ${formatVcpu(updated.vcpu)} и ${formatRam(updated.ramGb)}.`,
@@ -138,13 +146,15 @@ export function ResizeInstanceModal({
       if (!shouldReuseSubmission(error)) {
         pendingRef.current = null;
       }
+      if (error instanceof ApiError && error.status === 409) {
+        onRefresh();
+      }
       if (
         error instanceof ApiError &&
-        (error.status === 409 ||
-          error.code === 'QUOTA_EXCEEDED' ||
-          error.code === 'NOT_ENOUGH_RESOURCES')
+        (error.code === 'QUOTA_EXCEEDED' || error.code === 'NOT_ENOUGH_RESOURCES')
       ) {
         onRefresh();
+        await refreshCapacity();
       }
       notifications.show({
         color: 'red',
@@ -170,9 +180,14 @@ export function ResizeInstanceModal({
         </div>
 
         <SizePlans
-          isAvailable={(candidate) =>
-            checkCandidateQuota(quotaSnapshot, { size: candidate, mode: instance.mode }, instance)
-              .fits
+          getAvailabilityReason={(candidate) =>
+            capacitySnapshot
+              ? checkCandidateCapacity(
+                  capacitySnapshot,
+                  { size: candidate, mode: instance.mode },
+                  instance
+                ).reason
+              : 'available'
           }
           mode={instance.mode}
           onChange={setSize}
@@ -188,7 +203,26 @@ export function ResizeInstanceModal({
           )}
         </Text>
 
-        {!quota.fits && (
+        {!capacitySnapshot ? (
+          <Alert
+            color={capacityError ? 'red' : 'h3_bg_accent_1'}
+            icon={<Info aria-hidden="true" size={16} strokeWidth={1.5} />}
+            title={capacityError ? 'Не удалось проверить ресурсы' : 'Проверяем доступные ресурсы'}
+          >
+            <Stack align="flex-start" gap="h3_xs">
+              {capacityError ? (
+                <Text size="h3_sm">{getRequestErrorMessage(capacityError)}</Text>
+              ) : null}
+              {capacityError ? (
+                <Button onClick={() => void refreshCapacity()} variant={buttonVariants.secondary}>
+                  Повторить
+                </Button>
+              ) : null}
+            </Stack>
+          </Alert>
+        ) : null}
+
+        {capacity?.reason === 'user_quota' ? (
           <Alert
             color="h3_bg_accent_1"
             icon={<Info aria-hidden="true" size={16} strokeWidth={1.5} />}
@@ -196,14 +230,24 @@ export function ResizeInstanceModal({
           >
             <Stack align="flex-start" gap="h3_xs">
               <Text size="h3_sm">
-                {describeMissingQuota(quota) ?? 'Выбранный размер не помещается в квоту.'}
+                {describeMissingQuota(capacity.user) ?? 'Выбранный размер не помещается в квоту.'}
               </Text>
               <Anchor href={SUPPORT_URL} rel="noreferrer" size="h3_sm" target="_blank">
                 Напишите в поддержку для увеличения квоты
               </Anchor>
             </Stack>
           </Alert>
-        )}
+        ) : null}
+
+        {capacity?.reason === 'cluster_resources' ? (
+          <Alert
+            color="h3_bg_accent_1"
+            icon={<Info aria-hidden="true" size={16} strokeWidth={1.5} />}
+            title="Недостаточно ресурсов Managed Kubernetes"
+          >
+            <Text size="h3_sm">В кластере сейчас нет ресурсов для выбранной конфигурации.</Text>
+          </Alert>
+        ) : null}
 
         {changed && (
           <Alert
@@ -227,7 +271,7 @@ export function ResizeInstanceModal({
           </Button>
 
           <Button
-            disabled={!quota.fits || !changed || !canMutate}
+            disabled={!capacity?.fits || !changed || !canMutate}
             loading={loading}
             onClick={() => void submit()}
             variant={buttonVariants.accent}

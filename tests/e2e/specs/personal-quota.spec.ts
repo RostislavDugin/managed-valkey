@@ -1,7 +1,7 @@
 import { expect, test } from '../src/fixtures.ts';
-import { minimumSize, scenarioIdentity } from '../src/scenario.ts';
+import { scenarioIdentity } from '../src/scenario.ts';
 
-const personalQuota = { vcpu: 4, ramGb: 16 };
+const personalQuota = { vcpu: 4, ramGb: 12 };
 
 test(
   'личная квота запрещает недопустимое создание и изменение размера',
@@ -10,7 +10,11 @@ test(
     const account = await console.register('personal-quota');
     await console.openCreatePage();
     const catalog = await console.readSizeCatalog();
-    const minimum = minimumSize(catalog);
+    const minimum = catalog.find((size) => size.vcpu === 1 && size.ramGb === 2);
+    const forbiddenResize = catalog.find((size) => size.vcpu === 2 && size.ramGb === 8);
+    if (!minimum || !forbiddenResize) {
+      throw new Error('Каталог не содержит конфигурации 1 vCPU / 2 GB и 2 vCPU / 8 GB');
+    }
     const forbiddenHA = catalog.find(
       (size) => size.vcpu * 3 > personalQuota.vcpu || size.ramGb * 3 > personalQuota.ramGb
     );
@@ -32,35 +36,24 @@ test(
     expect(forbiddenCreateRequests).toBe(0);
     page.off('request', countCreateRequest);
 
-    const first = await console.submitCreation(account, {
+    const single = await console.submitCreation(account, {
       mode: 'single',
       size: minimum,
-      ...scenarioIdentity('quota-a'),
+      ...scenarioIdentity('quota-single'),
     });
     await console.closePasswordWindow();
     await console.waitForRunningSize(minimum);
 
     await console.openCreatePage();
-    const second = await console.submitCreation(account, {
-      mode: 'single',
+    const ha = await console.submitCreation(account, {
+      mode: 'ha',
       size: minimum,
-      ...scenarioIdentity('quota-b'),
+      ...scenarioIdentity('quota-ha'),
     });
     await console.closePasswordWindow();
     await console.waitForRunningSize(minimum);
 
-    const forbiddenResize = catalog.find(
-      (size) =>
-        size.vcpu <= personalQuota.vcpu &&
-        size.ramGb <= personalQuota.ramGb &&
-        (size.vcpu + minimum.vcpu > personalQuota.vcpu ||
-          size.ramGb + minimum.ramGb > personalQuota.ramGb)
-    );
-    if (!forbiddenResize) {
-      throw new Error('Каталог не содержит конфигурацию для проверки квоты изменения размера');
-    }
-
-    await console.openInstance(first.name);
+    await console.openInstance(single.name);
     const resizeDialog = await console.openResize();
     let forbiddenResizeRequests = 0;
     const countResizeRequest = (request: { method: () => string; url: () => string }) => {
@@ -78,12 +71,12 @@ test(
     page.off('request', countResizeRequest);
     await console.closeResize();
 
-    await console.openInstance(second.name);
-    await console.deleteInstance(account, second);
+    await console.openInstance(ha.name);
+    await console.deleteInstance(account, ha);
     await console.waitForQuotaUsage(minimum);
-    await console.openInstance(first.name);
+    await console.openInstance(single.name);
     await console.resize(forbiddenResize);
-    await console.deleteInstance(account, first);
+    await console.deleteInstance(account, single);
     await console.waitForEmptyManagement();
   }
 );

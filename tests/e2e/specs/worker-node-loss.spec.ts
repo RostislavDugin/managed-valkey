@@ -6,7 +6,7 @@ import {
 import { expect, test } from '../src/fixtures.ts';
 import { assertValkeyReadOnly, minimumSize, scenarioIdentity } from '../src/scenario.ts';
 
-const personalQuota = { vcpu: 4, ramGb: 16 };
+const personalQuota = { vcpu: 4, ramGb: 12 };
 
 test(
   'HA-инстанс восстанавливается после потери worker-ноды через прежний адрес',

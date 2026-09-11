@@ -9,7 +9,7 @@ import {
 } from '../src/scenario.ts';
 import { connectValkey, disconnectValkey } from '../src/valkey.ts';
 
-const personalQuota = { vcpu: 4, ramGb: 16 };
+const personalQuota = { vcpu: 4, ramGb: 12 };
 
 test(
   'пользователь проходит полный жизненный цикл HA-инстанса',

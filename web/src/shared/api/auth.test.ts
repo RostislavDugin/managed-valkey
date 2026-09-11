@@ -87,7 +87,7 @@ describe('восстановление сессии', () => {
     const fetchMock = vi.spyOn(window, 'fetch').mockResolvedValue(
       jsonResponse({
         user: { id: USER_ID, email: 'user@example.com' },
-        quota: { max_vcpu: 4, max_ram_gb: 16 },
+        quota: { max_vcpu: 4, max_ram_gb: 12 },
         usage: { used_vcpu: 0, used_ram_gb: 0 },
       })
     );

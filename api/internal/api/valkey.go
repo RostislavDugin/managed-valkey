@@ -20,6 +20,7 @@ const instanceIDContextKey = "valkey_instance_id"
 
 type ValkeyService interface {
 	Sizes() valkeydomain.Catalog
+	Capacity(context.Context, valkeydomain.Actor) (valkeydomain.Capacity, error)
 	Owns(context.Context, valkeydomain.Actor, uuid.UUID) error
 	List(context.Context, valkeydomain.Actor) ([]valkeydomain.Instance, error)
 	Get(context.Context, valkeydomain.Actor, uuid.UUID) (valkeydomain.Instance, error)
@@ -107,6 +108,7 @@ func RegisterValkey(
 ) {
 	managed := engine.Group("/v1/managed/valkey", BearerAuth(authService))
 	managed.GET("/sizes", valkeySizesHandler(service))
+	managed.GET("/capacity", valkeyCapacityHandler(service))
 	managed.GET("/instances", valkeyListHandler(service))
 	managed.POST("/instances", valkeyCreateHandler(service))
 
@@ -155,6 +157,26 @@ func valkeyOwner(service ValkeyService) gin.HandlerFunc {
 func valkeySizesHandler(service ValkeyService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, service.Sizes())
+	}
+}
+
+func valkeyCapacityHandler(service ValkeyService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		actor, err := authenticatedActor(c)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
+
+		capacity, err := service.Capacity(c.Request.Context(), actor)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
+
+		c.JSON(http.StatusOK, capacity)
 	}
 }
 

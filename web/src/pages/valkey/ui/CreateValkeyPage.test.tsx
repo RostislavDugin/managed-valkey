@@ -1,6 +1,6 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderValkeySection, seedSession } from '../../../../test/render';
 import {
   installStatefulValkeyApi,
@@ -28,7 +28,13 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function installApi(catalogResponses: Response[]) {
+const availableCapacity = {
+  user: { limit: { vcpu: 4, ram_gb: 12 }, used: { vcpu: 0, ram_gb: 0 } },
+  cluster: { limit: { vcpu: 12, ram_gb: 48 }, used: { vcpu: 0, ram_gb: 0 } },
+  instances: { limit: 32, used: 0 },
+};
+
+function installApi(catalogResponses: Response[], capacityResponses = [availableCapacity]) {
   const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const path = String(input);
     if (path === '/v1/managed/valkey/instances') {
@@ -37,9 +43,12 @@ function installApi(catalogResponses: Response[]) {
     if (path === '/v1/me') {
       return jsonResponse({
         user: { id: '01930000-0000-7000-8000-000000000001', email: 'user@example.com' },
-        quota: { max_vcpu: 4, max_ram_gb: 16 },
+        quota: { max_vcpu: 4, max_ram_gb: 12 },
         usage: { used_vcpu: 0, used_ram_gb: 0 },
       });
+    }
+    if (path === '/v1/managed/valkey/capacity') {
+      return jsonResponse(capacityResponses.shift() ?? availableCapacity);
     }
     if (path === '/v1/managed/valkey/sizes') {
       return catalogResponses.shift() ?? jsonResponse(catalog);
@@ -48,9 +57,84 @@ function installApi(catalogResponses: Response[]) {
   });
   window.fetch = fetchMock;
   globalThis.fetch = fetchMock;
+  return fetchMock;
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('форма создания Valkey', () => {
+  it.each([
+    {
+      name: 'общий бюджет',
+      capacity: {
+        ...availableCapacity,
+        cluster: { limit: { vcpu: 12, ram_gb: 48 }, used: { vcpu: 12, ram_gb: 48 } },
+      },
+      message: 'Недостаточно ресурсов Managed Kubernetes',
+    },
+    {
+      name: 'предел баз',
+      capacity: { ...availableCapacity, instances: { limit: 32, used: 32 } },
+      message: 'Достигнут предел числа баз',
+    },
+  ])('при ограничении "$name" показывает точную причину и запрещает создание', async (testCase) => {
+    const session = seedSession();
+    installApi([jsonResponse(catalog)], [testCase.capacity]);
+
+    renderValkeySection('/valkey/management/new', session);
+
+    expect(await screen.findByText(testCase.message, {}, WAIT)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
+    expect(screen.getAllByText(/\/ мес\./).length).toBeGreaterThan(0);
+  });
+
+  it('при одновременном исчерпании личной квоты и общего бюджета показывает личную квоту', async () => {
+    const session = seedSession();
+    installApi(
+      [jsonResponse(catalog)],
+      [
+        {
+          user: { limit: { vcpu: 4, ram_gb: 12 }, used: { vcpu: 4, ram_gb: 12 } },
+          cluster: { limit: { vcpu: 12, ram_gb: 48 }, used: { vcpu: 12, ram_gb: 48 } },
+          instances: { limit: 32, used: 5 },
+        },
+      ]
+    );
+
+    renderValkeySection('/valkey/management/new', session);
+
+    expect(await screen.findByText('Недостаточно квоты', {}, WAIT)).toBeVisible();
+    expect(screen.queryByText('Недостаточно ресурсов Managed Kubernetes')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Напишите в поддержку для увеличения квоты' })
+    ).toHaveAttribute('href', 'https://t.me/rostislav_dugin');
+  });
+
+  it('после следующего опроса запрещает создание, если другой аккаунт занял общий ресурс', async () => {
+    vi.useFakeTimers();
+    const session = seedSession();
+    installApi(
+      [jsonResponse(catalog)],
+      [
+        availableCapacity,
+        {
+          ...availableCapacity,
+          cluster: { limit: { vcpu: 12, ram_gb: 48 }, used: { vcpu: 12, ram_gb: 48 } },
+        },
+      ]
+    );
+
+    renderValkeySection('/valkey/management/new', session);
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(screen.getByText('Недостаточно ресурсов Managed Kubernetes')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
+  });
+
   it('после ошибки каталога сохраняет введённые значения и запрещает создание до успешной повторной загрузки', async () => {
     const session = seedSession();
     installApi([
@@ -143,13 +227,15 @@ describe('форма создания Valkey', () => {
     await user.click(screen.getByRole('button', { name: 'Создать базу' }));
 
     expect(
-      await screen.findByText('В кластере сейчас не хватает свободных ресурсов.', {}, WAIT)
+      await screen.findByText('Недостаточно свободных ресурсов кластера', {}, WAIT)
     ).toBeVisible();
     expect(name).toHaveValue('cache-prod');
     expect(prefix).toHaveValue('shop');
     expect(screen.queryByRole('dialog', { name: 'Сохраните пароль' })).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(api.requests.filter((request) => request.path === '/v1/me').length).toBe(2)
+      expect(
+        api.requests.filter((request) => request.path === '/v1/managed/valkey/capacity').length
+      ).toBe(2)
     );
 
     await user.click(screen.getByRole('button', { name: 'Создать базу' }));

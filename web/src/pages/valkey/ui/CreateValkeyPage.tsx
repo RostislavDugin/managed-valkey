@@ -27,15 +27,13 @@ import { createUuidV7 } from '@/shared/lib';
 import {
   createInstance,
   getValkeyCatalog,
-  getValkeyQuota,
   listInstances,
   type CreateInstanceInput,
 } from '../api/valkey-api';
 import {
-  findLargestAvailableSize,
+  findLargestAvailableCapacitySize,
   type QuotaAmount,
   type QuotaCheck,
-  type ValkeyQuota,
 } from '../model/quota';
 import {
   formatRam,
@@ -54,9 +52,10 @@ import {
   type ValkeyMode,
   type ValkeySize,
 } from '../model/valkey';
+import { useValkeyCapacityPolling } from '../model/valkey-capacity-polling';
 import { generateValkeyPassword } from '../model/valkey-credentials';
 import {
-  checkCandidateQuota,
+  checkCandidateCapacity,
   getFieldErrors,
   getCreateFormDefaults,
   getRequestErrorMessage,
@@ -167,7 +166,6 @@ export function CreateValkeyPage() {
 
   const [instances, setInstances] = useState<ValkeyInstance[] | null>(null);
   const [catalog, setCatalog] = useState<ValkeyCatalog | null>(null);
-  const [quotaSnapshot, setQuotaSnapshot] = useState<ValkeyQuota | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<PricePeriod>('month');
@@ -180,6 +178,11 @@ export function CreateValkeyPage() {
     idempotencyKey: string;
     input: CreateInstanceInput;
   } | null>(null);
+  const {
+    capacity: capacitySnapshot,
+    error: capacityError,
+    refresh: refreshCapacity,
+  } = useValkeyCapacityPolling(session.userId);
 
   const form = useForm<CreateFormValues>({
     mode: 'controlled',
@@ -215,10 +218,9 @@ export function CreateValkeyPage() {
       setLoading(true);
       setLoadError(null);
 
-      const [instancesResult, catalogResult, quotaResult] = await Promise.allSettled([
+      const [instancesResult, catalogResult] = await Promise.allSettled([
         listInstances(signal),
         getValkeyCatalog(signal),
-        getValkeyQuota(signal),
       ]);
       if (signal.aborted) {
         return;
@@ -230,23 +232,7 @@ export function CreateValkeyPage() {
       if (catalogResult.status === 'fulfilled') {
         setCatalog(catalogResult.value);
       }
-      if (quotaResult.status === 'fulfilled') {
-        setQuotaSnapshot(quotaResult.value);
-      }
-      if (
-        !defaultsAppliedRef.current &&
-        instancesResult.status === 'fulfilled' &&
-        quotaResult.status === 'fulfilled'
-      ) {
-        const sizes =
-          catalogResult.status === 'fulfilled'
-            ? catalogResult.value.items
-            : [{ vcpu: 1, ramGb: 1 }];
-        setValues(getCreateFormDefaults(instancesResult.value, sizes, quotaResult.value));
-        defaultsAppliedRef.current = true;
-      }
-
-      const failed = [instancesResult, catalogResult, quotaResult].find(
+      const failed = [instancesResult, catalogResult].find(
         (result): result is PromiseRejectedResult =>
           result.status === 'rejected' &&
           !(result.reason instanceof DOMException && result.reason.name === 'AbortError')
@@ -258,6 +244,17 @@ export function CreateValkeyPage() {
     },
     [session.userId, setValues]
   );
+
+  useEffect(() => {
+    if (defaultsAppliedRef.current || !instances || !capacitySnapshot) {
+      return;
+    }
+
+    setValues(
+      getCreateFormDefaults(instances, catalog?.items ?? [{ vcpu: 1, ramGb: 1 }], capacitySnapshot)
+    );
+    defaultsAppliedRef.current = true;
+  }, [capacitySnapshot, catalog, instances, setValues]);
 
   const retryLoad = () => {
     loadControllerRef.current?.abort();
@@ -275,7 +272,6 @@ export function CreateValkeyPage() {
     defaultsAppliedRef.current = false;
     setInstances(null);
     setCatalog(null);
-    setQuotaSnapshot(null);
     const controller = new AbortController();
     loadControllerRef.current = controller;
     void load(controller.signal);
@@ -300,15 +296,17 @@ export function CreateValkeyPage() {
 
   const values = form.getValues();
   const size = { vcpu: values.vcpu, ramGb: values.ramGb };
-  const quota = quotaSnapshot
-    ? checkCandidateQuota(quotaSnapshot, { size, mode: values.mode })
+  const capacity = capacitySnapshot
+    ? checkCandidateCapacity(capacitySnapshot, { size, mode: values.mode })
     : null;
   const singleMaximum =
-    catalog && quotaSnapshot
-      ? findLargestAvailableSize(catalog.items, quotaSnapshot, 'single')
+    catalog && capacitySnapshot
+      ? findLargestAvailableCapacitySize(catalog.items, capacitySnapshot, 'single')
       : null;
   const haMaximum =
-    catalog && quotaSnapshot ? findLargestAvailableSize(catalog.items, quotaSnapshot, 'ha') : null;
+    catalog && capacitySnapshot
+      ? findLargestAvailableCapacitySize(catalog.items, capacitySnapshot, 'ha')
+      : null;
 
   const slugPreview = getSlugPreview(values.prefix.trim() || 'valkey');
   const addressPreview = catalog ? `${slugPreview}.${catalog.connection.domain}` : slugPreview;
@@ -356,6 +354,7 @@ export function CreateValkeyPage() {
       }
 
       pendingSubmissionRef.current = null;
+      void refreshCapacity();
       setEphemeralPassword({
         instanceId: created.id,
         password: submission.input.password,
@@ -383,19 +382,7 @@ export function CreateValkeyPage() {
           form.setFieldError('name', error.message);
         }
         if (error.code === 'QUOTA_EXCEEDED' || error.code === 'NOT_ENOUGH_RESOURCES') {
-          try {
-            const updatedQuota = await getValkeyQuota(controller.signal);
-            if (submissionControllerRef.current === controller) {
-              setQuotaSnapshot(updatedQuota);
-            }
-          } catch (quotaError) {
-            if (
-              submissionControllerRef.current === controller &&
-              !(quotaError instanceof DOMException && quotaError.name === 'AbortError')
-            ) {
-              setQuotaSnapshot(null);
-            }
-          }
+          await refreshCapacity();
         }
       }
       notifications.show({
@@ -411,15 +398,20 @@ export function CreateValkeyPage() {
     }
   };
 
-  if (loadError && (!instances || !quotaSnapshot)) {
+  const initialError = loadError ?? (capacityError ? getRequestErrorMessage(capacityError) : null);
+
+  if (initialError && (!instances || !capacitySnapshot)) {
     return (
       <Container className={styles.page} size="h3_page">
         <Alert color="red" title="Не удалось открыть форму">
           <Stack align="flex-start" gap="h3_sm">
-            <Text size="h3_sm">{loadError}</Text>
+            <Text size="h3_sm">{initialError}</Text>
             <Button
               leftSection={<RotateCw aria-hidden="true" size={16} strokeWidth={1.5} />}
-              onClick={retryLoad}
+              onClick={() => {
+                retryLoad();
+                void refreshCapacity();
+              }}
               variant={buttonVariants.secondary}
             >
               Повторить
@@ -430,7 +422,7 @@ export function CreateValkeyPage() {
     );
   }
 
-  if (!instances || !quotaSnapshot || !quota || (loading && !defaultsAppliedRef.current)) {
+  if (!instances || !capacitySnapshot || !capacity || (loading && !defaultsAppliedRef.current)) {
     return (
       <Container className={styles.page} size="h3_page">
         <Stack gap="h3_md">
@@ -523,8 +515,8 @@ export function CreateValkeyPage() {
 
           {catalog ? (
             <SizePlans
-              isAvailable={(plan) =>
-                checkCandidateQuota(quotaSnapshot, { size: plan, mode: values.mode }).fits
+              getAvailabilityReason={(plan) =>
+                checkCandidateCapacity(capacitySnapshot, { size: plan, mode: values.mode }).reason
               }
               mode={values.mode}
               onChange={(next) => setValues({ vcpu: next.vcpu, ramGb: next.ramGb })}
@@ -534,14 +526,28 @@ export function CreateValkeyPage() {
             />
           ) : null}
 
-          {catalog && !quota.fits && (
+          {catalog && capacity.reason === 'user_quota' && (
             <SupportNote
               haMaximum={haMaximum}
-              limit={quotaSnapshot.limit}
-              quota={quota}
+              limit={capacitySnapshot.user.limit}
+              quota={capacity.user}
               singleMaximum={singleMaximum}
             />
           )}
+
+          {capacity.reason === 'cluster_resources' ? (
+            <Alert color="red" title="Недостаточно ресурсов Managed Kubernetes" variant="light">
+              <Text size="h3_sm">В кластере сейчас нет ресурсов для выбранной конфигурации.</Text>
+            </Alert>
+          ) : null}
+
+          {capacity.reason === 'instance_limit' ? (
+            <Alert color="red" title="Достигнут предел числа баз" variant="light">
+              <Text size="h3_sm">
+                Новую базу можно создать после подтверждённого удаления одной из существующих.
+              </Text>
+            </Alert>
+          ) : null}
 
           <FormRow
             hint="Имя отображается только в консоли. Его можно изменить после создания."
@@ -625,7 +631,7 @@ export function CreateValkeyPage() {
 
           <FormRow>
             <Button
-              disabled={!catalog || !quota.fits || needsDenyAllConfirmation}
+              disabled={!catalog || !capacity.fits || needsDenyAllConfirmation}
               mt="h3_md"
               loading={submitting}
               type="submit"

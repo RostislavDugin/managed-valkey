@@ -93,6 +93,18 @@ function credentialsDto(instance: Record<string, unknown>) {
   };
 }
 
+function capacityUsage(instances: Array<Record<string, unknown>>) {
+  return instances.reduce<{ vcpu: number; ramGb: number }>(
+    (usage, instance) => {
+      const nodes = instance.mode === 'ha' ? 3 : 1;
+      usage.vcpu += nodes * Math.max(Number(instance.vcpu), Number(instance.applied_vcpu));
+      usage.ramGb += nodes * Math.max(Number(instance.ram_gb), Number(instance.applied_ram_gb));
+      return usage;
+    },
+    { vcpu: 0, ramGb: 0 }
+  );
+}
+
 export function installStatefulValkeyApi(
   initialInstances: Array<Record<string, unknown>> = [valkeyInstanceDto()]
 ) {
@@ -112,12 +124,26 @@ export function installStatefulValkeyApi(
     });
 
     if (path === '/v1/me' && method === 'GET') {
-      const usedVcpu = instances.reduce((sum, instance) => sum + Number(instance.vcpu), 0);
-      const usedRamGb = instances.reduce((sum, instance) => sum + Number(instance.ram_gb), 0);
+      const usage = capacityUsage(instances);
       return jsonResponse({
         user: { id: TEST_USER_ID, email: 'user@example.com' },
-        quota: { max_vcpu: 8, max_ram_gb: 32 },
-        usage: { used_vcpu: usedVcpu, used_ram_gb: usedRamGb },
+        quota: { max_vcpu: 4, max_ram_gb: 12 },
+        usage: { used_vcpu: usage.vcpu, used_ram_gb: usage.ramGb },
+      });
+    }
+
+    if (path === '/v1/managed/valkey/capacity' && method === 'GET') {
+      const usage = capacityUsage(instances);
+      return jsonResponse({
+        user: {
+          limit: { vcpu: 4, ram_gb: 12 },
+          used: { vcpu: usage.vcpu, ram_gb: usage.ramGb },
+        },
+        cluster: {
+          limit: { vcpu: 12, ram_gb: 48 },
+          used: { vcpu: usage.vcpu, ram_gb: usage.ramGb },
+        },
+        instances: { limit: 32, used: instances.length },
       });
     }
 

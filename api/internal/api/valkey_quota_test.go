@@ -15,17 +15,17 @@ func Test_CreateValkey_WithPersonalQuotaBoundary_CountsModeAndAcceptsExactLimit(
 	account := app.registerAccount(t, "")
 
 	createValkey(t, app, account, map[string]any{
-		"name": "ha-cache", "mode": "ha", "vcpu": 1, "ram_gb": 4,
+		"name": "ha-cache", "mode": "ha", "vcpu": 1, "ram_gb": 2,
 	})
 	createValkey(t, app, account, map[string]any{
-		"name": "boundary-cache", "mode": "single", "vcpu": 1, "ram_gb": 4,
+		"name": "boundary-cache", "mode": "single", "vcpu": 1, "ram_gb": 2,
 	})
 
 	me := decodeResponse[currentUserResponse](
 		t,
 		app.requestJSON(t, http.MethodGet, "/v1/me", nil, bearer(account.Token)),
 	)
-	if me.Usage.UsedVCPU != 4 || me.Usage.UsedRAMGB != 16 {
+	if me.Usage.UsedVCPU != 4 || me.Usage.UsedRAMGB != 8 {
 		t.Fatalf("неверный резерв HA и single: %+v", me.Usage)
 	}
 
@@ -121,6 +121,22 @@ func Test_CreateValkey_WithExactClusterQuotaBoundary_AcceptsRequest(t *testing.T
 	}
 }
 
+func Test_CreateValkey_WhenPersonalAndClusterLimitsAreExceeded_ReturnsPersonalQuotaFirst(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{clusterVCPU: 2, clusterRAMGB: 2})
+	account := app.registerAccount(t, "")
+	otherAccount := app.registerAccount(t, "")
+	setUserQuota(t, app, account.ID, 1, 1)
+
+	createValkey(t, app, account, map[string]any{"name": "owned-cache", "vcpu": 1, "ram_gb": 1})
+	createValkey(t, app, otherAccount, map[string]any{"name": "other-cache", "vcpu": 1, "ram_gb": 1})
+
+	response := app.requestJSON(t, http.MethodPost, "/v1/managed/valkey/instances", map[string]any{
+		"name": "rejected-cache", "prefix": "quota", "mode": "single", "vcpu": 1, "ram_gb": 1,
+		"password": testValkeyPassword,
+	}, mergeHeaders(bearer(account.Token), map[string]string{"Idempotency-Key": uuid.NewString()}))
+	assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeQuotaExceeded))
+}
+
 func Test_ResizeValkey_AfterPersonalQuotaDecrease_AllowsReductionAndRejectsIncrease(t *testing.T) {
 	app := newHTTPTestAPI(t, testAPIConfig{})
 	account := app.registerAccount(t, "")
@@ -129,7 +145,7 @@ func Test_ResizeValkey_AfterPersonalQuotaDecrease_AllowsReductionAndRejectsIncre
 		"name": "shrinking-cache", "vcpu": 4, "ram_gb": 16,
 	})
 	makeValkeyReady(t, app, created.ID)
-	setUserQuota(t, app, account.ID, 1, 4)
+	setUserQuota(t, app, account.ID, 4, 12)
 	base := "/v1/managed/valkey/instances/" + created.ID.String() + "/resize"
 
 	shrinking := app.requestJSON(t, http.MethodPost, base, map[string]any{"vcpu": 2, "ram_gb": 8}, mergeHeaders(
@@ -139,18 +155,20 @@ func Test_ResizeValkey_AfterPersonalQuotaDecrease_AllowsReductionAndRejectsIncre
 	assertStatus(t, shrinking, http.StatusAccepted)
 	makeValkeyReady(t, app, created.ID)
 
-	stillOverLimit := app.requestJSON(t, http.MethodPost, base, map[string]any{"vcpu": 1, "ram_gb": 4}, mergeHeaders(
-		bearer(account.Token),
-		map[string]string{"Idempotency-Key": uuid.NewString()},
-	))
-	assertStatus(t, stillOverLimit, http.StatusAccepted)
-	makeValkeyReady(t, app, created.ID)
-
-	increase := app.requestJSON(t, http.MethodPost, base, map[string]any{"vcpu": 2, "ram_gb": 8}, mergeHeaders(
+	increase := app.requestJSON(t, http.MethodPost, base, map[string]any{"vcpu": 4, "ram_gb": 16}, mergeHeaders(
 		bearer(account.Token),
 		map[string]string{"Idempotency-Key": uuid.NewString()},
 	))
 	assertError(t, increase, http.StatusUnprocessableEntity, string(apierr.CodeQuotaExceeded))
+
+	deletion := app.requestJSON(
+		t,
+		http.MethodDelete,
+		"/v1/managed/valkey/instances/"+created.ID.String(),
+		nil,
+		bearer(account.Token),
+	)
+	assertStatus(t, deletion, http.StatusAccepted)
 }
 
 func setUserQuota(t *testing.T, app *testAPI, userID uuid.UUID, maxVCPU, maxRAMGB int) {

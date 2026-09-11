@@ -43,6 +43,16 @@ type QuotaUsage struct {
 	UsedRAMGB int `gorm:"column:used_ram_gb"`
 }
 
+type ValkeyCapacityUsage struct {
+	MaxVCPU          int `gorm:"column:max_vcpu"`
+	MaxRAMGB         int `gorm:"column:max_ram_gb"`
+	UserUsedVCPU     int `gorm:"column:user_used_vcpu"`
+	UserUsedRAMGB    int `gorm:"column:user_used_ram_gb"`
+	ClusterUsedVCPU  int `gorm:"column:cluster_used_vcpu"`
+	ClusterUsedRAMGB int `gorm:"column:cluster_used_ram_gb"`
+	Instances        int `gorm:"column:instances"`
+}
+
 func (s *Store) ListActiveValkeyInstances(ctx context.Context, userID uuid.UUID) ([]ValkeyInstance, error) {
 	var instances []ValkeyInstance
 	if err := s.db.WithContext(ctx).
@@ -251,6 +261,46 @@ func (s *Store) GetQuotaUsage(ctx context.Context, userID uuid.UUID) (QuotaUsage
 	}
 	if usage.MaxVCPU == 0 || usage.MaxRAMGB == 0 {
 		return QuotaUsage{}, ErrNotFound
+	}
+
+	return usage, nil
+}
+
+func (s *Store) GetValkeyCapacityUsage(ctx context.Context, userID uuid.UUID) (ValkeyCapacityUsage, error) {
+	var usage ValkeyCapacityUsage
+	err := s.db.WithContext(ctx).Raw(`
+		WITH active_instances AS (
+			SELECT
+				user_id,
+				(CASE WHEN mode = 'ha' THEN 3 ELSE 1 END) * GREATEST(vcpu, applied_vcpu) AS reserved_vcpu,
+				(CASE WHEN mode = 'ha' THEN 3 ELSE 1 END) * GREATEST(ram_gb, applied_ram_gb) AS reserved_ram_gb
+			FROM valkey_instances
+			WHERE deleted_at IS NULL
+		), cluster_usage AS (
+			SELECT
+				COALESCE(SUM(reserved_vcpu) FILTER (WHERE user_id = ?), 0) AS user_used_vcpu,
+				COALESCE(SUM(reserved_ram_gb) FILTER (WHERE user_id = ?), 0) AS user_used_ram_gb,
+				COALESCE(SUM(reserved_vcpu), 0) AS cluster_used_vcpu,
+				COALESCE(SUM(reserved_ram_gb), 0) AS cluster_used_ram_gb,
+				COUNT(*) AS instances
+			FROM active_instances
+		)
+		SELECT
+			q.max_vcpu,
+			q.max_ram_gb,
+			c.user_used_vcpu,
+			c.user_used_ram_gb,
+			c.cluster_used_vcpu,
+			c.cluster_used_ram_gb,
+			c.instances
+		FROM user_quotas q
+		CROSS JOIN cluster_usage c
+		WHERE q.user_id = ?`, userID, userID, userID).Scan(&usage).Error
+	if err != nil {
+		return ValkeyCapacityUsage{}, fmt.Errorf("прочитать доступную ёмкость Valkey: %w", err)
+	}
+	if usage.MaxVCPU == 0 || usage.MaxRAMGB == 0 {
+		return ValkeyCapacityUsage{}, ErrNotFound
 	}
 
 	return usage, nil

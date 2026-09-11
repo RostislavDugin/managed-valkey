@@ -27,7 +27,7 @@ func Test_RegisterAccount_WithSuccessfulResponse_RecordsPasswordAndTokenForArtif
 			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{
 				"user":  map[string]string{"id": "11111111-1111-7111-8111-111111111111", "email": "user@example.com"},
-				"quota": map[string]int{"max_vcpu": 4, "max_ram_gb": 16},
+				"quota": map[string]int{"max_vcpu": 4, "max_ram_gb": 12},
 				"usage": map[string]int{"used_vcpu": 0, "used_ram_gb": 0},
 			})
 		default:

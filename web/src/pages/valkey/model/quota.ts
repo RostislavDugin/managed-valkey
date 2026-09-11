@@ -10,6 +10,17 @@ export interface ValkeyQuota {
   usage: QuotaAmount;
 }
 
+export interface ValkeyCapacity {
+  user: ValkeyQuota;
+  cluster: ValkeyQuota;
+  instances: {
+    limit: number;
+    usage: number;
+  };
+}
+
+export type CapacityReason = 'available' | 'user_quota' | 'cluster_resources' | 'instance_limit';
+
 export interface QuotaCheck {
   fits: boolean;
   used: QuotaAmount;
@@ -17,6 +28,13 @@ export interface QuotaCheck {
   required: QuotaAmount;
   requested: QuotaAmount;
   missing: QuotaAmount;
+}
+
+export interface CapacityCheck {
+  fits: boolean;
+  reason: CapacityReason;
+  user: QuotaCheck;
+  cluster: QuotaCheck;
 }
 
 export function getInstanceReserve(instance: ValkeyInstance): QuotaAmount {
@@ -62,6 +80,24 @@ export function checkQuota(
   };
 }
 
+export function checkCapacity(
+  capacity: ValkeyCapacity,
+  candidate: { size: ValkeySize; mode: ValkeyMode },
+  current?: ValkeyInstance
+): CapacityCheck {
+  const user = checkQuota(capacity.user, candidate, current);
+  const cluster = checkQuota(capacity.cluster, candidate, current);
+  const reason: CapacityReason = !user.fits
+    ? 'user_quota'
+    : !cluster.fits
+      ? 'cluster_resources'
+      : !current && capacity.instances.usage >= capacity.instances.limit
+        ? 'instance_limit'
+        : 'available';
+
+  return { fits: reason === 'available', reason, user, cluster };
+}
+
 export function findAvailableSize(
   sizes: readonly ValkeySize[],
   quota: ValkeyQuota,
@@ -78,4 +114,13 @@ export function findLargestAvailableSize(
   current?: ValkeyInstance
 ) {
   return sizes.findLast((size) => checkQuota(quota, { size, mode }, current).fits) ?? null;
+}
+
+export function findLargestAvailableCapacitySize(
+  sizes: readonly ValkeySize[],
+  capacity: ValkeyCapacity,
+  mode: ValkeyMode,
+  current?: ValkeyInstance
+) {
+  return sizes.findLast((size) => checkCapacity(capacity, { size, mode }, current).fits) ?? null;
 }

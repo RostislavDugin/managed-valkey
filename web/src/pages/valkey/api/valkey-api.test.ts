@@ -4,6 +4,7 @@ import {
   deleteInstance,
   getInstance,
   getValkeyCatalog,
+  getValkeyCapacity,
   getValkeyCredentials,
   getValkeyQuota,
   listInstances,
@@ -98,6 +99,19 @@ describe('клиент Valkey API', () => {
           usage: { used_vcpu: 5, used_ram_gb: 11 },
         })
       )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          user: {
+            limit: { vcpu: 4, ram_gb: 12 },
+            used: { vcpu: 3, ram_gb: 6 },
+          },
+          cluster: {
+            limit: { vcpu: 12, ram_gb: 48 },
+            used: { vcpu: 7, ram_gb: 22 },
+          },
+          instances: { limit: 32, used: 8 },
+        })
+      )
       .mockResolvedValueOnce(jsonResponse({ items: [instanceDto()] }))
       .mockResolvedValueOnce(jsonResponse(instanceDto()))
       .mockResolvedValueOnce(jsonResponse(credentialsDto()));
@@ -110,6 +124,17 @@ describe('клиент Valkey API', () => {
     await expect(getValkeyQuota()).resolves.toEqual({
       limit: { vcpu: 9, ramGb: 27 },
       usage: { vcpu: 5, ramGb: 11 },
+    });
+    await expect(getValkeyCapacity()).resolves.toEqual({
+      user: {
+        limit: { vcpu: 4, ramGb: 12 },
+        usage: { vcpu: 3, ramGb: 6 },
+      },
+      cluster: {
+        limit: { vcpu: 12, ramGb: 48 },
+        usage: { vcpu: 7, ramGb: 22 },
+      },
+      instances: { limit: 32, usage: 8 },
     });
     const [listed] = await listInstances();
     expect(listed).toMatchObject({
@@ -129,6 +154,7 @@ describe('клиент Valkey API', () => {
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
       '/v1/managed/valkey/sizes',
       '/v1/me',
+      '/v1/managed/valkey/capacity',
       '/v1/managed/valkey/instances',
       `/v1/managed/valkey/instances/${INSTANCE_ID}`,
       `/v1/managed/valkey/instances/${INSTANCE_ID}/credentials`,

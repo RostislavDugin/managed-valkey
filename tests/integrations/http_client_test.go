@@ -380,7 +380,7 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 		case http.MethodGet + " /v1/me":
 			_, _ = writer.Write(
 				[]byte(
-					`{"user":{"id":"user-id","email":"user@example.com"},"quota":{"max_vcpu":4,"max_ram_gb":16},"usage":{"used_vcpu":0,"used_ram_gb":0}}`,
+					`{"user":{"id":"user-id","email":"user@example.com"},"quota":{"max_vcpu":4,"max_ram_gb":12},"usage":{"used_vcpu":0,"used_ram_gb":0}}`,
 				),
 			)
 		case http.MethodPost + " /v1/managed/valkey/instances":

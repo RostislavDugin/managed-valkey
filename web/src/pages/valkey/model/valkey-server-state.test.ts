@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { checkQuota, getInstanceReserve, type ValkeyQuota } from './quota';
+import {
+  checkCapacity,
+  checkQuota,
+  getInstanceReserve,
+  type ValkeyCapacity,
+  type ValkeyQuota,
+} from './quota';
 import { getPeriodCoins, type ValkeyInstance, type ValkeyPricing } from './valkey';
 
 const quota: ValkeyQuota = {
-  limit: { vcpu: 4, ramGb: 16 },
+  limit: { vcpu: 4, ramGb: 12 },
   usage: { vcpu: 4, ramGb: 16 },
+};
+
+const capacity: ValkeyCapacity = {
+  user: { limit: { vcpu: 4, ramGb: 12 }, usage: { vcpu: 1, ramGb: 2 } },
+  cluster: { limit: { vcpu: 12, ramGb: 48 }, usage: { vcpu: 8, ramGb: 32 } },
+  instances: { limit: 32, usage: 31 },
 };
 
 const instance = {
@@ -35,7 +47,7 @@ describe('серверные цены и квота', () => {
     ).toMatchObject({ fits: true, requested: { vcpu: 4, ramGb: 16 } });
     expect(
       checkQuota(quota, { size: { vcpu: 8, ramGb: 16 }, mode: 'single' }, instance)
-    ).toMatchObject({ fits: false, missing: { vcpu: 4, ramGb: 8 } });
+    ).toMatchObject({ fits: false, missing: { vcpu: 4, ramGb: 12 } });
   });
 
   it('для базы в режиме HA рассчитывает резерв процессора и памяти на три ноды', () => {
@@ -45,5 +57,38 @@ describe('серверные цены и квота', () => {
         { size: { vcpu: 1, ramGb: 4 }, mode: 'ha' }
       )
     ).toMatchObject({ fits: true, required: { vcpu: 3, ramGb: 12 } });
+  });
+
+  it('для кандидата сообщает первое нарушенное ограничение и не применяет предел баз к изменению тарифа', () => {
+    expect(checkCapacity(capacity, { size: { vcpu: 1, ramGb: 2 }, mode: 'single' })).toMatchObject({
+      fits: true,
+      reason: 'available',
+    });
+    expect(checkCapacity(capacity, { size: { vcpu: 2, ramGb: 8 }, mode: 'ha' })).toMatchObject({
+      fits: false,
+      reason: 'user_quota',
+    });
+    expect(
+      checkCapacity(
+        {
+          ...capacity,
+          user: { limit: { vcpu: 20, ramGb: 80 }, usage: { vcpu: 1, ramGb: 2 } },
+        },
+        { size: { vcpu: 2, ramGb: 8 }, mode: 'ha' }
+      )
+    ).toMatchObject({ fits: false, reason: 'cluster_resources' });
+    expect(
+      checkCapacity(
+        { ...capacity, instances: { limit: 32, usage: 32 } },
+        { size: { vcpu: 1, ramGb: 2 }, mode: 'single' }
+      )
+    ).toMatchObject({ fits: false, reason: 'instance_limit' });
+    expect(
+      checkCapacity(
+        { ...capacity, instances: { limit: 32, usage: 32 } },
+        { size: { vcpu: 1, ramGb: 2 }, mode: 'single' },
+        { ...instance, vcpu: 1, ramGb: 2, appliedVcpu: 1, appliedRamGb: 2 }
+      )
+    ).toMatchObject({ fits: true, reason: 'available' });
   });
 });

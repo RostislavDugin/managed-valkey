@@ -43,7 +43,7 @@ func Test_CompleteAuthenticationFlow_WithHttpAndPostgreSql_ReturnsAccountAndSafe
 	assertStatus(t, me, http.StatusOK)
 	current := decodeResponse[currentUserResponse](t, me)
 	if current.User.ID != account.ID || current.User.Email != normalizedEmail || current.Quota.MaxVCPU != 4 ||
-		current.Quota.MaxRAMGB != 16 || current.Usage.UsedVCPU != 0 || current.Usage.UsedRAMGB != 0 {
+		current.Quota.MaxRAMGB != 12 || current.Usage.UsedVCPU != 0 || current.Usage.UsedRAMGB != 0 {
 		t.Errorf("неожиданный /v1/me: %+v", current)
 	}
 

@@ -27,6 +27,7 @@ type ClusterTopology struct {
 
 type Repository interface {
 	ListActiveValkeyInstances(context.Context, uuid.UUID) ([]store.ValkeyInstance, error)
+	GetValkeyCapacityUsage(context.Context, uuid.UUID) (store.ValkeyCapacityUsage, error)
 	FindActiveValkeyInstance(context.Context, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
 	FindOwnedValkeyInstance(context.Context, uuid.UUID, uuid.UUID) (store.ValkeyInstance, error)
 	ReadValkeyMetricBuckets(
@@ -100,6 +101,27 @@ func NewService(
 
 func (s *Service) Sizes() Catalog {
 	return s.catalog
+}
+
+func (s *Service) Capacity(ctx context.Context, actor Actor) (Capacity, error) {
+	usage, err := s.repository.GetValkeyCapacityUsage(ctx, actor.ID)
+	if err != nil {
+		return Capacity{}, apierr.WrapInternal(err)
+	}
+	clusterVCPU := int(s.topology.NodeCPUMilli * int64(s.topology.NodeCount) / 1000)
+	clusterRAMGB := int(s.topology.NodeRAMMiB * int64(s.topology.NodeCount) / 1024)
+
+	return Capacity{
+		User: CapacityBudget{
+			Limit: CapacityResources{VCPU: usage.MaxVCPU, RAMGB: usage.MaxRAMGB},
+			Used:  CapacityResources{VCPU: usage.UserUsedVCPU, RAMGB: usage.UserUsedRAMGB},
+		},
+		Cluster: CapacityBudget{
+			Limit: CapacityResources{VCPU: clusterVCPU, RAMGB: clusterRAMGB},
+			Used:  CapacityResources{VCPU: usage.ClusterUsedVCPU, RAMGB: usage.ClusterUsedRAMGB},
+		},
+		Instances: CapacityInstances{Limit: InstanceLimit, Used: usage.Instances},
+	}, nil
 }
 
 func (s *Service) Owns(ctx context.Context, actor Actor, instanceID uuid.UUID) error {

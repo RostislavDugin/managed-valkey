@@ -64,6 +64,27 @@ type Credentials struct {
 	AppliedPasswordVersion int     `json:"applied_password_version"`
 }
 
+type CapacityResources struct {
+	VCPU  int `json:"vcpu"`
+	RAMGB int `json:"ram_gb"`
+}
+
+type CapacityBudget struct {
+	Limit CapacityResources `json:"limit"`
+	Used  CapacityResources `json:"used"`
+}
+
+type CapacityInstances struct {
+	Limit int `json:"limit"`
+	Used  int `json:"used"`
+}
+
+type Capacity struct {
+	User      CapacityBudget    `json:"user"`
+	Cluster   CapacityBudget    `json:"cluster"`
+	Instances CapacityInstances `json:"instances"`
+}
+
 type CreateInput struct {
 	Name             string
 	Prefix           string

@@ -13,6 +13,11 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 )
 
+const (
+	defaultQuotaVCPU  = 4
+	defaultQuotaRAMGB = 12
+)
+
 type Repository interface {
 	UserExists(context.Context, string) (bool, error)
 	FindUserByEmail(context.Context, string) (store.User, error)
@@ -143,7 +148,9 @@ func (s *Service) Register(ctx context.Context, input Registration) (string, err
 			return createErr
 		}
 
-		quota := store.UserQuota{UserID: user.ID, MaxVCPU: 4, MaxRAMGB: 16}
+		quota := store.UserQuota{
+			UserID: user.ID, MaxVCPU: defaultQuotaVCPU, MaxRAMGB: defaultQuotaRAMGB,
+		}
 		if quotaErr := s.repository.CreateUserQuota(ctx, tx, &quota); quotaErr != nil {
 			return quotaErr
 		}

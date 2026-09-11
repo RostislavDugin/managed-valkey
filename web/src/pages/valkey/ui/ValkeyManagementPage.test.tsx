@@ -25,9 +25,9 @@ describe('список баз Valkey', () => {
     ).toBeVisible();
     const aside = screen.getByTestId('console-aside');
     expect(within(aside).getByRole('heading', { name: 'Квота' })).toBeVisible();
-    expect(within(aside).getByRole('progressbar', { name: 'vCPU: занято 0 / 8' })).toBeVisible();
+    expect(within(aside).getByRole('progressbar', { name: 'vCPU: занято 0 / 4' })).toBeVisible();
     expect(
-      within(aside).getByRole('progressbar', { name: /RAM: занято 0\sГБ \/ 32\sГБ/ })
+      within(aside).getByRole('progressbar', { name: /RAM: занято 0\sГБ \/ 12\sГБ/ })
     ).toBeVisible();
     expect(within(aside).getByRole('link', { name: 'Увеличить через поддержку' })).toBeVisible();
   });

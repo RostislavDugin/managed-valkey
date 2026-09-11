@@ -1,5 +1,5 @@
 import { apiRequest } from '@/shared/api';
-import type { ValkeyQuota } from '../model/quota';
+import type { ValkeyCapacity, ValkeyQuota } from '../model/quota';
 import type {
   ValkeyCatalog,
   ValkeyInstance,
@@ -23,6 +23,18 @@ interface ValkeyCatalogDto {
 interface CurrentUserDto {
   quota: { max_vcpu: number; max_ram_gb: number };
   usage: { used_vcpu: number; used_ram_gb: number };
+}
+
+interface ValkeyCapacityDto {
+  user: {
+    limit: { vcpu: number; ram_gb: number };
+    used: { vcpu: number; ram_gb: number };
+  };
+  cluster: {
+    limit: { vcpu: number; ram_gb: number };
+    used: { vcpu: number; ram_gb: number };
+  };
+  instances: { limit: number; used: number };
 }
 
 interface ValkeyInstanceDto {
@@ -141,6 +153,21 @@ export async function getValkeyQuota(signal?: AbortSignal): Promise<ValkeyQuota>
   return {
     limit: { vcpu: dto.quota.max_vcpu, ramGb: dto.quota.max_ram_gb },
     usage: { vcpu: dto.usage.used_vcpu, ramGb: dto.usage.used_ram_gb },
+  };
+}
+
+export async function getValkeyCapacity(signal?: AbortSignal): Promise<ValkeyCapacity> {
+  const dto = await apiRequest<ValkeyCapacityDto>('/managed/valkey/capacity', { signal });
+  return {
+    user: {
+      limit: { vcpu: dto.user.limit.vcpu, ramGb: dto.user.limit.ram_gb },
+      usage: { vcpu: dto.user.used.vcpu, ramGb: dto.user.used.ram_gb },
+    },
+    cluster: {
+      limit: { vcpu: dto.cluster.limit.vcpu, ramGb: dto.cluster.limit.ram_gb },
+      usage: { vcpu: dto.cluster.used.vcpu, ramGb: dto.cluster.used.ram_gb },
+    },
+    instances: { limit: dto.instances.limit, usage: dto.instances.used },
   };
 }
 

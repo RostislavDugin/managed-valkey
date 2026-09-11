@@ -24,7 +24,7 @@ function PropertyRow({ label, value }: { label: string; value: ReactNode }) {
 }
 
 export function ValkeyInstancePage() {
-  const { applyUpdate, catalog, instance, quota, refresh } = useValkeyInstance();
+  const { applyUpdate, catalog, instance, refresh, session } = useValkeyInstance();
   const [resizeOpened, setResizeOpened] = useState(false);
   const [passwordOpened, setPasswordOpened] = useState(false);
   const [whitelistOpened, setWhitelistOpened] = useState(false);
@@ -299,12 +299,12 @@ export function ValkeyInstancePage() {
       </Stack>
 
       <ResizeInstanceModal
+        accountId={session.userId}
         catalog={catalog}
         instance={resizeOpened ? instance : null}
         onClose={() => setResizeOpened(false)}
         onRefresh={refresh}
         onResized={applyUpdate}
-        quota={quota}
       />
 
       <WhitelistModal

@@ -50,7 +50,7 @@ func Test_CleanupInstance_AfterScenarioStopsEarly_DeletesOnlyOwnedResources(t *t
 			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{
 				"user":  map[string]string{"id": "user", "email": "user@example.com"},
-				"quota": map[string]int{"max_vcpu": 4, "max_ram_gb": 16},
+				"quota": map[string]int{"max_vcpu": 4, "max_ram_gb": 12},
 				"usage": map[string]int{"used_vcpu": used, "used_ram_gb": used},
 			})
 		default:

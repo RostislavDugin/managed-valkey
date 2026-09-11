@@ -1,5 +1,5 @@
 import { ApiError } from '@/shared/api';
-import { checkQuota, findAvailableSize, type QuotaCheck, type ValkeyQuota } from './quota';
+import { checkCapacity, type CapacityCheck, type QuotaCheck, type ValkeyCapacity } from './quota';
 import {
   DEFAULT_INSTANCE_PREFIX,
   formatRam,
@@ -24,9 +24,12 @@ export interface CreateFormValues extends ValkeySize {
 export function getCreateFormDefaults(
   instances: ValkeyInstance[],
   sizes: readonly ValkeySize[],
-  quota: ValkeyQuota
+  capacity: ValkeyCapacity
 ): CreateFormValues {
-  const size = findAvailableSize(sizes, quota, 'single') ?? sizes[0] ?? { vcpu: 1, ramGb: 1 };
+  const size = sizes.find(
+    (candidate) => checkCapacity(capacity, { size: candidate, mode: 'single' }).fits
+  ) ??
+    sizes[0] ?? { vcpu: 1, ramGb: 1 };
 
   return {
     name: generateInstanceName(instances.map((instance) => instance.name)),
@@ -56,12 +59,12 @@ export function describeMissingQuota(check: QuotaCheck) {
   )} из квоты.`;
 }
 
-export function checkCandidateQuota(
-  quota: ValkeyQuota,
+export function checkCandidateCapacity(
+  capacity: ValkeyCapacity,
   candidate: { size: ValkeySize; mode: ValkeyMode },
   current?: ValkeyInstance
-) {
-  return checkQuota(quota, candidate, current);
+): CapacityCheck {
+  return checkCapacity(capacity, candidate, current);
 }
 
 export function getResizeWarnings(
@@ -86,9 +89,7 @@ export function getRequestErrorMessage(error: unknown) {
     return 'Не удалось выполнить запрос. Попробуйте ещё раз.';
   }
   if (error.code === 'NOT_ENOUGH_RESOURCES') {
-    return error.details?.reason === 'instance_limit'
-      ? 'Достигнут предел числа баз.'
-      : 'В кластере сейчас не хватает свободных ресурсов.';
+    return error.message;
   }
   if (error.code === 'OPERATION_IN_PROGRESS') {
     const desired = error.details?.desired_generation;

@@ -1,8 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { seedSession, withProviders } from '../../../../test/render';
-import type { ValkeyQuota } from '../model/quota';
+import { seedSession, TEST_USER_ID, withProviders } from '../../../../test/render';
 import type { ValkeyCatalog, ValkeyInstance } from '../model/valkey';
 import { ResizeInstanceModal } from './ResizeInstanceModal';
 
@@ -54,10 +53,23 @@ const catalog = {
   connection: { domain: 'valkey.test', port: 41379 },
 } satisfies ValkeyCatalog;
 
-const quota = {
-  limit: { vcpu: 8, ramGb: 32 },
-  usage: { vcpu: 1, ramGb: 1 },
-} satisfies ValkeyQuota;
+function capacityDto(clusterVcpu = 1, clusterRamGb = 1, instances = 1) {
+  return {
+    user: { limit: { vcpu: 4, ram_gb: 12 }, used: { vcpu: 1, ram_gb: 1 } },
+    cluster: {
+      limit: { vcpu: 12, ram_gb: 48 },
+      used: { vcpu: clusterVcpu, ram_gb: clusterRamGb },
+    },
+    instances: { limit: 32, used: instances },
+  };
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
 
 function responseDto() {
   return {
@@ -105,12 +117,24 @@ describe('изменение тарифа', () => {
     const request = new Promise<Response>((resolve) => {
       resolveRequest = resolve;
     });
-    const fetchMock = vi.spyOn(window, 'fetch').mockReturnValue(request);
+    const fetchMock = vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === '/v1/managed/valkey/capacity') {
+        return jsonResponse(capacityDto());
+      }
+      return request;
+    });
     const onClose = vi.fn();
     const onRefresh = vi.fn();
     const onResized = vi.fn();
     const user = userEvent.setup();
-    const props = { catalog, instance, onClose, onRefresh, onResized, quota };
+    const props = {
+      accountId: TEST_USER_ID,
+      catalog,
+      instance,
+      onClose,
+      onRefresh,
+      onResized,
+    };
     const view = render(withProviders(<ResizeInstanceModal {...props} />));
 
     await user.click(screen.getByRole('radio', { name: /2.*vCPU.*8.*ГБ RAM/ }));
@@ -121,9 +145,14 @@ describe('изменение тарифа', () => {
       screen.getByText('Ресайз нельзя отменить, новый тариф действует с момента принятия запроса.')
     ).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Изменить тариф' }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/resize'))
+      ).toHaveLength(1)
+    );
 
-    const signal = fetchMock.mock.calls[0][1]?.signal;
+    const resizeCall = fetchMock.mock.calls.find(([path]) => String(path).endsWith('/resize'));
+    const signal = resizeCall?.[1]?.signal;
     view.rerender(
       withProviders(
         <ResizeInstanceModal
@@ -144,5 +173,96 @@ describe('изменение тарифа', () => {
 
     await waitFor(() => expect(onResized).toHaveBeenCalledOnce());
     expect(onClose).toHaveBeenCalledOnce();
+    expect(
+      fetchMock.mock.calls.filter(([path]) => String(path) === '/v1/managed/valkey/capacity').length
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('вычитает текущий резерв и не применяет предел числа баз к изменению тарифа', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue(jsonResponse(capacityDto(11, 41, 32)));
+    const user = userEvent.setup();
+
+    render(
+      withProviders(
+        <ResizeInstanceModal
+          accountId={TEST_USER_ID}
+          catalog={catalog}
+          instance={instance}
+          onClose={vi.fn()}
+          onRefresh={vi.fn()}
+          onResized={vi.fn()}
+        />
+      )
+    );
+
+    await user.click(await screen.findByRole('radio', { name: /2.*vCPU.*8.*ГБ RAM/ }));
+    expect(screen.getByRole('button', { name: 'Изменить тариф' })).toBeEnabled();
+    expect(screen.queryByText('Достигнут предел числа баз')).not.toBeInTheDocument();
+  });
+
+  it('при нехватке общего бюджета показывает Managed Kubernetes без ссылки на поддержку', async () => {
+    vi.spyOn(window, 'fetch').mockResolvedValue(jsonResponse(capacityDto(12, 48)));
+    const user = userEvent.setup();
+
+    render(
+      withProviders(
+        <ResizeInstanceModal
+          accountId={TEST_USER_ID}
+          catalog={catalog}
+          instance={instance}
+          onClose={vi.fn()}
+          onRefresh={vi.fn()}
+          onResized={vi.fn()}
+        />
+      )
+    );
+
+    await user.click(await screen.findByRole('radio', { name: /2.*vCPU.*8.*ГБ RAM/ }));
+    expect(screen.getByText('Недостаточно ресурсов Managed Kubernetes')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Изменить тариф' })).toBeDisabled();
+    expect(
+      screen.queryByRole('link', { name: 'Напишите в поддержку для увеличения квоты' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('при закрытии отменяет выполняющийся запрос доступной ёмкости', async () => {
+    let capacitySignal: AbortSignal | null | undefined;
+    vi.spyOn(window, 'fetch').mockImplementation(
+      (_input, init) =>
+        new Promise<Response>(() => {
+          capacitySignal = init?.signal;
+        })
+    );
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+
+    const view = render(
+      withProviders(
+        <ResizeInstanceModal
+          accountId={TEST_USER_ID}
+          catalog={catalog}
+          instance={instance}
+          onClose={onClose}
+          onRefresh={vi.fn()}
+          onResized={vi.fn()}
+        />
+      )
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Отмена' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    view.rerender(
+      withProviders(
+        <ResizeInstanceModal
+          accountId={TEST_USER_ID}
+          catalog={catalog}
+          instance={null}
+          onClose={onClose}
+          onRefresh={vi.fn()}
+          onResized={vi.fn()}
+        />
+      )
+    );
+    expect(capacitySignal?.aborted).toBe(true);
   });
 });

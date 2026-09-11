@@ -1,4 +1,5 @@
 import { Group, Radio, SimpleGrid, Stack, Text } from '@mantine/core';
+import type { CapacityReason } from '../model/quota';
 import {
   formatPrice,
   formatRam,
@@ -12,7 +13,7 @@ import { FormRow } from './FormRow';
 import styles from './ValkeyPage.module.css';
 
 interface SizePlansProps {
-  isAvailable: (size: ValkeySize) => boolean;
+  getAvailabilityReason: (size: ValkeySize) => CapacityReason;
   mode: ValkeyMode;
   onChange: (size: ValkeySize) => void;
   plans: readonly ValkeySize[];
@@ -20,11 +21,24 @@ interface SizePlansProps {
   size: ValkeySize;
 }
 
+const UNAVAILABLE_LABELS: Record<Exclude<CapacityReason, 'available'>, string> = {
+  user_quota: 'Не хватает квоты',
+  cluster_resources: 'Недостаточно ресурсов Managed Kubernetes',
+  instance_limit: 'Достигнут предел числа баз',
+};
+
 function planValue(size: ValkeySize) {
   return `${size.vcpu}:${size.ramGb}`;
 }
 
-export function SizePlans({ isAvailable, mode, onChange, plans, pricing, size }: SizePlansProps) {
+export function SizePlans({
+  getAvailabilityReason,
+  mode,
+  onChange,
+  plans,
+  pricing,
+  size,
+}: SizePlansProps) {
   return (
     <FormRow
       fullWidth
@@ -42,7 +56,8 @@ export function SizePlans({ isAvailable, mode, onChange, plans, pricing, size }:
       >
         <SimpleGrid cols={{ base: 1, mobile: 2 }} spacing={10}>
           {plans.map((plan) => {
-            const available = isAvailable(plan);
+            const reason = getAvailabilityReason(plan);
+            const available = reason === 'available';
             const label = `${formatVcpu(plan.vcpu)}, ${formatRam(plan.ramGb)} RAM`;
 
             return (
@@ -63,7 +78,7 @@ export function SizePlans({ isAvailable, mode, onChange, plans, pricing, size }:
                     </Text>
                     <Text c={available ? 'h3_text_2' : 'red'} size="h3_xs">
                       {formatPrice(getPeriodCoins(plan, mode, 'month', pricing))} / мес.
-                      {!available && ' · Не хватает квоты'}
+                      {!available && ` · ${UNAVAILABLE_LABELS[reason]}`}
                     </Text>
                   </Stack>
                 </Group>
