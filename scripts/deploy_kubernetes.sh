@@ -55,25 +55,23 @@ export KUBECONFIG=$admin_kubeconfig
 kubectl get --raw=/readyz >/dev/null
 docker manifest inspect "$operator_image" >/dev/null
 
-kubectl apply --dry-run=server -f - >/dev/null <<'YAML'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: managed-valkey-container-restart-rules-check
-  namespace: default
-spec:
-  restartPolicy: Always
-  containers:
-    - name: valkey
-      image: valkey/valkey:8.1.9
-      restartPolicy: Never
-YAML
+legacy_statefulsets=$(kubectl get statefulsets.apps --all-namespaces \
+    -l app.kubernetes.io/name=valkey \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{"/"}{.metadata.name}{"\n"}{end}')
+if [[ -n $legacy_statefulsets ]]; then
+    echo "обнаружены пользовательские StatefulSet прежнего оператора:" >&2
+    printf '%s\n' "$legacy_statefulsets" >&2
+    exit 1
+fi
 
 restart_check_index=0
 while IFS= read -r node; do
-    restart_check_pod="managed-valkey-restart-check-${release_sha:0:8}-$restart_check_index"
-    restart_check_pods+=("$restart_check_pod")
-    kubectl apply -f - >/dev/null <<YAML
+    for expected_exit_code in 0 42; do
+        restart_check_pod="managed-valkey-restart-check-${release_sha:0:8}-$restart_check_index-$expected_exit_code"
+        restart_check_pods+=("$restart_check_pod")
+        kubectl -n default delete pod "$restart_check_pod" \
+            --ignore-not-found --wait=true --timeout=60s >/dev/null
+        kubectl apply -f - >/dev/null <<YAML
 apiVersion: v1
 kind: Pod
 metadata:
@@ -82,12 +80,11 @@ metadata:
 spec:
   nodeName: $node
   automountServiceAccountToken: false
-  restartPolicy: Always
+  restartPolicy: Never
   containers:
     - name: check
       image: valkey/valkey:8.1.9
-      command: ["/bin/sh", "-c", "exit 0"]
-      restartPolicy: Never
+      command: ["/bin/sh", "-c", "exit $expected_exit_code"]
       resources:
         requests:
           cpu: 10m
@@ -95,34 +92,62 @@ spec:
         limits:
           memory: 64Mi
 YAML
-    restart_check_completed=false
-    for _ in {1..90}; do
-        restart_count=$(kubectl -n default get pod "$restart_check_pod" \
-            -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || true)
-        if [[ -n $restart_count && $restart_count != 0 ]]; then
-            echo "ContainerRestartRules не работает на ноде $node" >&2
+        if [[ $expected_exit_code == 0 ]]; then
+            expected_phase=Succeeded
+            expected_reason=Completed
+        else
+            expected_phase=Failed
+            expected_reason=Error
+        fi
+
+        restart_check_completed=false
+        for _ in {1..90}; do
+            restart_count=$(kubectl -n default get pod "$restart_check_pod" \
+                -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null || true)
+            if [[ -n $restart_count && $restart_count != 0 ]]; then
+                echo "Pod $restart_check_pod перезапустил контейнер на ноде $node" >&2
+                exit 1
+            fi
+            restart_check_phase=$(kubectl -n default get pod "$restart_check_pod" \
+                -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            if [[ $restart_check_phase == Succeeded || $restart_check_phase == Failed ]]; then
+                restart_check_exit_code=$(kubectl -n default get pod "$restart_check_pod" \
+                    -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
+                restart_check_reason=$(kubectl -n default get pod "$restart_check_pod" \
+                    -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
+                if [[ $restart_check_phase != "$expected_phase" ||
+                    $restart_check_exit_code != "$expected_exit_code" ||
+                    $restart_check_reason != "$expected_reason" ]]; then
+                    echo "Pod $restart_check_pod завершился с неожиданным состоянием на ноде $node" >&2
+                    exit 1
+                fi
+                restart_check_completed=true
+                break
+            fi
+            sleep 2
+        done
+        if [[ $restart_check_completed != true ]]; then
+            echo "Pod $restart_check_pod не завершился на ноде $node" >&2
             exit 1
         fi
+
+        sleep 3
+        restart_check_phase=$(kubectl -n default get pod "$restart_check_pod" \
+            -o jsonpath='{.status.phase}')
+        restart_count=$(kubectl -n default get pod "$restart_check_pod" \
+            -o jsonpath='{.status.containerStatuses[0].restartCount}')
+        restart_check_exit_code=$(kubectl -n default get pod "$restart_check_pod" \
+            -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}')
         restart_check_reason=$(kubectl -n default get pod "$restart_check_pod" \
-            -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}' 2>/dev/null || true)
-        if [[ $restart_check_reason == Completed ]]; then
-            restart_check_completed=true
-            break
+            -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}')
+        if [[ $restart_check_phase != "$expected_phase" || $restart_count != 0 ||
+            $restart_check_exit_code != "$expected_exit_code" ||
+            $restart_check_reason != "$expected_reason" ]]; then
+            echo "Pod $restart_check_pod изменил состояние после завершения на ноде $node" >&2
+            exit 1
         fi
-        sleep 2
+        kubectl -n default delete pod "$restart_check_pod" --wait=true --timeout=60s >/dev/null
     done
-    if [[ $restart_check_completed != true ]]; then
-        echo "ноде $node не удалось проверить политику перезапуска контейнера" >&2
-        exit 1
-    fi
-    sleep 3
-    restart_count=$(kubectl -n default get pod "$restart_check_pod" \
-        -o jsonpath='{.status.containerStatuses[0].restartCount}')
-    if [[ $restart_count != 0 ]]; then
-        echo "ContainerRestartRules не работает на ноде $node" >&2
-        exit 1
-    fi
-    kubectl -n default delete pod "$restart_check_pod" --wait=true >/dev/null
     restart_check_index=$((restart_check_index + 1))
 done < <(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 if ((restart_check_index == 0)); then
