@@ -344,6 +344,9 @@ grep -Fxq '  - --kubelet-preferred-address-types=Hostname,InternalDNS,InternalIP
     "$repo_root/deploy/prod/metrics-server-values.yaml"
 grep -Fxq '  - --kubelet-certificate-authority=/etc/kubelet-ca/ca.crt' \
     "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq 'containerPort: 4443' "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -A1 -Fx 'hostNetwork:' "$repo_root/deploy/prod/metrics-server-values.yaml" | \
+    grep -Fxq '  enabled: true'
 if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-values.yaml"; then
     echo "проверка TLS kubelet отключена в значениях chart" >&2
     exit 1
@@ -383,6 +386,11 @@ run_case metrics-api-unavailable "$work_dir/metrics-api-unavailable.log"
 [[ $case_status == 1 ]]
 grep -Fq 'API metrics.k8s.io не достиг состояния Available' \
     "$work_dir/metrics-api-unavailable.log"
+grep -Fq 'get service,endpoints,endpointslices -l app.kubernetes.io/instance=metrics-server -o wide' \
+    "$state_dir/kubectl.log"
+grep -Fq 'describe apiservice v1beta1.metrics.k8s.io' "$state_dir/kubectl.log"
+grep -Fq 'logs -l app.kubernetes.io/instance=metrics-server --all-containers=true --prefix=true --tail=200' \
+    "$state_dir/kubectl.log"
 if grep -Fq 'auth can-i --as=system:serviceaccount:valkey-system:managed-valkey-operator' \
     "$state_dir/kubectl.log"; then
     echo "проверка продолжилась при недоступном metrics.k8s.io" >&2

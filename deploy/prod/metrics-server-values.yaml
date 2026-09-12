@@ -7,6 +7,11 @@ defaultArgs:
 args:
   - --kubelet-certificate-authority=/etc/kubelet-ca/ca.crt
 
+containerPort: 4443
+
+hostNetwork:
+  enabled: true
+
 extraVolumeMounts:
   - name: kubelet-ca
     mountPath: /etc/kubelet-ca
