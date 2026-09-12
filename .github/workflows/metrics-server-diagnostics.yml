@@ -23,6 +23,16 @@ jobs:
             -l app.kubernetes.io/instance=metrics-server \
             -o wide
           kubectl -n kube-system get deployment metrics-server -o yaml
+          node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          kubectl get certificatesigningrequests -o json | jq -r \
+            --arg username "system:node:$node" \
+            '.items[] | select(.spec.username == $username and (.status.certificate // "") != "") | [.metadata.creationTimestamp, .metadata.name, .spec.signerName, .status.certificate] | @tsv' | \
+            sort | tail -n 1 | while IFS=$'\t' read -r created name signer certificate; do
+              echo "CSR $name, создан $created, signerName=$signer"
+              printf '%s' "$certificate" | base64 -d | \
+                openssl x509 -noout -subject -issuer -ext subjectAltName -fingerprint -sha256
+            done
+          kubectl -n kube-system get configmaps -o name | sort
           while IFS= read -r pod; do
             echo "Логи $pod"
             kubectl -n kube-system logs "$pod" --all-containers=true --tail=100
