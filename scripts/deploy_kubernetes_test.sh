@@ -73,11 +73,11 @@ fi
 if [[ ${1:-} == apply && ${2:-} == -f && ${3:-} == - ]]; then
     payload=$TEST_KUBECTL_STATE/payload.$$
     cat >"$payload"
+    printf '%s\n' '---' >>"$TEST_KUBECTL_YAML_LOG"
+    cat "$payload" >>"$TEST_KUBECTL_YAML_LOG"
     if grep -Fq 'kind: Pod' "$payload"; then
         pod=$(awk '$1 == "name:" { print $2; exit }' "$payload")
         cp "$payload" "$TEST_KUBECTL_STATE/active/$pod"
-        printf '%s\n' '---' >>"$TEST_KUBECTL_YAML_LOG"
-        cat "$payload" >>"$TEST_KUBECTL_YAML_LOG"
     fi
     rm -f -- "$payload"
     exit 0
@@ -133,6 +133,10 @@ if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == namespace/valkey-syst
 fi
 if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
     ${3:-} == patch && ${4:-} == deployment && ${5:-} == metrics-server ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == patch &&
+    ${2:-} == apiservice && ${3:-} == v1beta1.metrics.k8s.io ]]; then
     exit 0
 fi
 if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
@@ -345,8 +349,8 @@ grep -Fxq '  - --kubelet-preferred-address-types=Hostname,InternalDNS,InternalIP
 grep -Fxq '  - --kubelet-certificate-authority=/etc/kubelet-ca/ca.crt' \
     "$repo_root/deploy/prod/metrics-server-values.yaml"
 grep -Fxq 'containerPort: 4443' "$repo_root/deploy/prod/metrics-server-values.yaml"
-grep -A1 -Fx 'hostNetwork:' "$repo_root/deploy/prod/metrics-server-values.yaml" | \
-    grep -Fxq '  enabled: true'
+grep -Fxq 'hostNetwork:' "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq '  enabled: true' "$repo_root/deploy/prod/metrics-server-values.yaml"
 if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-values.yaml"; then
     echo "проверка TLS kubelet отключена в значениях chart" >&2
     exit 1
@@ -356,6 +360,11 @@ grep -Fq -- "-n kube-system create configmap metrics-server-kubelet-ca --from-fi
 grep -Fq -- '-n kube-system patch deployment metrics-server --type=merge --patch' \
     "$state_dir/kubectl.log"
 grep -Fq -- '"hostAliases":[{"ip":"10.17.0.35","hostnames":["node-a"]}]' \
+    "$state_dir/kubectl.log"
+grep -Fq '  name: metrics-server-control-plane' "$state_dir/pods.yaml"
+grep -Fq '  externalName: cert-manager-webhook.valkey.h3llo-demo.com' \
+    "$state_dir/pods.yaml"
+grep -Fq -- 'patch apiservice v1beta1.metrics.k8s.io --type=merge --patch {"spec":{"service":{"name":"metrics-server-control-plane","namespace":"kube-system","port":4443}}}' \
     "$state_dir/kubectl.log"
 
 run_case metrics-deployment-unavailable "$work_dir/metrics-deployment-unavailable.log"

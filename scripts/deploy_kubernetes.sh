@@ -228,6 +228,23 @@ metrics_server_patch=$(jq -cn \
 kubectl -n kube-system patch deployment metrics-server \
     --type=merge \
     --patch "$metrics_server_patch"
+kubectl apply -f - <<YAML
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-server-control-plane
+  namespace: kube-system
+spec:
+  type: ExternalName
+  externalName: $cert_manager_webhook_host
+  ports:
+    - name: https
+      port: 4443
+      protocol: TCP
+YAML
+kubectl patch apiservice v1beta1.metrics.k8s.io \
+    --type=merge \
+    --patch '{"spec":{"service":{"name":"metrics-server-control-plane","namespace":"kube-system","port":4443}}}'
 if ! kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s; then
     kubectl -n kube-system get deployment,pods \
         -l app.kubernetes.io/instance=metrics-server \
