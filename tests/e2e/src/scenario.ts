@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
-import { expect } from '@playwright/test';
-import type { Valkey } from 'iovalkey';
-import type { ValkeySize } from './console.ts';
+import { randomUUID } from "node:crypto";
+import { expect } from "@playwright/test";
+import type { Valkey } from "iovalkey";
+import type { ValkeySize } from "./console.ts";
 import {
   canConnect,
   connectValkey,
@@ -9,7 +9,7 @@ import {
   expectedMaxmemoryBytes,
   readMaxmemory,
   type ValkeyEndpoint,
-} from './valkey.ts';
+} from "./valkey.ts";
 
 export function scenarioIdentity(prefix: string) {
   const suffix = randomUUID().slice(0, 6);
@@ -26,7 +26,7 @@ export function sameSize(left: ValkeySize, right: ValkeySize) {
 export function minimumSize(sizes: readonly ValkeySize[]) {
   const size = sizes[0];
   if (!size) {
-    throw new Error('Каталог Valkey пуст');
+    throw new Error("Каталог Valkey пуст");
   }
   return size;
 }
@@ -36,10 +36,10 @@ export function nextSize(sizes: readonly ValkeySize[], current: ValkeySize) {
     (candidate) =>
       candidate.vcpu >= current.vcpu &&
       candidate.ramGb >= current.ramGb &&
-      !sameSize(candidate, current)
+      !sameSize(candidate, current),
   );
   if (!size) {
-    throw new Error('В каталоге нет следующей конфигурации для проверки изменения размера');
+    throw new Error("В каталоге нет следующей конфигурации для проверки изменения размера");
   }
   return size;
 }
@@ -47,7 +47,7 @@ export function nextSize(sizes: readonly ValkeySize[], current: ValkeySize) {
 export async function assertValkeyReadWrite(
   endpoint: ValkeyEndpoint,
   keyPrefix: string,
-  expectedSize: ValkeySize
+  expectedSize: ValkeySize,
 ) {
   await expect(async () => {
     const client = await connectValkey(endpoint);
@@ -57,7 +57,7 @@ export async function assertValkeyReadWrite(
       await client.set(key, value);
       expect(await client.get(key)).toBe(value);
       expect(await readMaxmemory(client)).toBe(expectedMaxmemoryBytes(expectedSize.ramGb));
-      expect(await client.info()).toContain('redis_version');
+      expect(await client.info()).toContain("redis_version");
     } finally {
       await disconnectValkey(client);
     }
@@ -68,7 +68,7 @@ export async function assertValkeyReadOnly(
   primary: ValkeyEndpoint,
   readOnly: ValkeyEndpoint,
   keyPrefix: string,
-  expectedSize: ValkeySize
+  expectedSize: ValkeySize,
 ) {
   await expect(async () => {
     const primaryClient = await connectValkey(primary);
@@ -88,16 +88,40 @@ export async function assertValkeyReadOnly(
   }).toPass({ timeout: 5 * 60_000, intervals: [100, 250, 500, 1_000] });
 }
 
+export async function assertValkeySharedPrimary(
+  primary: ValkeyEndpoint,
+  readOnly: ValkeyEndpoint,
+  keyPrefix: string,
+  expectedSize: ValkeySize,
+) {
+  await expect(async () => {
+    const primaryClient = await connectValkey(primary);
+    const readOnlyClient = await connectValkey(readOnly);
+    try {
+      const key = `${keyPrefix}:${randomUUID()}`;
+      const value = randomUUID();
+      await primaryClient.set(key, value);
+      await expect.poll(() => readOnlyClient.get(key), { timeout: 30_000 }).toBe(value);
+      await readOnlyClient.set(`${key}:read-address`, value);
+      expect(await primaryClient.get(`${key}:read-address`)).toBe(value);
+      expect(await readMaxmemory(primaryClient)).toBe(expectedMaxmemoryBytes(expectedSize.ramGb));
+      expect(await readMaxmemory(readOnlyClient)).toBe(expectedMaxmemoryBytes(expectedSize.ramGb));
+    } finally {
+      await Promise.all([disconnectValkey(primaryClient), disconnectValkey(readOnlyClient)]);
+    }
+  }).toPass({ timeout: 5 * 60_000, intervals: [100, 250, 500, 1_000] });
+}
+
 export async function waitForConnectionClose(client: Valkey, timeoutMs = 5 * 60_000) {
-  if (client.status !== 'ready') {
+  if (client.status !== "ready") {
     return;
   }
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
-      () => reject(new Error('Прежнее соединение Valkey не закрылось')),
-      timeoutMs
+      () => reject(new Error("Прежнее соединение Valkey не закрылось")),
+      timeoutMs,
     );
-    client.once('close', () => {
+    client.once("close", () => {
       clearTimeout(timeout);
       resolve();
     });

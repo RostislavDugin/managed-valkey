@@ -45,7 +45,8 @@ func Test_RunValkeyLifecycle_WithHttpAndPostgreSql_PersistsStateBillingAuditAndS
 	})
 	if created.Status != "provisioning" || created.DesiredGeneration != 1 || created.ObservedGeneration != 0 ||
 		created.AppliedVCPU != 0 || created.AppliedRAMGB != 0 ||
-		!created.IsStale || !created.IsUpdating || created.HostRO != nil ||
+		!created.IsStale || !created.IsUpdating || created.HostRO == nil ||
+		*created.HostRO != created.Slug+"-ro.valkey.localhost" ||
 		created.Host != created.Slug+".valkey.localhost" || created.Port != 41379 {
 		t.Fatalf("неожиданное начальное состояние: %+v", created)
 	}
@@ -103,6 +104,7 @@ func Test_RunValkeyLifecycle_WithHttpAndPostgreSql_PersistsStateBillingAuditAndS
 	assertStatus(t, credentials, http.StatusOK)
 	credentialsBody := decodeResponse[valkeydomain.Credentials](t, credentials)
 	if credentialsBody.Username != "app" || credentialsBody.PasswordHint != testValkeyPassword[:4]+"*****" ||
+		credentialsBody.HostRO == nil || *credentialsBody.HostRO != *created.HostRO ||
 		containsAny(string(credentials.Body), testValkeyPassword, record.AppPasswordHash) {
 		t.Fatalf("небезопасный ответ credentials: %s", credentials.Body)
 	}

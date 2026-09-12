@@ -17,11 +17,16 @@ mkdir -p "$mock_bin"
 write_script "$mock_bin/curl" 'exit 0'
 write_script "$mock_bin/go" \
     'case "$*" in' \
-    '*"tool goose"*) exit 0 ;;' \
+    '*"test -tags integration -list "*)' \
+    '    [[ "$*" == *"Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning"* ]] || exit 0' \
+    '    printf '\''Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning\n'\''' \
+    '    exit 0 ;;' \
+    '*"tool goose"*) : >"$MV_FAKE_MIGRATION_STARTED"; exit 0 ;;' \
     '*"run ./api/cmd/api"*) component=api ;;' \
     '*"run -tags integration ./operator/cmd/operator"*) component=operator ;;' \
     '*"test -tags integration"*)' \
     '    : >"$MV_FAKE_TEST_STARTED"' \
+    '    printf '\''%s\n'\'' "$*" >"$MV_FAKE_TEST_ARGS"' \
     '    env >"$MV_FAKE_TEST_ENV"' \
     '    if [[ "${MV_FAKE_TEST_FAIL:-0}" == 1 ]]; then' \
     '        printf '\''status=provisioning\n'\'' >"$MANAGED_VALKEY_INTEGRATION_DIAGNOSTICS_DIR/last-http-failed.txt"' \
@@ -57,8 +62,14 @@ process_is_live() {
 
 run_script() {
     local state=$1
+    local selection=()
 
-    PATH="$mock_bin:$PATH" \
+    if [[ -v MV_INTEGRATION_TEST ]]; then
+        selection=(MV_INTEGRATION_TEST="$MV_INTEGRATION_TEST")
+    fi
+
+    env \
+        PATH="$mock_bin:$PATH" \
         ADMIN_KUBECONFIG="$state/admin.kubeconfig" \
         API_KUBECONFIG="$state/api.kubeconfig" \
         DIAGNOSTICS_DIR="$state/diagnostics" \
@@ -66,7 +77,9 @@ run_script() {
         MANAGED_VALKEY_PUBLIC_ADDRESS=127.0.0.1:31379 \
         MV_FAKE_STARTED_DIR="$state/started" \
         MV_FAKE_TEST_ENV="$state/test.env" \
+        MV_FAKE_TEST_ARGS="$state/test.args" \
         MV_FAKE_TEST_STARTED="$state/test-started" \
+        MV_FAKE_MIGRATION_STARTED="$state/migration-started" \
         MV_INTEGRATION_STOP_GRACE_SECONDS=2 \
         MV_RUN_ID=integration-shell-test \
         MV_STATE_DIR="$state" \
@@ -74,6 +87,7 @@ run_script() {
         OPERATOR_KUBECONFIG="$state/operator.kubeconfig" \
         TEST_DATABASE_URL=postgres://test \
         VALKEY_BASE_DOMAIN=integration.valkey.localhost \
+        "${selection[@]}" \
         "$repo_root/scripts/test_integrations.sh"
 }
 
@@ -96,6 +110,36 @@ rg -q '^script[[:space:]][0-9]+$' "$normal_state/diagnostics/durations.tsv"
 while IFS=$'\t' read -r pid name _; do
     [[ "$name" != api && "$name" != operator ]] || ! process_is_live "$pid"
 done <"$normal_state/processes.tsv"
+
+selected_state="$temporary/selected"
+prepare_state "$selected_state"
+mkdir -p "$selected_state/started"
+MV_INTEGRATION_TEST=Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning \
+    run_script "$selected_state"
+rg -q -- '-run \^Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning\$' \
+    "$selected_state/test.args"
+
+empty_state="$temporary/empty-selection"
+prepare_state "$empty_state"
+mkdir -p "$empty_state/started"
+if MV_INTEGRATION_TEST= run_script "$empty_state" >/dev/null 2>&1; then
+    echo "пустое имя интеграционного теста было принято" >&2
+    exit 1
+fi
+[[ ! -e "$empty_state/migration-started" ]]
+[[ ! -e "$empty_state/test-started" ]]
+[[ ! -e "$empty_state/integration-secret-values" ]]
+
+unknown_state="$temporary/unknown-selection"
+prepare_state "$unknown_state"
+mkdir -p "$unknown_state/started"
+if MV_INTEGRATION_TEST=Test_Unknown run_script "$unknown_state" >/dev/null 2>&1; then
+    echo "неизвестный интеграционный тест был принят" >&2
+    exit 1
+fi
+[[ ! -e "$unknown_state/migration-started" ]]
+[[ ! -e "$unknown_state/test-started" ]]
+[[ ! -e "$unknown_state/integration-secret-values" ]]
 
 failed_state="$temporary/failed"
 prepare_state "$failed_state"

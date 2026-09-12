@@ -150,6 +150,16 @@ func Test_DesiredOperatorResources_WithOwnerMetadata_AddsDescriptionsWithoutChan
 
 func Test_DesiredServicesAndNetworkPolicy_WithSingleMode_ExposePrimaryAndRestrictTraffic(t *testing.T) {
 	instance := completeAcceptedInstance()
+	endpoints := networkEndpoints(instance)
+	if len(endpoints) != 2 || endpoints[0].suffix != "" || endpoints[0].backendSuffix != "-primary" ||
+		endpoints[1].suffix != "-ro" || endpoints[1].backendSuffix != "-primary" {
+		t.Fatalf("single получил неверные публичные endpoints: %+v", endpoints)
+	}
+	readRoute := desiredTCPRoute(instance, "valkey-system", endpoints[1])
+	if readRoute.Name != "cache-a1b2c3-ro" ||
+		string(readRoute.Spec.Rules[0].BackendRefs[0].Name) != "cache-a1b2c3-primary" {
+		t.Fatalf("маршрут чтения single не ведёт на primary: %+v", readRoute.Spec)
+	}
 	services := desiredServices(instance)
 	if len(services) != 2 || services[0].Name != "cache-a1b2c3-hl" || services[1].Name != "cache-a1b2c3-primary" {
 		t.Fatalf("созданы неверные Services: %v, %v", services[0].Name, services[1].Name)

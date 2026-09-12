@@ -4,7 +4,7 @@ export const VALKEY_PASSWORD_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 export interface ValkeyCredentials {
   host: string;
-  hostRo: string | null;
+  hostRo: string;
   port: number;
   username: 'app';
   passwordHint: string;

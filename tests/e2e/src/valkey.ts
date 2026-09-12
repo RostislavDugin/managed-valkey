@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { Valkey } from 'iovalkey';
+import { readFileSync } from "node:fs";
+import { Valkey } from "iovalkey";
 
 export interface ValkeyEndpoint {
   host: string;
@@ -9,7 +9,7 @@ export interface ValkeyEndpoint {
 
 export interface ValkeyInstanceConnection {
   primary: ValkeyEndpoint;
-  readOnly?: ValkeyEndpoint;
+  readOnly: ValkeyEndpoint;
 }
 
 function tlsOptions(host: string) {
@@ -24,7 +24,7 @@ export function newValkeyClient(endpoint: ValkeyEndpoint, reconnect = false) {
   return new Valkey({
     host: endpoint.host,
     port: endpoint.port,
-    username: 'app',
+    username: "app",
     password: endpoint.password,
     tls: tlsOptions(endpoint.host),
     lazyConnect: true,
@@ -38,7 +38,7 @@ export function newValkeyClient(endpoint: ValkeyEndpoint, reconnect = false) {
 
 export async function connectValkey(endpoint: ValkeyEndpoint, reconnect = false) {
   const client = newValkeyClient(endpoint, reconnect);
-  client.on('error', () => undefined);
+  client.on("error", () => undefined);
   try {
     await client.connect();
     return client;
@@ -49,7 +49,7 @@ export async function connectValkey(endpoint: ValkeyEndpoint, reconnect = false)
 }
 
 export async function disconnectValkey(client: Valkey) {
-  if (client.status === 'end') {
+  if (client.status === "end") {
     return;
   }
   client.disconnect(false);
@@ -57,7 +57,7 @@ export async function disconnectValkey(client: Valkey) {
 
 export function parseInfoValue(info: string, field: string) {
   const line = info
-    .split('\n')
+    .split("\n")
     .map((item) => item.trim())
     .find((item) => item.startsWith(`${field}:`));
   if (!line) {
@@ -67,7 +67,7 @@ export function parseInfoValue(info: string, field: string) {
 }
 
 export async function readMaxmemory(client: Valkey) {
-  const raw = parseInfoValue(await client.info('memory'), 'maxmemory');
+  const raw = parseInfoValue(await client.info("memory"), "maxmemory");
   const value = Number.parseInt(raw, 10);
   if (!Number.isSafeInteger(value)) {
     throw new Error(`Некорректное значение maxmemory: ${raw}`);

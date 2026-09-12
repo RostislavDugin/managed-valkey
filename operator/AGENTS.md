@@ -40,8 +40,16 @@ RBAC, `envtest` для тестов Kubernetes API, `slog` через общий
 | `just test` | запускает unit/envtest без k3s |
 | `just test-full` | добавляет сценарии `single`, `ha`, изменений и отказов на отдельных k3s |
 
-Перед завершением задачи выполняй `just format`, `just lint` и `just test`.
-`just test-full` нужен после изменений поведения оператора или его k3s-обвязки.
+Перед завершением задачи запускай форматирование, линтер, сборку и затронутые
+unit/envtest. Для изменения одного k3s-сценария запускай только его:
+
+```text
+MV_OPERATOR_TEST_SCENARIO=single-lifecycle ../scripts/test_operator.sh
+```
+
+Значение должно точно совпадать с первым столбцом
+`../scripts/operator_test_scenarios.tsv`. Полный `just test-full` запускай только
+по отдельному запросу или для проверки всей матрицы перед релизом.
 `just format` добавляет изменения `operator` и общего `internal` в индекс,
 поэтому сначала проверь, что другой агент не меняет эти файлы.
 `just run` требует dev-кластер, подготовленный командой
@@ -148,8 +156,9 @@ Valkey фильтруют аргументы `AUTH` и `ACL SETUSER`.
 воздействуют на его Pod либо Lease. Каждый сценарий из
 `../scripts/operator_test_scenarios.tsv` получает независимый k3s
 из 1–4 нод и одну или две реплики Envoy. Тест создаёт `ValkeyInstance` и входные
-Secret напрямую через Kubernetes, без HTTP API и PostgreSQL. Сценарии, которые
-ещё не реализованы, перечислены в [TODO.md](TODO.md).
+Secret напрямую через Kubernetes, без HTTP API и PostgreSQL. Каталог и тест
+запускаются точечно через `MV_OPERATOR_TEST_SCENARIO` либо целиком через
+`just test-full`.
 
 Очередь по умолчанию допускает 12 сценариев, но общий бюджет 28672 MiB и
 минимум 3072 MiB свободной памяти могут снизить фактическое число стендов.
@@ -159,6 +168,6 @@ Secret напрямую через Kubernetes, без HTTP API и PostgreSQL. С
 `MV_TEST_MEMORY_BUDGET_MIB`, `MV_TEST_MIN_AVAILABLE_MIB` и
 `MV_TEST_MAX_PARALLEL_BOOTSTRAPS`.
 
-Корневые e2e-тесты проходят через HTTP API. Текущий набор проверяет регистрацию
-без создания Valkey; будущие сквозные сценарии будут подключаться к созданному
-Valkey. Они не входят в тесты оператора.
+Корневые e2e-тесты проходят через личный кабинет, HTTP API и настоящий оператор.
+Они проверяют жизненные циклы `single` и `ha`, квоты, потерю primary Pod и
+worker-ноды. Эти сценарии не входят в тесты оператора.

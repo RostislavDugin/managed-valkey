@@ -8,6 +8,7 @@ import type { ValkeyCredentials } from '../model/valkey-credentials';
 import { getRequestErrorMessage } from '../model/valkey-form';
 import { ConnectionExamples } from './ConnectionExamples';
 import { CopyAction } from './CopyAction';
+import { MaintenanceInstanceModal } from './MaintenanceInstanceModal';
 import { ResizeInstanceModal } from './ResizeInstanceModal';
 import { useValkeyInstance } from './ValkeyInstanceLayout';
 import { ValkeyPasswordModal } from './ValkeyPasswordModal';
@@ -28,6 +29,7 @@ export function ValkeyInstancePage() {
   const [resizeOpened, setResizeOpened] = useState(false);
   const [passwordOpened, setPasswordOpened] = useState(false);
   const [whitelistOpened, setWhitelistOpened] = useState(false);
+  const [maintenanceOpened, setMaintenanceOpened] = useState(false);
   const [credentials, setCredentials] = useState<ValkeyCredentials | null>(null);
   const [credentialsError, setCredentialsError] = useState<string | null>(null);
   const credentialsRequestRef = useRef(0);
@@ -115,8 +117,8 @@ export function ValkeyInstancePage() {
   const host = credentials?.host ?? instance.host;
   const hostRo = credentials?.hostRo ?? instance.hostRo;
   const port = credentials?.port ?? instance.port;
-  const address = `${host}:${port}`;
-  const readOnlyAddress = hostRo ? `${hostRo}:${port}` : null;
+  const address = `redis://${host}:${port}`;
+  const readOnlyAddress = `redis://${hostRo}:${port}`;
   const canConfigure =
     !instance.isUpdating &&
     !instance.isStale &&
@@ -126,33 +128,31 @@ export function ValkeyInstancePage() {
   return (
     <Container className={`${styles.page} ${styles.instanceContent}`} fluid>
       <Stack gap="h3_lg">
-        <ConnectionExamples host={host} port={port} />
+        <ConnectionExamples host={host} hostRo={hostRo} port={port} />
 
         <div className={styles.properties}>
           <PropertyRow
-            label="Адрес"
+            label="Primary"
             value={
               <Group gap="h3_xs" wrap="nowrap">
                 <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
                   {address}
                 </Text>
-                <CopyAction label="Скопировать адрес" value={address} />
+                <CopyAction label="Скопировать Primary" value={address} />
               </Group>
             }
           />
-          {readOnlyAddress && (
-            <PropertyRow
-              label="Адрес только для чтения"
-              value={
-                <Group gap="h3_xs" wrap="nowrap">
-                  <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
-                    {readOnlyAddress}
-                  </Text>
-                  <CopyAction label="Скопировать адрес только для чтения" value={readOnlyAddress} />
-                </Group>
-              }
-            />
-          )}
+          <PropertyRow
+            label="Для чтения"
+            value={
+              <Group gap="h3_xs" wrap="nowrap">
+                <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
+                  {readOnlyAddress}
+                </Text>
+                <CopyAction label="Скопировать адрес для чтения" value={readOnlyAddress} />
+              </Group>
+            }
+          />
           {credentialsError ? (
             <Alert
               className={styles.credentialsError}
@@ -246,7 +246,7 @@ export function ValkeyInstancePage() {
             }
           />
           <PropertyRow
-            label="Доступ по IP"
+            label="Белый список"
             value={
               <Group gap="h3_xs" wrap="wrap">
                 <Text c="h3_text_2" size="h3_sm">
@@ -257,7 +257,7 @@ export function ValkeyInstancePage() {
                     : 'Без ограничений'}
                 </Text>
                 <Text
-                  aria-label="Изменить доступ по IP"
+                  aria-label="Изменить белый список"
                   className={`${styles.inlineAction} ${styles.touchTarget}`}
                   component="button"
                   disabled={!canConfigure}
@@ -272,11 +272,23 @@ export function ValkeyInstancePage() {
           <PropertyRow
             label="Окно обслуживания"
             value={
-              <Text c="h3_text_2" size="h3_sm">
-                {instance.maintenance
-                  ? `День ${instance.maintenance.dow}, ${instance.maintenance.hourUtc}:00 UTC, ${instance.maintenance.durationMin} мин.`
-                  : 'Не задано'}
-              </Text>
+              <Group gap="h3_xs" wrap="wrap">
+                <Text c="h3_text_2" size="h3_sm">
+                  {instance.maintenance
+                    ? `День ${instance.maintenance.dow}, ${instance.maintenance.hourUtc}:00 UTC, ${instance.maintenance.durationMin} мин.`
+                    : 'Не задано'}
+                </Text>
+                <Text
+                  aria-label="Изменить окно обслуживания"
+                  className={`${styles.inlineAction} ${styles.touchTarget}`}
+                  component="button"
+                  disabled={instance.status === 'deleting'}
+                  onClick={() => setMaintenanceOpened(true)}
+                  size="h3_sm"
+                >
+                  (изменить)
+                </Text>
+              </Group>
             }
           />
           <PropertyRow
@@ -288,7 +300,7 @@ export function ValkeyInstancePage() {
             }
           />
           <PropertyRow
-            label="Создана"
+            label="Создано"
             value={
               <Text c="h3_text_2" size="h3_sm">
                 {formatDateTime(instance.createdAt)} ({formatRelativeTime(instance.createdAt)})
@@ -310,6 +322,13 @@ export function ValkeyInstancePage() {
       <WhitelistModal
         instance={whitelistOpened ? instance : null}
         onClose={() => setWhitelistOpened(false)}
+        onRefresh={refresh}
+        onUpdated={applyUpdate}
+      />
+
+      <MaintenanceInstanceModal
+        instance={maintenanceOpened ? instance : null}
+        onClose={() => setMaintenanceOpened(false)}
         onRefresh={refresh}
         onUpdated={applyUpdate}
       />

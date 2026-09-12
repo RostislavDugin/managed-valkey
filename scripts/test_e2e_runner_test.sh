@@ -25,7 +25,7 @@ write_script "$mock_bin/curl" \
     'esac'
 write_script "$mock_bin/go" \
     'case "$*" in' \
-    '*"tool goose"*) exit 0 ;;' \
+    '*"tool goose"*) : >"$MV_E2E_FAKE_MIGRATION_STARTED"; exit 0 ;;' \
     '*"run ./api/cmd/api"*) component=api ;;' \
     '*"run -tags integration ./operator/cmd/operator"*) component=operator ;;' \
     '*) exit 2 ;;' \
@@ -71,9 +71,13 @@ run_script() {
 		MANAGED_K8S_CLUSTER_VCPU=21
 		MANAGED_K8S_CLUSTER_RAM_GB=69
     )
+    local selection=()
 
     if [[ ${MV_E2E_USE_DEFAULT_CAPACITY:-} == 1 ]]; then
 		capacity=()
+    fi
+    if [[ -v MANAGED_VALKEY_E2E_FILE ]]; then
+        selection=(MANAGED_VALKEY_E2E_FILE="$MANAGED_VALKEY_E2E_FILE")
     fi
 
     env \
@@ -90,6 +94,7 @@ run_script() {
         VALKEY_INTEGRATION_REQUEST_MEMORY=128Mi \
         MV_E2E_FAKE_STUBBORN="${MV_E2E_FAKE_STUBBORN:-}" \
         MV_E2E_FAKE_STARTED="$state/started" \
+        MV_E2E_FAKE_MIGRATION_STARTED="$state/migration-started" \
         MV_E2E_READY_TIMEOUT_SECONDS=2 \
         MV_E2E_STOP_GRACE_SECONDS="${MV_E2E_STOP_GRACE_SECONDS:-2}" \
         MV_RUN_ID=e2e-shell-test \
@@ -99,6 +104,7 @@ run_script() {
         TEST_DATABASE_URL=postgres://test \
         VALKEY_BASE_DOMAIN=e2e.valkey.localhost \
         "${capacity[@]}" \
+        "${selection[@]}" \
         "$repo_root/scripts/test_e2e.sh"
 }
 
@@ -132,6 +138,32 @@ done
 while IFS=$'\t' read -r pid name _; do
     [[ "$name" != api && "$name" != operator && "$name" != web ]] || ! process_is_live "$pid"
 done <"$normal_state/processes.tsv"
+
+selected_state="$temporary/selected"
+prepare_state "$selected_state"
+MANAGED_VALKEY_E2E_FILE=00-single-lifecycle.spec.ts run_script "$selected_state"
+rg -q ' exec playwright test specs/00-single-lifecycle\.spec\.ts$' \
+    "$selected_state/started/playwright.args"
+
+empty_state="$temporary/empty-selection"
+prepare_state "$empty_state"
+if MANAGED_VALKEY_E2E_FILE= run_script "$empty_state" >/dev/null 2>&1; then
+    echo "пустое имя файла Playwright было принято" >&2
+    exit 1
+fi
+[[ ! -e "$empty_state/migration-started" ]]
+[[ ! -e "$empty_state/e2e-secret-values" ]]
+[[ ! -e "$empty_state/started/api" ]]
+
+unknown_state="$temporary/unknown-selection"
+prepare_state "$unknown_state"
+if MANAGED_VALKEY_E2E_FILE=unknown.spec.ts run_script "$unknown_state" >/dev/null 2>&1; then
+    echo "неизвестный файл Playwright был принят" >&2
+    exit 1
+fi
+[[ ! -e "$unknown_state/migration-started" ]]
+[[ ! -e "$unknown_state/e2e-secret-values" ]]
+[[ ! -e "$unknown_state/started/api" ]]
 
 defaults_state="$temporary/defaults"
 prepare_state "$defaults_state"

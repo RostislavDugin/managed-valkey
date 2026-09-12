@@ -29,7 +29,7 @@ func Test_CreateValkey_WithCanonicalReplayAndExpiredKey_ReplaysOrCreatesAsExpect
 		"whitelist_cidrs":["192.0.2.1/24","192.0.2.0/24"]
 	}`
 	secondBody := `{"whitelist_cidrs":["192.0.2.0/24"],"password":"` + testValkeyPassword +
-		`","ram_gb":1,"vcpu":1,"mode":"single","prefix":"idem","name":"idempotent-cache","is_whitelist_enabled":true}`
+		`","ram_gb":1,"vcpu":1,"mode":"single","prefix":"idem","name":"idempotent-cache","is_whitelist_enabled":true,"maintenance":null}`
 
 	first := app.requestRaw(t, http.MethodPost, "/v1/managed/valkey/instances", firstBody, headers)
 	assertStatus(t, first, http.StatusAccepted)
@@ -92,6 +92,41 @@ func Test_CreateValkey_WithCanonicalReplayAndExpiredKey_ReplaysOrCreatesAsExpect
 		"password": testValkeyPassword,
 	}, expiringHeaders)
 	assertStatus(t, newRequest, http.StatusAccepted)
+}
+
+func Test_CreateValkey_WithMaintenance_ReplaysAndPersistsInitialWindow(t *testing.T) {
+	app := newHTTPTestAPI(t, testAPIConfig{})
+	account := app.registerAccount(t, "")
+	key := uuid.NewString()
+	body := map[string]any{
+		"name": "maintained-cache", "prefix": "maintained", "mode": "single", "vcpu": 1, "ram_gb": 1,
+		"password":    testValkeyPassword,
+		"maintenance": map[string]any{"dow": 6, "hour_utc": 23, "duration_min": 1440},
+	}
+	headers := mergeHeaders(bearer(account.Token), map[string]string{"Idempotency-Key": key})
+
+	first := app.requestJSON(t, http.MethodPost, "/v1/managed/valkey/instances", body, headers)
+	assertStatus(t, first, http.StatusAccepted)
+	created := decodeResponse[valkeydomain.Instance](t, first)
+	if created.Maintenance == nil || created.Maintenance.DOW != 6 || created.Maintenance.HourUTC != 23 ||
+		created.Maintenance.DurationMin != 1440 || created.DesiredGeneration != 1 {
+		t.Fatalf("начальное окно обслуживания не сохранено: %+v", created)
+	}
+
+	replayed := app.requestJSON(t, http.MethodPost, "/v1/managed/valkey/instances", body, headers)
+	assertStatus(t, replayed, http.StatusAccepted)
+	if string(replayed.Body) != string(first.Body) {
+		t.Fatalf("повтор создания изменил ответ: %s != %s", replayed.Body, first.Body)
+	}
+	record := loadValkey(t, app, created.ID)
+	if record.MaintenanceDOW == nil || *record.MaintenanceDOW != 6 || record.MaintenanceHourUTC == nil ||
+		*record.MaintenanceHourUTC != 23 || record.MaintenanceDurationMin == nil ||
+		*record.MaintenanceDurationMin != 1440 {
+		t.Fatalf("окно обслуживания отсутствует в строке инстанса: %+v", record)
+	}
+	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", account.ID), 1)
+	assertDatabaseCount(t, app.database.DB().Model(&store.AuditLog{}).Where("resource_id = ?", created.ID), 1)
+	assertDatabaseCount(t, app.database.DB().Model(&store.BillingPeriod{}).Where("resource_id = ?", created.ID), 1)
 }
 
 func Test_CreateValkey_AfterValidationError_ReusesIdempotencyKeySuccessfully(t *testing.T) {

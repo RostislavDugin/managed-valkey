@@ -9,6 +9,7 @@ import {
   Checkbox,
   Container,
   Group,
+  NumberInput,
   Radio,
   SimpleGrid,
   Skeleton,
@@ -61,6 +62,9 @@ import {
   getRequestErrorMessage,
   shouldReuseSubmission,
   SUPPORT_URL,
+  validateMaintenanceDow,
+  validateMaintenanceDurationMin,
+  validateMaintenanceHourUtc,
   type CreateFormValues,
 } from '../model/valkey-form';
 import { FormRow } from './FormRow';
@@ -195,6 +199,10 @@ export function CreateValkeyPage() {
       isWhitelistEnabled: false,
       whitelist: '',
       confirmDenyAll: false,
+      maintenanceEnabled: false,
+      maintenanceDow: 0,
+      maintenanceHourUtc: 0,
+      maintenanceDurationMin: 30,
     },
     validateInputOnBlur: true,
     validate: {
@@ -208,6 +216,12 @@ export function CreateValkeyPage() {
         !value
           ? 'Подтвердите закрытие доступа всем'
           : null,
+      maintenanceDow: (value, formValues) =>
+        validateMaintenanceDow(value, formValues.maintenanceEnabled),
+      maintenanceHourUtc: (value, formValues) =>
+        validateMaintenanceHourUtc(value, formValues.maintenanceEnabled),
+      maintenanceDurationMin: (value, formValues) =>
+        validateMaintenanceDurationMin(value, formValues.maintenanceEnabled),
     },
   });
 
@@ -309,7 +323,12 @@ export function CreateValkeyPage() {
       : null;
 
   const slugPreview = getSlugPreview(values.prefix.trim() || 'valkey');
-  const addressPreview = catalog ? `${slugPreview}.${catalog.connection.domain}` : slugPreview;
+  const primaryAddressPreview = catalog
+    ? `redis://${slugPreview}.${catalog.connection.domain}:${catalog.connection.port}`
+    : `redis://${slugPreview}`;
+  const readAddressPreview = catalog
+    ? `redis://${slugPreview}-ro.${catalog.connection.domain}:${catalog.connection.port}`
+    : `redis://${slugPreview}-ro`;
   const needsDenyAllConfirmation =
     values.isWhitelistEnabled &&
     parseWhitelistCidrs(values.whitelist).length === 0 &&
@@ -328,6 +347,13 @@ export function CreateValkeyPage() {
       whitelistCidrs: formValues.isWhitelistEnabled
         ? parseWhitelistCidrs(formValues.whitelist)
         : [],
+      maintenance: formValues.maintenanceEnabled
+        ? {
+            dow: formValues.maintenanceDow,
+            hourUtc: formValues.maintenanceHourUtc,
+            durationMin: formValues.maintenanceDurationMin,
+          }
+        : null,
     };
     const fingerprint = JSON.stringify({ ...input, password: undefined });
     const existing = pendingSubmissionRef.current;
@@ -593,14 +619,15 @@ export function CreateValkeyPage() {
               />
 
               <Text c="h3_text_2" size="h3_xs">
-                Адрес базы: {addressPreview}, где после дефиса шесть случайных символов.
+                Primary: {primaryAddressPreview}. Для чтения: {readAddressPreview}. После дефиса
+                будут шесть случайных символов.
               </Text>
             </Stack>
           </FormRow>
 
           <FormRow
             hint="Разрешает подключения только с указанных публичных IPv4-адресов и подсетей."
-            label="Белый список адресов"
+            label="Белый список"
           >
             <Stack gap="h3_sm">
               <Switch
@@ -626,6 +653,41 @@ export function CreateValkeyPage() {
                   ) : null}
                 </Stack>
               )}
+            </Stack>
+          </FormRow>
+
+          <FormRow
+            hint="Окно можно изменить после создания базы. Время указывается в UTC."
+            label="Окно обслуживания"
+          >
+            <Stack gap="h3_sm">
+              <Switch
+                label="Задать окно обслуживания"
+                {...form.getInputProps('maintenanceEnabled', { type: 'checkbox' })}
+              />
+
+              {values.maintenanceEnabled ? (
+                <SimpleGrid cols={{ base: 1, mobile: 3 }} spacing="h3_sm">
+                  <NumberInput
+                    label="День недели, 0–6"
+                    max={6}
+                    min={0}
+                    {...form.getInputProps('maintenanceDow')}
+                  />
+                  <NumberInput
+                    label="Час UTC, 0–23"
+                    max={23}
+                    min={0}
+                    {...form.getInputProps('maintenanceHourUtc')}
+                  />
+                  <NumberInput
+                    label="Длительность, минуты"
+                    max={1440}
+                    min={1}
+                    {...form.getInputProps('maintenanceDurationMin')}
+                  />
+                </SimpleGrid>
+              ) : null}
             </Stack>
           </FormRow>
 

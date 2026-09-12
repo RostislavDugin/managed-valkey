@@ -6,6 +6,23 @@ mode=${1:-test}
 group=${2:-${MANAGED_VALKEY_E2E_GROUP:-all}}
 run_id=${MV_RUN_ID:-manual-$(date -u +%Y%m%d%H%M%S)-$$-$RANDOM}
 temporary_secret_dir=""
+selected_file=""
+
+if [[ -v MANAGED_VALKEY_E2E_FILE ]]; then
+    selected_file=$MANAGED_VALKEY_E2E_FILE
+    [[ -n "$selected_file" ]] || {
+        echo "playwright: MANAGED_VALKEY_E2E_FILE не должен быть пустым" >&2
+        exit 2
+    }
+    [[ "$selected_file" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$ ]] || {
+        echo "playwright: небезопасное имя файла: $selected_file" >&2
+        exit 2
+    }
+    [[ -f "$repo_root/tests/e2e/specs/$selected_file" ]] || {
+        echo "playwright: файл теста не найден: $selected_file" >&2
+        exit 2
+    }
+fi
 
 case "$mode" in
 test)
@@ -65,12 +82,26 @@ if ! grep --fixed-strings --line-regexp --quiet -- "$account_password" "$secret_
 fi
 
 set +e
-MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD="$account_password" \
-    MANAGED_VALKEY_E2E_ACTION_DELAY_MS="$action_delay_ms" \
-    MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS="$scroll_pause_ms" \
-    MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
-    MV_RUN_ID="$run_id" \
-    pnpm --dir "$repo_root/tests/e2e" "$command"
+if [[ -n "$selected_file" ]]; then
+    playwright_args=(exec playwright test "specs/$selected_file")
+    case "$mode" in
+    headed) playwright_args+=(--headed) ;;
+    prod) playwright_args+=(--headed --grep @prod) ;;
+    esac
+    MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD="$account_password" \
+        MANAGED_VALKEY_E2E_ACTION_DELAY_MS="$action_delay_ms" \
+        MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS="$scroll_pause_ms" \
+        MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
+        MV_RUN_ID="$run_id" \
+        pnpm --dir "$repo_root/tests/e2e" "${playwright_args[@]}"
+else
+    MANAGED_VALKEY_E2E_ACCOUNT_PASSWORD="$account_password" \
+        MANAGED_VALKEY_E2E_ACTION_DELAY_MS="$action_delay_ms" \
+        MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS="$scroll_pause_ms" \
+        MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$secret_values_file" \
+        MV_RUN_ID="$run_id" \
+        pnpm --dir "$repo_root/tests/e2e" "$command"
+fi
 test_status=$?
 set -e
 

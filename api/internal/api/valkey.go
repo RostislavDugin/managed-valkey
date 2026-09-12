@@ -72,6 +72,7 @@ type createValkeyRequest struct {
 	Password         string                    `json:"password"`
 	WhitelistEnabled bool                      `json:"is_whitelist_enabled"`
 	WhitelistCIDRs   []string                  `json:"whitelist_cidrs"`
+	Maintenance      json.RawMessage           `json:"maintenance"`
 }
 
 type resizeValkeyRequest struct {
@@ -323,12 +324,18 @@ func valkeyCreateHandler(service ValkeyService) gin.HandlerFunc {
 
 			return
 		}
+		maintenance, err := parseMaintenanceRequest(request.Maintenance)
+		if err != nil {
+			apierr.Write(c, err)
+
+			return
+		}
 
 		result, err := service.Create(c.Request.Context(), actor, valkeydomain.CreateInput{
 			Name: request.Name, Prefix: request.Prefix, Mode: request.Mode,
 			Size:     valkeydomain.Size{VCPU: request.VCPU, RAMGB: request.RAMGB},
 			Password: request.Password, WhitelistEnabled: request.WhitelistEnabled,
-			WhitelistCIDRs: request.WhitelistCIDRs, IdempotencyKey: key,
+			WhitelistCIDRs: request.WhitelistCIDRs, Maintenance: maintenance, IdempotencyKey: key,
 			RequestID: RequestIDFrom(c.Request.Context()),
 		})
 		if err != nil {
@@ -501,23 +508,34 @@ func parsePatchRequest(request patchValkeyRequest) (valkeydomain.PatchInput, err
 	}
 	if request.Maintenance != nil {
 		input.MaintenanceSet = true
-		if !bytes.Equal(bytes.TrimSpace(request.Maintenance), []byte("null")) {
-			var maintenance maintenanceRequest
-			decoder := json.NewDecoder(bytes.NewReader(request.Maintenance))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&maintenance); err != nil {
-				return valkeydomain.PatchInput{}, invalidJSON("invalid_json")
-			}
-			if maintenance.DOW == nil || maintenance.HourUTC == nil || maintenance.DurationMin == nil {
-				return valkeydomain.PatchInput{}, invalidJSON("invalid_json")
-			}
-			input.Maintenance = &valkeydomain.Maintenance{
-				DOW: *maintenance.DOW, HourUTC: *maintenance.HourUTC, DurationMin: *maintenance.DurationMin,
-			}
+		maintenance, err := parseMaintenanceRequest(request.Maintenance)
+		if err != nil {
+			return valkeydomain.PatchInput{}, err
 		}
+		input.Maintenance = maintenance
 	}
 
 	return input, nil
+}
+
+func parseMaintenanceRequest(raw json.RawMessage) (*valkeydomain.Maintenance, error) {
+	if raw == nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+
+	var maintenance maintenanceRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&maintenance); err != nil {
+		return nil, invalidJSON("invalid_json")
+	}
+	if maintenance.DOW == nil || maintenance.HourUTC == nil || maintenance.DurationMin == nil {
+		return nil, invalidJSON("invalid_json")
+	}
+
+	return &valkeydomain.Maintenance{
+		DOW: *maintenance.DOW, HourUTC: *maintenance.HourUTC, DurationMin: *maintenance.DurationMin,
+	}, nil
 }
 
 func decodeIdempotentInstanceRequest[T any](

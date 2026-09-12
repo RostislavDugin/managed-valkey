@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,24 +33,32 @@ type account struct {
 }
 
 type instance struct {
-	ID                     string     `json:"id"`
-	Name                   string     `json:"name"`
-	Slug                   string     `json:"slug"`
-	Mode                   string     `json:"mode"`
-	VCPU                   int        `json:"vcpu"`
-	RAMGB                  int        `json:"ram_gb"`
-	AppliedVCPU            int        `json:"applied_vcpu"`
-	AppliedRAMGB           int        `json:"applied_ram_gb"`
-	Host                   string     `json:"host"`
-	Port                   int        `json:"port"`
-	PasswordVersion        int        `json:"password_version"`
-	AppliedPasswordVersion int        `json:"applied_password_version"`
-	Status                 string     `json:"status"`
-	DesiredGeneration      int        `json:"desired_generation"`
-	ObservedGeneration     int        `json:"observed_generation"`
-	ObservedAt             *time.Time `json:"observed_at"`
-	IsStale                bool       `json:"is_stale"`
-	IsUpdating             bool       `json:"is_updating"`
+	ID                     string             `json:"id"`
+	Name                   string             `json:"name"`
+	Slug                   string             `json:"slug"`
+	Mode                   string             `json:"mode"`
+	VCPU                   int                `json:"vcpu"`
+	RAMGB                  int                `json:"ram_gb"`
+	AppliedVCPU            int                `json:"applied_vcpu"`
+	AppliedRAMGB           int                `json:"applied_ram_gb"`
+	Host                   string             `json:"host"`
+	HostRO                 string             `json:"host_ro"`
+	Port                   int                `json:"port"`
+	Maintenance            *maintenanceWindow `json:"maintenance"`
+	PasswordVersion        int                `json:"password_version"`
+	AppliedPasswordVersion int                `json:"applied_password_version"`
+	Status                 string             `json:"status"`
+	DesiredGeneration      int                `json:"desired_generation"`
+	ObservedGeneration     int                `json:"observed_generation"`
+	ObservedAt             *time.Time         `json:"observed_at"`
+	IsStale                bool               `json:"is_stale"`
+	IsUpdating             bool               `json:"is_updating"`
+}
+
+type maintenanceWindow struct {
+	DOW         int `json:"dow"`
+	HourUTC     int `json:"hour_utc"`
+	DurationMin int `json:"duration_min"`
 }
 
 type metricPoint struct {
@@ -75,6 +84,7 @@ type valkeyMetrics struct {
 
 type credentials struct {
 	Host                   string `json:"host"`
+	HostRO                 string `json:"host_ro"`
 	Port                   int    `json:"port"`
 	Username               string `json:"username"`
 	PasswordVersion        int    `json:"password_version"`
@@ -152,6 +162,7 @@ func (client *apiClient) Create(
 	name string,
 	prefix string,
 	password string,
+	maintenance *maintenanceWindow,
 ) (instance, error) {
 	var response instance
 	err := client.request(
@@ -162,6 +173,7 @@ func (client *apiClient) Create(
 		map[string]any{
 			"name": name, "prefix": prefix, "mode": "single", "vcpu": 1, "ram_gb": 1,
 			"password": password, "is_whitelist_enabled": false, "whitelist_cidrs": []string{},
+			"maintenance": maintenance,
 		},
 		true,
 		&response,
@@ -384,9 +396,20 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 				),
 			)
 		case http.MethodPost + " /v1/managed/valkey/instances":
-			assertRequestJSON(t, request, "password", firstPassword)
+			body := decodeRequestJSON(t, request)
+			if body["password"] != firstPassword {
+				t.Errorf("поле password равно %#v, ожидалось %#v", body["password"], firstPassword)
+			}
+			maintenance := map[string]any{
+				"dow": float64(2), "hour_utc": float64(3), "duration_min": float64(60),
+			}
+			if !reflect.DeepEqual(body["maintenance"], maintenance) {
+				t.Errorf("поле maintenance равно %#v, ожидалось %#v", body["maintenance"], maintenance)
+			}
 			writer.WriteHeader(http.StatusAccepted)
-			_, _ = writer.Write([]byte(`{"id":"` + instanceID + `","slug":"cache-aaaaaa"}`))
+			_, _ = writer.Write([]byte(
+				`{"id":"` + instanceID + `","slug":"cache-aaaaaa","host":"cache.example","host_ro":"cache-ro.example","maintenance":{"dow":2,"hour_utc":3,"duration_min":60}}`,
+			))
 		case http.MethodGet + " /v1/managed/valkey/instances/" + instanceID:
 			_, _ = writer.Write([]byte(`{"id":"` + instanceID + `","slug":"cache-aaaaaa"}`))
 		case http.MethodGet + " /v1/managed/valkey/instances":
@@ -394,7 +417,7 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 		case http.MethodGet + " /v1/managed/valkey/instances/" + instanceID + "/credentials":
 			_, _ = writer.Write(
 				[]byte(
-					`{"host":"cache.example","port":31379,"username":"app","password_version":1,"applied_password_version":1}`,
+					`{"host":"cache.example","host_ro":"cache-ro.example","port":31379,"username":"app","password_version":1,"applied_password_version":1}`,
 				),
 			)
 		case http.MethodGet + " /v1/managed/valkey/instances/" + instanceID + "/metrics":
@@ -415,7 +438,7 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 			writer.WriteHeader(http.StatusAccepted)
 			_, _ = writer.Write(
 				[]byte(
-					`{"host":"cache.example","port":31379,"username":"app","password_version":2,"applied_password_version":1}`,
+					`{"host":"cache.example","host_ro":"cache-ro.example","port":31379,"username":"app","password_version":2,"applied_password_version":1}`,
 				),
 			)
 		case http.MethodDelete + " /v1/managed/valkey/instances/" + instanceID:
@@ -432,8 +455,10 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 	if err != nil || registered.ID != "user-id" || registered.Token != token {
 		t.Fatalf("регистрация: account=%+v error=%v", registered, err)
 	}
-	created, err := client.Create(ctx, token, "cache", "cache", firstPassword)
-	if err != nil || created.ID != instanceID {
+	maintenance := &maintenanceWindow{DOW: 2, HourUTC: 3, DurationMin: 60}
+	created, err := client.Create(ctx, token, "cache", "cache", firstPassword, maintenance)
+	if err != nil || created.ID != instanceID || created.HostRO != "cache-ro.example" ||
+		!reflect.DeepEqual(created.Maintenance, maintenance) {
 		t.Fatalf("создание: instance=%+v error=%v", created, err)
 	}
 	if _, err := client.Get(ctx, token, instanceID); err != nil {
@@ -443,7 +468,7 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 	if err != nil || len(listed) != 1 || listed[0].ID != instanceID {
 		t.Fatalf("чтение списка: items=%+v error=%v", listed, err)
 	}
-	if _, err := client.Credentials(ctx, token, instanceID); err != nil {
+	if got, err := client.Credentials(ctx, token, instanceID); err != nil || got.HostRO != "cache-ro.example" {
 		t.Fatalf("чтение реквизитов: %v", err)
 	}
 	metrics, err := client.Metrics(ctx, token, instanceID)
@@ -471,7 +496,7 @@ func Test_APIClient_WhenServerReturnsSecretInError_DoesNotIncludeResponseBody(t 
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := newAPIClient(server.URL).Create(context.Background(), "token", "cache", "cache", secret)
+	_, err := newAPIClient(server.URL).Create(context.Background(), "token", "cache", "cache", secret, nil)
 	var statusError *apiStatusError
 	if !errors.As(err, &statusError) || statusError.StatusCode != http.StatusBadRequest {
 		t.Fatalf("неверная HTTP-ошибка: %v", err)
@@ -483,12 +508,18 @@ func Test_APIClient_WhenServerReturnsSecretInError_DoesNotIncludeResponseBody(t 
 
 func assertRequestJSON(t *testing.T, request *http.Request, field string, expected any) {
 	t.Helper()
+	body := decodeRequestJSON(t, request)
+	if !reflect.DeepEqual(body[field], expected) {
+		t.Errorf("поле %s равно %#v, ожидалось %#v", field, body[field], expected)
+	}
+}
 
+func decodeRequestJSON(t *testing.T, request *http.Request) map[string]any {
+	t.Helper()
 	var body map[string]any
 	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 		t.Fatalf("разобрать тело запроса: %v", err)
 	}
-	if body[field] != expected {
-		t.Errorf("поле %s равно %#v, ожидалось %#v", field, body[field], expected)
-	}
+
+	return body
 }

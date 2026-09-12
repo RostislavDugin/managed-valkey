@@ -47,7 +47,7 @@ interface ValkeyInstanceDto {
   applied_vcpu: number;
   applied_ram_gb: number;
   host: string;
-  host_ro: string | null;
+  host_ro: string;
   port: number;
   is_whitelist_enabled: boolean;
   whitelist_cidrs: string[];
@@ -73,7 +73,7 @@ interface ValkeyInstanceDto {
 
 interface ValkeyCredentialsDto {
   host: string;
-  host_ro: string | null;
+  host_ro: string;
   port: number;
   username: 'app';
   password_hint: string;
@@ -192,6 +192,7 @@ export interface CreateInstanceInput extends ValkeySize {
   password: string;
   isWhitelistEnabled: boolean;
   whitelistCidrs: string[];
+  maintenance?: ValkeyMaintenance | null;
 }
 
 export async function createInstance(
@@ -211,6 +212,17 @@ export async function createInstance(
       password: input.password,
       is_whitelist_enabled: input.isWhitelistEnabled,
       whitelist_cidrs: input.whitelistCidrs,
+      ...(input.maintenance === undefined
+        ? {}
+        : {
+            maintenance: input.maintenance
+              ? {
+                  dow: input.maintenance.dow,
+                  hour_utc: input.maintenance.hourUtc,
+                  duration_min: input.maintenance.durationMin,
+                }
+              : null,
+          }),
     }),
     signal,
   });

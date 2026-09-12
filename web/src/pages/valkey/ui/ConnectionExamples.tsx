@@ -7,6 +7,7 @@ import styles from './ValkeyPage.module.css';
 
 interface ConnectionExamplesProps {
   host: string;
+  hostRo: string;
   port: number | string;
 }
 
@@ -19,53 +20,58 @@ const LANGUAGES = [
 
 type LanguageValue = (typeof LANGUAGES)[number]['value'];
 
-function getExamples(host: string, port: number | string) {
+function getExamples(host: string, hostRo: string, port: number | string) {
   return {
     javascript: `import { createClient } from 'redis';
 
-const host = '${host}';
-const client = createClient({
-  username: 'app',
-  password: '<PASSWORD>',
-  socket: {
-    host,
-    port: ${port},
-    tls: true,
-    servername: host,
-  },
-});
+const primaryHost = '${host}';
+const readHost = '${hostRo}';
+const createValkeyClient = (host) => createClient({
+    username: 'app',
+    password: '<PASSWORD>',
+    socket: { host, port: ${port}, tls: true, servername: host },
+  });
 
-client.on('error', console.error);
-await client.connect();`,
+const primary = createValkeyClient(primaryHost);
+const readOnly = createValkeyClient(readHost);
+primary.on('error', console.error);
+readOnly.on('error', console.error);
+await Promise.all([primary.connect(), readOnly.connect()]);`,
     typescript: `import { createClient, type RedisClientOptions } from 'redis';
 
-const host = '${host}';
-const options = {
-  username: 'app',
-  password: '<PASSWORD>',
-  socket: {
-    host,
-    port: ${port},
-    tls: true,
-    servername: host,
-  },
-} satisfies RedisClientOptions;
+const primaryHost = '${host}';
+const readHost = '${hostRo}';
+const createValkeyClient = (host: string) => {
+  const options = {
+    username: 'app',
+    password: '<PASSWORD>',
+    socket: { host, port: ${port}, tls: true, servername: host },
+  } satisfies RedisClientOptions;
+  return createClient(options);
+};
 
-const client = createClient(options);
-client.on('error', console.error);
-await client.connect();`,
+const primary = createValkeyClient(primaryHost);
+const readOnly = createValkeyClient(readHost);
+await Promise.all([primary.connect(), readOnly.connect()]);`,
     python: `import redis
 
-client = redis.Redis(
-    host="${host}",
-    port=${port},
-    username="app",
-    password="<PASSWORD>",
-    ssl=True,
-    decode_responses=True,
-)
+primary_host = "${host}"
+read_host = "${hostRo}"
 
-client.ping()`,
+def create_client(host):
+    return redis.Redis(
+        host=host,
+        port=${port},
+        username="app",
+        password="<PASSWORD>",
+        ssl=True,
+        decode_responses=True,
+    )
+
+primary = create_client(primary_host)
+read_only = create_client(read_host)
+primary.ping()
+read_only.ping()`,
     go: `package main
 
 import (
@@ -77,30 +83,38 @@ import (
 )
 
 func main() {
-    const serverName = "${host}"
-    client := redis.NewClient(&redis.Options{
-        Addr:     "${host}:${port}",
+    primary := createClient("${host}")
+    readOnly := createClient("${hostRo}")
+    defer primary.Close()
+    defer readOnly.Close()
+
+    if err := primary.Ping(context.Background()).Err(); err != nil {
+        log.Fatal(err)
+    }
+    if err := readOnly.Ping(context.Background()).Err(); err != nil {
+        log.Fatal(err)
+    }
+}
+
+func createClient(host string) *redis.Client {
+    return redis.NewClient(&redis.Options{
+        Addr:     host + ":${port}",
         Username: "app",
         Password: "<PASSWORD>",
         TLSConfig: &tls.Config{
-            ServerName: serverName,
+            ServerName: host,
             MinVersion: tls.VersionTLS12,
         },
     })
-    defer client.Close()
-
-    if err := client.Ping(context.Background()).Err(); err != nil {
-        log.Fatal(err)
-    }
 }`,
   };
 }
 
-export function ConnectionExamples({ host, port }: ConnectionExamplesProps) {
+export function ConnectionExamples({ host, hostRo, port }: ConnectionExamplesProps) {
   const codeRegionId = useId();
   const [activeLanguage, setActiveLanguage] = useState<LanguageValue>('javascript');
   const [expanded, setExpanded] = useState(true);
-  const examples = getExamples(host, port);
+  const examples = getExamples(host, hostRo, port);
   const activeCode = examples[activeLanguage];
 
   const toggleLabel = expanded ? 'Свернуть' : 'Развернуть';

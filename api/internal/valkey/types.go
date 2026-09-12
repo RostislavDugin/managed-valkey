@@ -93,6 +93,7 @@ type CreateInput struct {
 	Password         string
 	WhitelistEnabled bool
 	WhitelistCIDRs   []string
+	Maintenance      *Maintenance
 	IdempotencyKey   uuid.UUID
 	RequestID        string
 }

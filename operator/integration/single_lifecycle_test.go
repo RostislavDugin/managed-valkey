@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	transportspdy "k8s.io/client-go/transport/spdy"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"github.com/RostislavDugin/managed-valkey/internal/logging"
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
@@ -71,13 +72,23 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 	h.startOperator(t)
 	firstStatus := h.waitRunning(t, first)
 	assertAppliedStatus(t, firstStatus)
+	assertSingleRoutes(t, h, first)
 	firstMetric := h.waitForCurrentMetric(t, first, 0)
 	servicePasswords := h.servicePasswords(t, first)
 
 	firstClient := openPersistentConnection(t, h.publicAddr, first, h.caFile, false, func() {})
 	defer closeConnections([]*persistentConnection{firstClient})
 	setValue(t, firstClient, "instance-key", "first")
-	if value := getValue(t, firstClient, "instance-key"); value != "first" {
+	readClient := openPersistentConnection(
+		t,
+		h.publicAddr,
+		first.readEndpoint(h.baseDomain),
+		h.caFile,
+		false,
+		func() {},
+	)
+	defer closeConnections([]*persistentConnection{readClient})
+	if value := getValue(t, readClient, "instance-key"); value != "first" {
 		t.Fatalf("SET/GET вернул %q", value)
 	}
 	writeRESP(t, firstClient, "CONFIG", "GET", "maxmemory")
@@ -101,19 +112,25 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 		!strings.Contains(output, "PONG") {
 		t.Fatalf("выключенный whitelist не пропустил второго клиента: output=%q error=%v", output, err)
 	}
-	if output, err := h.dockerCLI(t, second, h.clientAllowed, second.password, "PING"); err != nil ||
-		!strings.Contains(output, "PONG") {
-		t.Fatalf("разрешённый CIDR не пропустил клиента: output=%q error=%v", output, err)
-	}
-	if output, err := h.dockerCLI(
-		t,
-		second,
-		h.clientBlocked,
-		second.password,
-		"PING",
-	); err == nil &&
-		strings.Contains(output, "PONG") {
-		t.Fatal("whitelist пропустил запрещённый адрес")
+	for _, endpoint := range []*testInstance{second, second.readEndpoint(h.baseDomain)} {
+		if output, err := h.dockerCLI(t, endpoint, h.clientAllowed, second.password, "PING"); err != nil ||
+			!strings.Contains(output, "PONG") {
+			t.Fatalf(
+				"разрешённый CIDR не пропустил клиента через %s: output=%q error=%v",
+				endpoint.hostname,
+				output,
+				err,
+			)
+		}
+		if output, err := h.dockerCLI(
+			t,
+			endpoint,
+			h.clientBlocked,
+			second.password,
+			"PING",
+		); err == nil && strings.Contains(output, "PONG") {
+			t.Fatalf("белый список пропустил запрещённый адрес через %s", endpoint.hostname)
+		}
 	}
 	if output, err := h.dockerCLI(
 		t,
@@ -137,15 +154,16 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 
 	third := h.createSingle(t, "fullc3", valkeyv1alpha1.WhitelistSpec{IsEnabled: true})
 	h.waitRunning(t, third)
-	if output, err := h.dockerCLI(
-		t,
-		third,
-		h.clientAllowed,
-		third.password,
-		"PING",
-	); err == nil &&
-		strings.Contains(output, "PONG") {
-		t.Fatal("пустой включённый whitelist пропустил клиента")
+	for _, endpoint := range []*testInstance{third, third.readEndpoint(h.baseDomain)} {
+		if output, err := h.dockerCLI(
+			t,
+			endpoint,
+			h.clientAllowed,
+			third.password,
+			"PING",
+		); err == nil && strings.Contains(output, "PONG") {
+			t.Fatalf("пустой включённый белый список пропустил клиента через %s", endpoint.hostname)
+		}
 	}
 	h.deleteInstance(t, third)
 
@@ -188,6 +206,18 @@ func Test_RunSingleLifecycle_EnforcesAccessIsolationAndSafeRecovery(t *testing.T
 				instance.Status.Deletion.Stage == valkeyv1alpha1.DeletionStageVerifying)
 	}, "стадии остановки удаления")
 	h.stopOperator(t)
+	for _, endpoint := range []*testInstance{first, first.readEndpoint(h.baseDomain)} {
+		if output, err := h.dockerCLIWithTimeout(
+			t,
+			3*time.Second,
+			endpoint,
+			h.clientAllowed,
+			first.password,
+			"PING",
+		); err == nil && strings.Contains(output, "PONG") {
+			t.Fatalf("удаление оставило доступным адрес %s", endpoint.hostname)
+		}
+	}
 	if instance := h.getInstance(t, first); instance.DeletionTimestamp.IsZero() {
 		t.Fatal("CR исчез до подтверждения остановки")
 	}
@@ -230,6 +260,13 @@ type testInstance struct {
 	userEmail  string
 	password   string
 	hostname   string
+}
+
+func (instance *testInstance) readEndpoint(baseDomain string) *testInstance {
+	readEndpoint := *instance
+	readEndpoint.hostname = instance.slug + "-ro." + baseDomain
+
+	return &readEndpoint
 }
 
 func newHarness(t *testing.T) *harness {
@@ -750,10 +787,28 @@ func (h *harness) openEnvoyConnections(
 		address, stop := h.forwardEnvoy(t, &pods.Items[index])
 		connections = append(connections,
 			openPersistentConnection(t, address, instance, h.caFile, false, stop),
-			openPersistentConnection(t, address, instance, h.caFile, true, func() {}),
+			openPersistentConnection(t, address, instance.readEndpoint(h.baseDomain), h.caFile, true, func() {}),
 		)
 	}
 	return connections
+}
+
+func assertSingleRoutes(t *testing.T, h *harness, instance *testInstance) {
+	t.Helper()
+	for _, name := range []string{instance.slug, instance.slug + "-ro"} {
+		route := &gatewayv1alpha2.TCPRoute{}
+		if err := h.k8s.Get(
+			t.Context(),
+			client.ObjectKey{Namespace: instance.namespace, Name: name},
+			route,
+		); err != nil {
+			t.Fatalf("прочитать TCPRoute %s: %v", name, err)
+		}
+		if len(route.Spec.Rules) != 1 || len(route.Spec.Rules[0].BackendRefs) != 1 ||
+			string(route.Spec.Rules[0].BackendRefs[0].Name) != instance.slug+"-primary" {
+			t.Fatalf("TCPRoute %s не ведёт на primary: %+v", name, route.Spec)
+		}
+	}
 }
 
 func (h *harness) forwardEnvoy(t *testing.T, pod *corev1.Pod) (string, func()) {

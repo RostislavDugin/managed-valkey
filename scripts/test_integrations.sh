@@ -2,6 +2,26 @@
 set -Eeuo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+integration_test_args=()
+if [[ -v MV_INTEGRATION_TEST ]]; then
+    [[ -n "$MV_INTEGRATION_TEST" ]] || {
+        echo "integration: MV_INTEGRATION_TEST не должен быть пустым" >&2
+        exit 2
+    }
+    [[ "$MV_INTEGRATION_TEST" =~ ^Test_[A-Za-z0-9_]+$ ]] || {
+        echo "integration: небезопасное имя теста: $MV_INTEGRATION_TEST" >&2
+        exit 2
+    }
+    if ! discovered_tests=$(go test -tags integration -list "^${MV_INTEGRATION_TEST}$" ./tests/integrations); then
+        printf '%s\n' "$discovered_tests" >&2
+        exit 2
+    fi
+    grep --fixed-strings --line-regexp --quiet "$MV_INTEGRATION_TEST" <<<"$discovered_tests" || {
+        echo "integration: тест не найден: $MV_INTEGRATION_TEST" >&2
+        exit 2
+    }
+    integration_test_args=(-run "^${MV_INTEGRATION_TEST}$")
+fi
 diagnostics_dir=${DIAGNOSTICS_DIR:?DIAGNOSTICS_DIR не задан}
 state_dir=${MV_STATE_DIR:?MV_STATE_DIR не задан}
 child_pids=()
@@ -181,7 +201,8 @@ MANAGED_VALKEY_INTEGRATION_API_URL="http://127.0.0.1:$api_port" \
     MANAGED_VALKEY_INTEGRATION_PUBLIC_ADDRESS="${MANAGED_VALKEY_PUBLIC_ADDRESS:?MANAGED_VALKEY_PUBLIC_ADDRESS не задан}" \
     MANAGED_VALKEY_INTEGRATION_RUN_ID="${MV_RUN_ID:?MV_RUN_ID не задан}" \
     MANAGED_VALKEY_INTEGRATION_SECRET_VALUES_FILE="$secret_values_file" \
-    go test -tags integration -count=1 -parallel=4 -timeout=30m ./tests/integrations
+    go test -tags integration -count=1 -parallel=4 -timeout=30m \
+        "${integration_test_args[@]}" ./tests/integrations
 test_status=$?
 set -e
 record_duration scenarios "$tests_started_seconds"

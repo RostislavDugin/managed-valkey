@@ -47,6 +47,15 @@ func Test_CreateValkey_WithMalformedBodyOrSystemFields_ReturnsValidationErrorWit
 			name: "служебное поле возвращает ошибку валидации без записи данных",
 			body: strings.TrimSuffix(valid, "}") + `,"status":"running"}`,
 		},
+		{
+			name: "неполное окно обслуживания возвращает ошибку валидации без записи данных",
+			body: strings.TrimSuffix(valid, "}") + `,"maintenance":{"duration_min":30}}`,
+		},
+		{
+			name: "неизвестное поле окна обслуживания возвращает ошибку валидации без записи данных",
+			body: strings.TrimSuffix(valid, "}") +
+				`,"maintenance":{"dow":0,"hour_utc":0,"duration_min":30,"unknown":1}}`,
+		},
 		{name: "второй документ JSON возвращает ошибку валидации без записи данных", body: valid + `{}`},
 		{
 			name:   "слишком большое тело возвращает ошибку валидации без записи данных",
@@ -136,6 +145,27 @@ func Test_CreateValkey_WithFieldBoundaries_AcceptsOnlyValidValues(t *testing.T) 
 			overrides: map[string]any{"vcpu": 2, "ram_gb": 4},
 			field:     "size",
 		},
+		{
+			name: "день окна обслуживания вне диапазона отклоняется с ошибкой поля maintenance.dow",
+			overrides: map[string]any{
+				"maintenance": map[string]any{"dow": 7, "hour_utc": 0, "duration_min": 30},
+			},
+			field: "maintenance.dow",
+		},
+		{
+			name: "час окна обслуживания вне диапазона отклоняется с ошибкой поля maintenance.hour_utc",
+			overrides: map[string]any{
+				"maintenance": map[string]any{"dow": 0, "hour_utc": 24, "duration_min": 30},
+			},
+			field: "maintenance.hour_utc",
+		},
+		{
+			name: "длительность окна обслуживания вне диапазона отклоняется с ошибкой поля maintenance.duration_min",
+			overrides: map[string]any{
+				"maintenance": map[string]any{"dow": 0, "hour_utc": 0, "duration_min": 0},
+			},
+			field: "maintenance.duration_min",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -168,6 +198,10 @@ func Test_CreateValkey_WithFieldBoundaries_AcceptsOnlyValidValues(t *testing.T) 
 	} {
 		createValkey(t, app, account, map[string]any{"name": boundary.name, "prefix": boundary.prefix})
 	}
+	createValkey(t, app, account, map[string]any{
+		"name":        "maintenance-boundary",
+		"maintenance": map[string]any{"dow": 0, "hour_utc": 0, "duration_min": 1},
+	})
 }
 
 func Test_UpdateValkeyWhitelistOrMaintenance_WithBoundaryValues_ValidatesAndAppliesSettings(t *testing.T) {

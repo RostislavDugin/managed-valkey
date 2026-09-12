@@ -82,6 +82,10 @@ func Test_CreateValkey_WithSlugCollisions_RetriesAtomicallyWithoutPartialWrites(
 	if first.Slug != "shop-aaaaaa" || second.Slug != "shop-bbbbbb" {
 		t.Fatalf("коллизия slug обработана неверно: %s, %s", first.Slug, second.Slug)
 	}
+	if first.HostRO == nil || *first.HostRO != "shop-aaaaaa-ro.valkey.localhost" ||
+		second.HostRO == nil || *second.HostRO != "shop-bbbbbb-ro.valkey.localhost" {
+		t.Fatalf("адреса чтения не соответствуют slug: %+v, %+v", first.HostRO, second.HostRO)
+	}
 	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", account.ID), 2)
 	assertDatabaseCount(t, app.database.DB().Model(&store.BillingPeriod{}).Where("user_id = ?", account.ID), 2)
 	assertDatabaseCount(
@@ -100,6 +104,37 @@ func Test_CreateValkey_WithSlugCollisions_RetriesAtomicallyWithoutPartialWrites(
 	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", account.ID), 2)
 	if countRows(t, app, &store.IdempotencyKey{}, "user_id = ?", account.ID) != beforeKeys {
 		t.Fatal("исчерпание slug сохранило ключ")
+	}
+}
+
+func Test_CreateValkey_AfterServerConnectionChanges_PreservesStoredAddresses(t *testing.T) {
+	initial := newHTTPTestAPI(t, testAPIConfig{})
+	account := initial.registerAccount(t, "")
+	created := createValkey(t, initial, account, map[string]any{"name": "stable-address"})
+
+	changedCatalog := mustCatalog(t, 125, 50)
+	changedCatalog.Connection.Domain = "new.valkey.localhost"
+	changedCatalog.Connection.Port = 42379
+	changed := newHTTPTestAPI(t, testAPIConfig{catalog: &changedCatalog})
+
+	persistedResponse := changed.requestJSON(
+		t,
+		http.MethodGet,
+		"/v1/managed/valkey/instances/"+created.ID.String(),
+		nil,
+		bearer(account.Token),
+	)
+	assertStatus(t, persistedResponse, http.StatusOK)
+	persisted := decodeResponse[valkeydomain.Instance](t, persistedResponse)
+	if persisted.Host != created.Host || persisted.HostRO == nil || created.HostRO == nil ||
+		*persisted.HostRO != *created.HostRO || persisted.Port != created.Port {
+		t.Fatalf("смена конфигурации изменила сохранённые адреса: %+v", persisted)
+	}
+
+	next := createValkey(t, changed, account, map[string]any{"name": "new-address"})
+	if next.Host != next.Slug+".new.valkey.localhost" || next.HostRO == nil ||
+		*next.HostRO != next.Slug+"-ro.new.valkey.localhost" || next.Port != 42379 {
+		t.Fatalf("новый инстанс не использует новую конфигурацию: %+v", next)
 	}
 }
 

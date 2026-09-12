@@ -111,7 +111,8 @@ func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_Prese
 		t.Fatalf("прочитать Gateway: %v", err)
 	}
 	wantListeners := []gatewayv1.SectionName{
-		"neighbor", "allow-a1b2c3", "allow-a1b2c3-ro", "denyall-b2c3d4", "open-c3d4e5",
+		"neighbor", "allow-a1b2c3", "allow-a1b2c3-ro", "denyall-b2c3d4", "denyall-b2c3d4-ro",
+		"open-c3d4e5", "open-c3d4e5-ro",
 	}
 	for _, name := range wantListeners {
 		if !slices.ContainsFunc(gateway.Spec.Listeners, func(listener gatewayv1.Listener) bool {
@@ -133,12 +134,13 @@ func Test_Envtest_ReconcileNetworkResources_WhenGatewayChangesConcurrently_Prese
 	if err := k8s.List(ctx, routes); err != nil {
 		t.Fatalf("прочитать TCPRoute: %v", err)
 	}
-	if len(routes.Items) != 4 {
+	if len(routes.Items) != 6 {
 		t.Fatalf("создано TCPRoute: %d", len(routes.Items))
 	}
 	for _, route := range routes.Items {
-		backendName := route.Name + "-primary"
-		if strings.HasSuffix(route.Name, "-ro") {
+		baseName := strings.TrimSuffix(route.Name, "-ro")
+		backendName := baseName + "-primary"
+		if route.Name == "allow-a1b2c3-ro" {
 			backendName = strings.TrimSuffix(route.Name, "-ro") + "-replicas"
 		}
 		if len(route.Spec.ParentRefs) != 1 || route.Spec.ParentRefs[0].SectionName == nil ||

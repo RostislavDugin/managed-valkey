@@ -202,7 +202,6 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 ) (networkPrerequisites, error) {
 	accepted := instance.Status.AcceptedConfiguration
 	hostname := accepted.Slug + "." + r.BaseDomain
-	readOnlyBackendAddress := ""
 
 	gateway := &gatewayv1.Gateway{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.SystemNamespace, Name: gatewayName}, gateway); err != nil {
@@ -224,22 +223,20 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 			errNetworkObjectNotReady,
 		)
 	}
-	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-		readOnlyListenerReady := false
-		for _, status := range gateway.Status.Listeners {
-			if status.Name == gatewayv1.SectionName(accepted.Slug+"-ro") &&
-				conditionsCurrent(status.Conditions, gateway.Generation, "Accepted", "Programmed") {
-				readOnlyListenerReady = true
-				break
-			}
+	readOnlyListenerReady := false
+	for _, status := range gateway.Status.Listeners {
+		if status.Name == gatewayv1.SectionName(accepted.Slug+"-ro") &&
+			conditionsCurrent(status.Conditions, gateway.Generation, "Accepted", "Programmed") {
+			readOnlyListenerReady = true
+			break
 		}
-		if !readOnlyListenerReady {
-			gatewayErr = checkError(
-				"GatewayNotReady",
-				"listener Gateway для реплик не принят для текущего поколения",
-				errNetworkObjectNotReady,
-			)
-		}
+	}
+	if !readOnlyListenerReady {
+		gatewayErr = checkError(
+			"GatewayNotReady",
+			"listener Gateway для чтения не принят для текущего поколения",
+			errNetworkObjectNotReady,
+		)
 	}
 
 	route := &gatewayv1alpha2.TCPRoute{}
@@ -253,26 +250,29 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 			errNetworkObjectNotReady,
 		)
 	}
+	readOnlyBackendAddress := ""
 	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
 		var err error
 		readOnlyBackendAddress, err = r.replicaBackendAddress(ctx, instance)
 		if err != nil {
 			return networkPrerequisites{}, err
 		}
-		readOnlyRoute := &gatewayv1alpha2.TCPRoute{}
-		key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
-		if err := r.Get(ctx, key, readOnlyRoute); err != nil {
-			return networkPrerequisites{}, checkError("TCPRouteUnavailable", "прочитать TCPRoute реплик", err)
-		}
-		if !routeReady(readOnlyRoute, r.SystemNamespace, accepted.Slug+"-ro") &&
-			(readOnlyBackendAddress != "" || !routeAcceptedWithoutReadyEndpoints(
+	}
+	readOnlyRoute := &gatewayv1alpha2.TCPRoute{}
+	key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+	if err := r.Get(ctx, key, readOnlyRoute); err != nil {
+		return networkPrerequisites{}, checkError("TCPRouteUnavailable", "прочитать TCPRoute для чтения", err)
+	}
+	if !routeReady(readOnlyRoute, r.SystemNamespace, accepted.Slug+"-ro") {
+		if accepted.Mode != valkeyv1alpha1.ValkeyModeHA || readOnlyBackendAddress != "" ||
+			!routeAcceptedWithoutReadyEndpoints(
 				readOnlyRoute,
 				r.SystemNamespace,
 				accepted.Slug+"-ro",
-			)) {
+			) {
 			return networkPrerequisites{}, checkError(
 				"TCPRouteNotReady",
-				"TCPRoute реплик не принят для текущего поколения",
+				"TCPRoute для чтения не принят для текущего поколения",
 				errNetworkObjectNotReady,
 			)
 		}
@@ -290,23 +290,21 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 				errNetworkObjectNotReady,
 			)
 		}
-		if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-			readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
-			key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
-			if err := r.Get(ctx, key, readOnlyPolicy); err != nil {
-				return networkPrerequisites{}, checkError(
-					"SecurityPolicyUnavailable",
-					"прочитать SecurityPolicy реплик",
-					err,
-				)
-			}
-			if !policyReady(readOnlyPolicy.Status, readOnlyPolicy.Generation) {
-				return networkPrerequisites{}, checkError(
-					"SecurityPolicyNotReady",
-					"SecurityPolicy реплик не принята для текущего поколения",
-					errNetworkObjectNotReady,
-				)
-			}
+		readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
+		key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+		if err := r.Get(ctx, key, readOnlyPolicy); err != nil {
+			return networkPrerequisites{}, checkError(
+				"SecurityPolicyUnavailable",
+				"прочитать SecurityPolicy для чтения",
+				err,
+			)
+		}
+		if !policyReady(readOnlyPolicy.Status, readOnlyPolicy.Generation) {
+			return networkPrerequisites{}, checkError(
+				"SecurityPolicyNotReady",
+				"SecurityPolicy для чтения не принята для текущего поколения",
+				errNetworkObjectNotReady,
+			)
 		}
 	} else {
 		policy := &envoyv1alpha1.SecurityPolicy{}
@@ -318,17 +316,15 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 				errNetworkObjectNotReady,
 			)
 		}
-		if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-			readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
-			key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
-			err := r.Get(ctx, key, readOnlyPolicy)
-			if err == nil || !apierrors.IsNotFound(err) {
-				return networkPrerequisites{}, checkError(
-					"SecurityPolicyUnexpected",
-					"SecurityPolicy реплик присутствует при выключенном whitelist",
-					errNetworkObjectNotReady,
-				)
-			}
+		readOnlyPolicy := &envoyv1alpha1.SecurityPolicy{}
+		key := client.ObjectKey{Namespace: instance.Namespace, Name: accepted.Slug + "-ro"}
+		err = r.Get(ctx, key, readOnlyPolicy)
+		if err == nil || !apierrors.IsNotFound(err) {
+			return networkPrerequisites{}, checkError(
+				"SecurityPolicyUnexpected",
+				"SecurityPolicy для чтения присутствует при выключенном whitelist",
+				errNetworkObjectNotReady,
+			)
 		}
 	}
 
@@ -403,15 +399,15 @@ func (r *ValkeyInstanceReconciler) inspectNetworkPrerequisites(
 		CertificateExpiry: certificateDetails.NotAfter,
 		IdleTimeout:       string(*trafficPolicy.Spec.Timeout.TCP.IdleTimeout),
 	}
+	readOnly := expected
+	readOnly.Hostname = accepted.Slug + "-ro." + r.BaseDomain
+	readOnly.RouteName = accepted.Slug + "-ro"
 	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-		readOnly := expected
-		readOnly.Hostname = accepted.Slug + "-ro." + r.BaseDomain
-		readOnly.RouteName = accepted.Slug + "-ro"
 		readOnly.BackendService = accepted.Slug + "-replicas"
 		readOnly.BackendAddress = readOnlyBackendAddress
-		readOnly.ReadOnly = nil
-		expected.ReadOnly = &readOnly
 	}
+	readOnly.ReadOnly = nil
+	expected.ReadOnly = &readOnly
 	if gatewayErr != nil {
 		return expected, gatewayErr
 	}

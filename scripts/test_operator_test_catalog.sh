@@ -80,6 +80,14 @@ if grep -Fq 'journal-sentinel-must-stay-separate' "$work_dir/report-pass.out"; t
     exit 1
 fi
 
+"$reporter" "$results" scenario "$work_dir/report-catalog.tsv" >"$work_dir/report-scenario.out" 2>&1
+grep -Fq 'OPERATOR TEST MODE scenario' "$work_dir/report-scenario.out"
+grep -Fq 'RESULT matrix PASS' "$work_dir/report-scenario.out"
+if grep -Eq 'RESULT (unit|envtest|network-faults)|MATRIX TOTAL' "$work_dir/report-scenario.out"; then
+    echo 'точечный отчёт включил результаты вне выбранного сценария' >&2
+    exit 1
+fi
+
 printf '%s\n' fail >"$results/unit.status"
 if "$reporter" "$results" full "$work_dir/report-catalog.tsv" >"$work_dir/report-unit-status-fail.out" 2>&1; then
     echo 'отчёт принял неуспешный статус unit' >&2

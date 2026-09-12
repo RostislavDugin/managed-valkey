@@ -81,9 +81,17 @@ write_script "$temporary/network" \
     'flock -u 9' \
     'printf '\''CT-12: pass\n'\'' >"$6/network-faults.log"'
 write_script "$temporary/reporter" \
-    '[[ "$2" == full ]]' \
-    '[[ -s "$1/unit.log" && -s "$1/envtest.log" && -s "$1/network-faults.log" ]]' \
-    '[[ $(find "$1/scenarios" -name status -exec cat {} \; | grep -c '^\''pass$'\'') == 4 ]]'
+    'case "$2" in' \
+    'full)' \
+    '    [[ -s "$1/unit.log" && -s "$1/envtest.log" && -s "$1/network-faults.log" ]]' \
+    '    [[ $(find "$1/scenarios" -name status -exec cat {} \; | grep -c '^\''pass$'\'') == 4 ]]' \
+    '    ;;' \
+    'scenario)' \
+    '    [[ $(find "$1/scenarios" -name status -exec cat {} \; | grep -c '^\''pass$'\'') == 1 ]]' \
+    '    [[ $(wc -l <"$3") == 2 ]]' \
+    '    ;;' \
+    '*) exit 2 ;;' \
+    'esac'
 
 export MV_TEST_EVENTS=$events
 export MV_TEST_ACTIVE=$active
@@ -111,7 +119,37 @@ export MV_OPERATOR_TEST_MAX_PARALLEL=3
 [[ $(grep -c '^release$' "$events") == 1 ]]
 [[ $(<"$maximum") -ge 2 ]]
 [[ $(<"$maximum") -le 3 ]]
-[[ $(sed -n '1p' "$events") == cleanup ]]
+[[ $(sed -n '1p' "$events") == validate ]]
+
+: >"$events"
+export MV_OPERATOR_TEST_RUN_DIR=$temporary/selected-run
+MV_OPERATOR_TEST_SCENARIO=second "$repo_root/scripts/test_operator.sh" >/dev/null
+[[ $(grep -c '^prepare:fast$' "$events" || true) == 0 ]]
+[[ $(grep -c '^prepare:artifacts$' "$events") == 1 ]]
+[[ $(grep -c '^prepare:valkey$' "$events") == 1 ]]
+[[ $(grep -c '^prepare:bundle$' "$events") == 1 ]]
+[[ $(grep -c '^start:second$' "$events") == 1 ]]
+[[ $(grep -c '^start:' "$events") == 1 ]]
+[[ ! -s "$temporary/selected-run/network-faults.log" ]]
+
+: >"$events"
+export MV_OPERATOR_TEST_RUN_DIR=$temporary/empty-selection
+if MV_OPERATOR_TEST_SCENARIO= "$repo_root/scripts/test_operator.sh" >/dev/null 2>&1; then
+    echo "пустой выбор сценария был принят" >&2
+    exit 1
+fi
+[[ ! -s "$events" ]]
+[[ ! -e "$temporary/empty-selection" ]]
+
+: >"$events"
+export MV_OPERATOR_TEST_RUN_DIR=$temporary/unknown-selection
+if MV_OPERATOR_TEST_SCENARIO=unknown "$repo_root/scripts/test_operator.sh" >/dev/null 2>&1; then
+    echo "неизвестный сценарий был принят" >&2
+    exit 1
+fi
+[[ $(grep -c '^validate$' "$events") == 1 ]]
+! rg -q '^cleanup$|^prepare:|^start:' "$events"
+[[ ! -e "$temporary/unknown-selection" ]]
 
 : >"$events"
 write_script "$temporary/validator" 'exit 7'
@@ -122,6 +160,7 @@ if "$repo_root/scripts/test_operator.sh" >/dev/null 2>&1; then
 fi
 ! rg -q '^prepare:' "$events"
 ! rg -q '^start:' "$events"
+! rg -q '^cleanup$' "$events"
 
 : >"$events"
 write_script "$temporary/validator" 'printf '\''validate\n'\'' >>"$MV_TEST_EVENTS"'
@@ -131,7 +170,7 @@ if "$repo_root/scripts/test_operator.sh" >/dev/null 2>&1; then
     echo "ошибка начальной очистки была потеряна" >&2
     exit 1
 fi
-! rg -q '^validate$' "$events"
+[[ $(grep -c '^validate$' "$events") == 1 ]]
 ! rg -q '^prepare:' "$events"
 
 unset MV_FAIL_CLEANUP

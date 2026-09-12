@@ -74,7 +74,7 @@ def go_log_status(path):
     return "pass"
 
 
-if mode not in {"full", "ci"}:
+if mode not in {"full", "ci", "scenario"}:
     print(f"неизвестный режим отчёта: {mode}", file=sys.stderr)
     raise SystemExit(1)
 if not results_dir.is_dir():
@@ -83,28 +83,29 @@ if not results_dir.is_dir():
 
 print(f"OPERATOR TEST MODE {mode}")
 
+failed = 0
 unit_log = results_dir / "unit.log"
 envtest_log = results_dir / "envtest.log"
-failed = 0
-for name, path in (("unit", unit_log), ("envtest", envtest_log)):
-    status_path = results_dir / f"{name}.status"
-    if not path.is_file() or not status_path.is_file():
-        print(f"RESULT {name} MISSING", file=sys.stderr)
-        failed += 1
-    elif path.stat().st_size == 0:
-        print(f"RESULT {name} INVALID", file=sys.stderr)
-        failed += 1
-    elif (status := status_path.read_text(encoding="utf-8").strip()) not in {"pass", "fail"}:
-        print(f"RESULT {name} INVALID status={status or 'empty'}", file=sys.stderr)
-        failed += 1
-    elif status != "pass":
-        print(f"RESULT {name} FAIL status={status}", file=sys.stderr)
-        failed += 1
-    elif log_has_failure(path):
-        print(f"RESULT {name} FAIL", file=sys.stderr)
-        failed += 1
-    else:
-        print(f"RESULT {name} PASS")
+if mode != "scenario":
+    for name, path in (("unit", unit_log), ("envtest", envtest_log)):
+        status_path = results_dir / f"{name}.status"
+        if not path.is_file() or not status_path.is_file():
+            print(f"RESULT {name} MISSING", file=sys.stderr)
+            failed += 1
+        elif path.stat().st_size == 0:
+            print(f"RESULT {name} INVALID", file=sys.stderr)
+            failed += 1
+        elif (status := status_path.read_text(encoding="utf-8").strip()) not in {"pass", "fail"}:
+            print(f"RESULT {name} INVALID status={status or 'empty'}", file=sys.stderr)
+            failed += 1
+        elif status != "pass":
+            print(f"RESULT {name} FAIL status={status}", file=sys.stderr)
+            failed += 1
+        elif log_has_failure(path):
+            print(f"RESULT {name} FAIL", file=sys.stderr)
+            failed += 1
+        else:
+            print(f"RESULT {name} PASS")
 
 durations_path = results_dir / "durations.tsv"
 if durations_path.is_file():
@@ -212,6 +213,9 @@ for row in catalog:
     for log_path in logs:
         k3s_ids.update(ids_from_go_log(log_path))
         scenario_marker_ids.update(ids_from_marker_log(log_path))
+
+if mode == "scenario":
+    raise SystemExit(failed != 0)
 
 seen = {
     "unit": ids_from_go_log(unit_log),

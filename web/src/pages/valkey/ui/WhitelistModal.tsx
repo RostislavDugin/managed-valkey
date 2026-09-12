@@ -80,7 +80,7 @@ export function WhitelistModal({ instance, onClose, onRefresh, onUpdated }: Whit
         return;
       }
       onUpdated(updated);
-      notifications.show({ title: 'Доступ обновлён', message: 'Новые правила приняты.' });
+      notifications.show({ title: 'Белый список изменён', message: 'Новые правила приняты.' });
       onClose();
     } catch (error) {
       if (
@@ -94,7 +94,7 @@ export function WhitelistModal({ instance, onClose, onRefresh, onUpdated }: Whit
       }
       notifications.show({
         color: 'red',
-        title: 'Не удалось изменить доступ',
+        title: 'Не удалось изменить белый список',
         message: getRequestErrorMessage(error),
       });
     } finally {
@@ -106,7 +106,7 @@ export function WhitelistModal({ instance, onClose, onRefresh, onUpdated }: Whit
   };
 
   return (
-    <Modal onClose={onClose} opened radius="h3_xl" title="Доступ по IP" centered>
+    <Modal onClose={onClose} opened radius="h3_xl" title="Белый список" centered>
       <form onSubmit={form.onSubmit((values) => void submit(values))}>
         <Stack gap="h3_md">
           <Switch

@@ -40,6 +40,7 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 			GatewayClassName: "envoy",
 			Listeners: []gatewayv1.Listener{
 				{Name: gatewayv1.SectionName(instance.Name), Port: 41379, Protocol: gatewayv1.TCPProtocolType},
+				{Name: gatewayv1.SectionName(instance.Name + "-ro"), Port: 41379, Protocol: gatewayv1.TCPProtocolType},
 				{Name: "neighbor", Port: 41379, Protocol: gatewayv1.TCPProtocolType},
 			},
 		},
@@ -50,10 +51,16 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 	policy := &envoyv1alpha1.SecurityPolicy{ObjectMeta: metav1.ObjectMeta{
 		Name: instance.Name, Namespace: instance.Namespace,
 	}}
+	readRoute := &gatewayv1alpha2.TCPRoute{ObjectMeta: metav1.ObjectMeta{
+		Name: instance.Name + "-ro", Namespace: instance.Namespace,
+	}}
+	readPolicy := &envoyv1alpha1.SecurityPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: instance.Name + "-ro", Namespace: instance.Namespace,
+	}}
 	k8s := fake.NewClientBuilder().
 		WithScheme(NewScheme()).
 		WithStatusSubresource(&valkeyv1alpha1.ValkeyInstance{}, &corev1.Pod{}).
-		WithObjects(instance, pod, node, secret, gateway, route, policy).
+		WithObjects(instance, pod, node, secret, gateway, route, policy, readRoute, readPolicy).
 		Build()
 	disableCalls := 0
 	newReconciler := func() *ValkeyInstanceReconciler {
@@ -99,7 +106,7 @@ func Test_ReconcileDeletion_WithRunningInstance_ClosesRoutesAndKeepsSecretUntilP
 	if len(gateway.Spec.Listeners) != 1 || gateway.Spec.Listeners[0].Name != "neighbor" {
 		t.Fatalf("удаление затронуло listener соседа: %+v", gateway.Spec.Listeners)
 	}
-	for _, object := range []client.Object{route, policy} {
+	for _, object := range []client.Object{route, policy, readRoute, readPolicy} {
 		if err := k8s.Get(ctx, client.ObjectKeyFromObject(object), object); !apierrors.IsNotFound(err) {
 			t.Fatalf("сетевой ресурс %T остался: %v", object, err)
 		}

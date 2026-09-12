@@ -275,6 +275,7 @@ func createAtomicityBody(name string) map[string]any {
 	return map[string]any{
 		"name": name, "prefix": "atomic", "mode": "single", "vcpu": 1, "ram_gb": 1,
 		"password": testValkeyPassword, "is_whitelist_enabled": false, "whitelist_cidrs": []string{},
+		"maintenance": map[string]any{"dow": 2, "hour_utc": 3, "duration_min": 60},
 	}
 }
 

@@ -58,13 +58,16 @@ type networkEndpoint struct {
 }
 
 func networkEndpoints(instance *valkeyv1alpha1.ValkeyInstance) []networkEndpoint {
-	result := []networkEndpoint{{backendSuffix: "-primary"}}
+	readBackendSuffix := "-primary"
 	if instance.Status.AcceptedConfiguration != nil &&
 		instance.Status.AcceptedConfiguration.Mode == valkeyv1alpha1.ValkeyModeHA {
-		result = append(result, networkEndpoint{suffix: "-ro", backendSuffix: "-replicas"})
+		readBackendSuffix = "-replicas"
 	}
 
-	return result
+	return []networkEndpoint{
+		{backendSuffix: "-primary"},
+		{suffix: "-ro", backendSuffix: readBackendSuffix},
+	}
 }
 
 func (r *ValkeyInstanceReconciler) reconcileGatewayListener(

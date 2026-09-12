@@ -29,7 +29,15 @@ const (
 	pollInterval     = 500 * time.Millisecond
 )
 
-var createBarrier = newScenarioBarrier(4)
+var createBarrier = newScenarioBarrier(createBarrierSize())
+
+func createBarrierSize() int {
+	if os.Getenv("MV_INTEGRATION_TEST") != "" {
+		return 1
+	}
+
+	return 4
+}
 
 type scenarioHarness struct {
 	t          *testing.T
@@ -103,7 +111,11 @@ func (harness *scenarioHarness) registerAccount() account {
 	return registered
 }
 
-func (harness *scenarioHarness) createInstance(owner account, scenario string) (instance, string) {
+func (harness *scenarioHarness) createInstance(
+	owner account,
+	scenario string,
+	maintenance *maintenanceWindow,
+) (instance, string) {
 	harness.t.Helper()
 
 	password := newSecret()
@@ -120,6 +132,7 @@ func (harness *scenarioHarness) createInstance(owner account, scenario string) (
 		scenario+"-"+owner.ID[:8],
 		"it"+owner.ID[:8],
 		password,
+		maintenance,
 	)
 	if err != nil {
 		harness.t.Fatalf("создать Valkey: %v", err)
@@ -502,28 +515,43 @@ func newSecret() string {
 func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t *testing.T) {
 	harness := newScenarioHarness(t)
 	owner := harness.registerAccount()
-	created, password := harness.createInstance(owner, "create")
+	maintenance := maintenanceWindow{DOW: 2, HourUTC: 3, DurationMin: 60}
+	created, password := harness.createInstance(owner, "create", &maintenance)
+	if created.Host == "" || created.HostRO == "" || created.Host == created.HostRO ||
+		created.Maintenance == nil || *created.Maintenance != maintenance {
+		t.Fatalf("POST вернул неполные адреса или окно обслуживания: %+v", created)
+	}
 	namespace := "valkey-" + created.Slug
 	harness.cleanupInstance(owner, created.ID, namespace)
 	current, _ := harness.waitForReady(owner, created, 1, 1, 1, "")
-	harness.waitForMetrics(owner, created)
-	connection := harness.connect(current.Host, password)
-	defer func() { _ = connection.Close() }()
+	if current.Host != created.Host || current.HostRO != created.HostRO ||
+		current.Maintenance == nil || *current.Maintenance != maintenance {
+		t.Fatalf("GET изменил адреса или окно обслуживания: created=%+v current=%+v", created, current)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), conditionTimeout)
 	defer cancel()
-	if err := connection.Set(ctx, "create-key", "create-value"); err != nil {
+	currentCredentials, err := harness.api.Credentials(ctx, owner.Token, created.ID)
+	if err != nil || currentCredentials.Host != current.Host || currentCredentials.HostRO != current.HostRO {
+		t.Fatalf("credentials не вернул оба адреса: credentials=%+v error=%v", currentCredentials, err)
+	}
+	harness.waitForMetrics(owner, created)
+	primaryConnection := harness.connect(current.Host, password)
+	defer func() { _ = primaryConnection.Close() }()
+	readConnection := harness.connect(current.HostRO, password)
+	defer func() { _ = readConnection.Close() }()
+	if err := primaryConnection.Set(ctx, "create-key", "create-value"); err != nil {
 		t.Fatalf("записать значение: %v", err)
 	}
-	value, err := connection.Get(ctx, "create-key")
+	value, err := readConnection.Get(ctx, "create-key")
 	if err != nil || value != "create-value" {
-		t.Fatalf("прочитать значение: value=%q error=%v", value, err)
+		t.Fatalf("прочитать через адрес для чтения: value=%q error=%v", value, err)
 	}
 }
 
 func Test_ResizeSingleValkey_WithRealApiAndOperator_AppliesRequestedResources(t *testing.T) {
 	harness := newScenarioHarness(t)
 	owner := harness.registerAccount()
-	created, password := harness.createInstance(owner, "resize")
+	created, password := harness.createInstance(owner, "resize", nil)
 	namespace := "valkey-" + created.Slug
 	harness.cleanupInstance(owner, created.ID, namespace)
 	_, originalPod := harness.waitForReady(owner, created, 1, 1, 1, "")
@@ -550,7 +578,7 @@ func Test_ResizeSingleValkey_WithRealApiAndOperator_AppliesRequestedResources(t 
 func Test_RotateSingleValkeyPassword_WithRealApiAndOperator_ReplacesApplicationCredential(t *testing.T) {
 	harness := newScenarioHarness(t)
 	owner := harness.registerAccount()
-	created, password := harness.createInstance(owner, "rotate")
+	created, password := harness.createInstance(owner, "rotate", nil)
 	namespace := "valkey-" + created.Slug
 	harness.cleanupInstance(owner, created.ID, namespace)
 	current, _ := harness.waitForReady(owner, created, 1, 1, 1, "")
@@ -593,7 +621,7 @@ func Test_RotateSingleValkeyPassword_WithRealApiAndOperator_ReplacesApplicationC
 func Test_DeleteSingleValkey_WithRealApiAndOperator_RemovesKubernetesResourcesAndApiState(t *testing.T) {
 	harness := newScenarioHarness(t)
 	owner := harness.registerAccount()
-	created, _ := harness.createInstance(owner, "delete")
+	created, _ := harness.createInstance(owner, "delete", nil)
 	namespace := "valkey-" + created.Slug
 	harness.waitForReady(owner, created, 1, 1, 1, "")
 	ctx, cancel := context.WithTimeout(context.Background(), conditionTimeout)

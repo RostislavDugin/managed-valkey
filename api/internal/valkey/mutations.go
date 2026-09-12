@@ -38,10 +38,12 @@ func (s *Service) Create(ctx context.Context, actor Actor, input CreateInput) (I
 		Password         string                    `json:"password"`
 		WhitelistEnabled bool                      `json:"is_whitelist_enabled"`
 		WhitelistCIDRs   []string                  `json:"whitelist_cidrs"`
+		Maintenance      *Maintenance              `json:"maintenance,omitempty"`
 	}{
 		Name: input.Name, Prefix: input.Prefix, Mode: input.Mode,
 		VCPU: input.Size.VCPU, RAMGB: input.Size.RAMGB, Password: input.Password,
 		WhitelistEnabled: input.WhitelistEnabled, WhitelistCIDRs: normalizedCIDRs,
+		Maintenance: input.Maintenance,
 	})
 	if err != nil {
 		return InstanceResult{}, apierr.WrapInternal(err)
@@ -494,6 +496,9 @@ func (s *Service) validateCreate(input CreateInput) ([]string, error) {
 	if err := validatePassword(input.Password); err != nil {
 		return nil, err
 	}
+	if err := validateMaintenance(input.Maintenance); err != nil {
+		return nil, err
+	}
 
 	return normalizeWhitelist(input.WhitelistCIDRs)
 }
@@ -524,9 +529,12 @@ func (s *Service) createWithUniqueSlug(
 			Phase:                     domain.ValkeyInstancePhaseProvisioning,
 			NetworkVerificationStatus: domain.ValkeyNetworkVerificationPending,
 		}
-		if input.Mode == domain.ValkeyInstanceModeHA {
-			hostRO := slug + "-ro." + s.catalog.Connection.Domain
-			record.HostRO = &hostRO
+		hostRO := slug + "-ro." + s.catalog.Connection.Domain
+		record.HostRO = &hostRO
+		if input.Maintenance != nil {
+			record.MaintenanceDOW = &input.Maintenance.DOW
+			record.MaintenanceHourUTC = &input.Maintenance.HourUTC
+			record.MaintenanceDurationMin = &input.Maintenance.DurationMin
 		}
 
 		created, createErr := s.repository.CreateValkeyInstance(ctx, tx, &record)

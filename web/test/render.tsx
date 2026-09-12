@@ -41,7 +41,7 @@ function instanceDto(instance: TestInstanceInput) {
     applied_vcpu: instance.vcpu,
     applied_ram_gb: instance.ramGb,
     host: `valkey-${instance.id}.valkey.test`,
-    host_ro: null,
+    host_ro: `valkey-${instance.id}-ro.valkey.test`,
     port: 41379,
     is_whitelist_enabled: false,
     whitelist_cidrs: [],

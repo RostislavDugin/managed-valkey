@@ -83,6 +83,41 @@ func Test_HA04_VerifyEnvoy_WithHAMode_RequiresPrimaryAndReadOnlyRoutes(t *testin
 	}
 }
 
+func Test_VerifyEnvoy_WithSingleMode_RequiresPrimaryAndReadEndpointRoutes(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	expected := testNetworkPrerequisites(now)
+	readEndpoint := expected
+	readEndpoint.Hostname = "cache-a1b2c3-ro.valkey.localhost"
+	readEndpoint.RouteName = "cache-a1b2c3-ro"
+	readEndpoint.ReadOnly = nil
+	expected.ReadOnly = &readEndpoint
+	snapshot := testEnvoySnapshot(t, expected, false)
+	reconciler := &ValkeyInstanceReconciler{
+		Client: testEnvoyClient(), SystemNamespace: "valkey-system",
+		EnvoyProcesses: 2, Clock: clocktesting.NewFakeClock(now),
+		ReadEnvoy: func(context.Context, corev1.Pod) (EnvoyAdminSnapshot, error) {
+			return snapshot, nil
+		},
+	}
+	if result := reconciler.verifyEnvoy(
+		context.Background(),
+		expected,
+	); result.status != valkeyv1alpha1.NetworkVerificationVerified {
+		t.Fatalf("два маршрута single не подтверждены: %+v", result)
+	}
+
+	broken := expected
+	brokenReadEndpoint := *expected.ReadOnly
+	broken.ReadOnly = &brokenReadEndpoint
+	broken.ReadOnly.BackendAddress = "10.42.0.99"
+	if result := reconciler.verifyEnvoy(
+		context.Background(),
+		broken,
+	); result.status == valkeyv1alpha1.NetworkVerificationVerified {
+		t.Fatalf("неверный backend маршрута чтения принят: %+v", result)
+	}
+}
+
 func Test_HA04_ValidateEnvoySnapshot_WhenReadOnlyReplicaIsNotReady_AcceptsRouteWithoutBackendAddress(t *testing.T) {
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	expected := testNetworkPrerequisites(now)

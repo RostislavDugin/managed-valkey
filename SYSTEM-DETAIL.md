@@ -84,7 +84,7 @@
 - `created_at`, `updated_at`: создание строки и последнее изменение намерения. Импорт наблюдений оператора `updated_at` не меняет;
 - `configuration_requested_at`: время создания или последнего роста `desired_generation`. Имя, maintenance, удаление и запрос без изменения это время не обновляют;
 - `app_password_hash` (64 hex-символа SHA-256 в нижнем регистре), `password_prefix` (первые 4 символа), `password_version` (default 1);
-- `host`, `host_ro`, `port`: `api` вычисляет их из slug и env при создании. В `single` `host_ro=null`; адрес `-ro` создаётся только для `ha`;
+- `host`, `host_ro`, `port`: `api` вычисляет их из slug и env при создании. Оба режима получают адреса `<slug>.<domain>` и `<slug>-ro.<domain>`; в `single` они ведут на один primary;
 - `is_whitelist_enabled`, `whitelist_cidrs text[]`;
 - `maintenance_dow smallint`, `maintenance_hour_utc smallint`, `maintenance_duration_min smallint`;
 - `deletion_requested_at`: намерение удалить, записывается HTTP-обработчиком. Фоновые циклы эту колонку не меняют.
@@ -123,7 +123,7 @@ DTO содержит маску `password_hint = password_prefix + "*****"`, в�
 
 ### `valkey_node_metrics`
 
-`instance_id`, `ordinal`, `ts`, `role`, `run_id`, `used_memory_bytes`, `maxmemory_bytes`, `connected_clients`, `ops_per_sec`, `keyspace_hits`, `keyspace_misses`, `evicted_keys`, `cpu_millicores`. Индекс `(instance_id, ts desc)` и unique `(instance_id, ordinal, ts)` защищают от повторного импорта. `ts` приходит из `collectedAt` снимка в CR, а не из времени записи в БД; точность сохраняется до микросекунд. `cpu_millicores` допускает `null`. Фоновая синхронизация API пишет строки по `status.metrics` через `ON CONFLICT DO NOTHING`. Производитель снимков в операторе ещё не реализован.
+`instance_id`, `ordinal`, `ts`, `role`, `run_id`, `used_memory_bytes`, `maxmemory_bytes`, `connected_clients`, `ops_per_sec`, `keyspace_hits`, `keyspace_misses`, `evicted_keys`, `cpu_millicores`. Индекс `(instance_id, ts desc)` и unique `(instance_id, ordinal, ts)` защищают от повторного импорта. `ts` приходит из `collectedAt` снимка в CR, а не из времени записи в БД; точность сохраняется до микросекунд. `cpu_millicores` допускает `null`. Оператор собирает текущий снимок каждого процесса в `status.metrics`, а фоновая синхронизация API пишет строки через `ON CONFLICT DO NOTHING`.
 
 Строки старше `VALKEY_METRICS_RETENTION`, по умолчанию `168h`, удаляет отдельный проход `api`: сразу при запуске и затем через 24 часа после завершения предыдущего прохода. Верхняя оценка объёма при сохранении каждого снимка раз в 10 секунд; при пропущенных снимках строк меньше:
 
@@ -364,9 +364,9 @@ status:
 | Service                           | `<slug>-replicas`                                  | Только `ha`, селектор `app.kubernetes.io/instance=<slug>, role=replica`                                                                                                                                                                                                                                                                                                                                           |
 | NetworkPolicy                     | `<slug>`                                           | ingress 6379 из namespace Envoy Gateway, из `valkey-system` и от подов инстанса; egress к подам инстанса и DNS                                                                                                                                                                                                                                                                                                    |
 | PodDisruptionBudget               | `<slug>`                                           | Только `ha`: `minAvailable: 2`, селектор `app.kubernetes.io/instance=<slug>`                                                                                                                                                                                                                                                                                                                                      |
-| Listener в общем `Gateway valkey` | `<slug>`, в `ha` также `<slug>-ro`                 | hostname `<slug>.<base>` и `<slug>-ro.<base>`, TLS Terminate, общий сертификат, `allowedRoutes` по метке namespace инстанса                                                                                                                                                                                                                                                                                       |
-| TCPRoute                          | `<slug>`, в `ha` также `<slug>-ro`                 | `parentRefs` на `Gateway` в `valkey-system` с `sectionName` своего listener, backend — соответствующий Service                                                                                                                                                                                                                                                                                                    |
-| SecurityPolicy                    | `<slug>`, в `ha` также `<slug>-ro`                 | Только если whitelist включён: `defaultAction: Deny`, правило Allow с `clientCIDRs`. Если выключен, политики нет                                                                                                                                                                                                                                                                                                  |
+| Listener в общем `Gateway valkey` | `<slug>` и `<slug>-ro` в обоих режимах             | hostname `<slug>.<base>` и `<slug>-ro.<base>`, TLS Terminate, общий сертификат, `allowedRoutes` по метке namespace инстанса                                                                                                                                                                                                                                                                                       |
+| TCPRoute                          | `<slug>` и `<slug>-ro` в обоих режимах             | `parentRefs` на `Gateway` в `valkey-system` с `sectionName` своего listener, backend — соответствующий Service; в `single` оба маршрута ведут на primary                                                                                                                                                                                                                                                           |
+| SecurityPolicy                    | `<slug>` и `<slug>-ro` в обоих режимах             | Только если whitelist включён: `defaultAction: Deny`, правило Allow с `clientCIDRs`. Если выключен, политики нет                                                                                                                                                                                                                                                                                                  |
 
 Дочерние объекты, включая `Pod`, получают прямую запись в `ownerReferences` на CR. `Listener` в общем `Gateway` снимает блокировку удаления CR. Правка общего `Gateway` идёт с проверкой `resourceVersion` и повтором, потому что несколько инстансов могут менять его одновременно.
 
@@ -1416,7 +1416,7 @@ Caddy не передаёт `Authorization` в VictoriaLogs. Публичный 
 127.0.0.1 shop-a1b2c3.valkey.localhost shop-a1b2c3-ro.valkey.localhost
 ```
 
-Wildcard-записи в `/etc/hosts` не используются. Адрес `-ro` проверяется только для `ha`; в `single` соответствующего маршрута нет. Bootstrap устанавливает в Secret `valkey-wildcard-tls` сертификат на `*.valkey.localhost`, выпущенный mkcert. При работающем стенде и созданном инстансе проверка с хоста выглядит так (slug заменяется фактическим):
+Wildcard-записи в `/etc/hosts` не используются. Адрес `-ro` проверяется в обоих режимах; в `single` он ведёт на тот же primary. Bootstrap устанавливает в Secret `valkey-wildcard-tls` сертификат на `*.valkey.localhost`, выпущенный mkcert. При работающем стенде и созданном инстансе проверка с хоста выглядит так (slug заменяется фактическим):
 
 ```sh
 valkey-cli \
@@ -1984,7 +1984,6 @@ operator/
   Dockerfile
   Justfile               команды оператора
   SCAFFOLD.md            исходная версия каркаса Kubebuilder
-  TODO.md                будущие сценарии восстановления
 internal/
   logging/               общий slog + otel
 migrations/              goose sql для PostgreSQL

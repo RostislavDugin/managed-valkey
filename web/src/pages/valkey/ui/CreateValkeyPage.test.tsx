@@ -184,7 +184,7 @@ describe('форма создания Valkey', () => {
     await user.clear(prefix);
     await user.type(prefix, 'shop');
 
-    expect(screen.getByText(/Адрес базы: shop-xxxxxx,/)).toBeVisible();
+    expect(screen.getByText(/Primary: redis:\/\/shop-xxxxxx/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Повторить' }));
@@ -192,7 +192,10 @@ describe('форма создания Valkey', () => {
     await waitFor(() => expect(screen.queryByText('Каталог недоступен')).not.toBeInTheDocument());
     expect(name).toHaveValue('cache-prod');
     expect(prefix).toHaveValue('shop');
-    expect(screen.getByText(/Адрес базы: shop-xxxxxx\.valkey\.test,/)).toBeVisible();
+    expect(screen.getByText(/Primary: redis:\/\/shop-xxxxxx\.valkey\.test:41379/)).toBeVisible();
+    expect(
+      screen.getByText(/Для чтения: redis:\/\/shop-xxxxxx-ro\.valkey\.test:41379/)
+    ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
   });
 
@@ -216,6 +219,52 @@ describe('форма создания Valkey', () => {
     await user.click(confirmation);
 
     expect(create).toBeEnabled();
+  });
+
+  it('проверяет окно обслуживания и отправляет его в одном POST создания', async () => {
+    const session = seedSession();
+    const api = installStatefulValkeyApi([]);
+    const user = userEvent.setup();
+
+    renderValkeySection('/valkey/management/new', session);
+
+    const maintenance = await screen.findByRole(
+      'switch',
+      { name: 'Задать окно обслуживания' },
+      WAIT
+    );
+    expect(maintenance).not.toBeChecked();
+    expect(screen.getByText('Белый список')).toBeVisible();
+    expect(screen.queryByText('Белый список адресов')).not.toBeInTheDocument();
+    await user.click(maintenance);
+
+    const day = screen.getByRole('textbox', { name: 'День недели, 0–6' });
+    const hour = screen.getByRole('textbox', { name: 'Час UTC, 0–23' });
+    const duration = screen.getByRole('textbox', { name: 'Длительность, минуты' });
+    await user.clear(day);
+    await user.clear(hour);
+    await user.clear(duration);
+    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+
+    expect(await screen.findByText('Укажите число от 0 до 6')).toBeVisible();
+    expect(screen.getByText('Укажите час от 0 до 23')).toBeVisible();
+    expect(screen.getByText('Укажите длительность от 1 до 1440 минут')).toBeVisible();
+    expect(api.requests.some((request) => request.method === 'POST')).toBe(false);
+
+    await user.clear(day);
+    await user.type(day, '2');
+    await user.clear(hour);
+    await user.type(hour, '3');
+    await user.clear(duration);
+    await user.type(duration, '60');
+    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
+
+    await waitFor(() =>
+      expect(api.requests.find((request) => request.method === 'POST')?.body).toMatchObject({
+        maintenance: { dow: 2, hour_utc: 3, duration_min: 60 },
+      })
+    );
+    expect(api.requests.some((request) => request.method === 'PATCH')).toBe(false);
   });
 
   it('после ответа 422 сохраняет поля формы, а при следующей отправке создаёт новый пароль', async () => {

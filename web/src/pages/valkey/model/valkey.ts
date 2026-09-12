@@ -49,7 +49,7 @@ export interface ValkeyInstance extends ValkeySize {
   appliedVcpu: number;
   appliedRamGb: number;
   host: string;
-  hostRo: string | null;
+  hostRo: string;
   port: number;
   isWhitelistEnabled: boolean;
   whitelistCidrs: string[];

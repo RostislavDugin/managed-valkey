@@ -29,6 +29,10 @@ declare -A preparation_by_pid=()
 signal_status=0
 preparation_reservation_owner="$run_id-preparation"
 preparation_reservation_active=0
+selected_scenario_set=0
+selected_scenario=""
+selected_row=""
+selected_catalog="$run_dir/selected-scenario.tsv"
 
 fail() {
     echo "operator-test: $*" >&2
@@ -45,11 +49,31 @@ fail() {
     fail "MV_OPERATOR_CANCEL_GRACE_SECONDS должно быть целым неотрицательным числом"
 [[ -x "$validator" ]] || fail "проверка каталога не найдена: $validator"
 
+if [[ -v MV_OPERATOR_TEST_SCENARIO ]]; then
+    selected_scenario_set=1
+    selected_scenario=$MV_OPERATOR_TEST_SCENARIO
+    [[ -n "$selected_scenario" ]] || fail "MV_OPERATOR_TEST_SCENARIO не должен быть пустым"
+    [[ "$selected_scenario" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] ||
+        fail "небезопасное имя сценария: $selected_scenario"
+fi
+
+"$validator" "$catalog"
+if ((selected_scenario_set == 1)); then
+    mapfile -t selected_rows < <(awk -F '\t' -v scenario="$selected_scenario" \
+        'NR > 1 && $1 == scenario { print }' "$catalog")
+    ((${#selected_rows[@]} == 1)) || fail "сценарий не найден в каталоге: $selected_scenario"
+    selected_row=${selected_rows[0]}
+fi
+
 mkdir -p "$results_dir"
 chmod 0700 "$run_dir" "$results_dir"
 printf '%s\n' "$$" >"$run_dir/owner.pid"
 "$resources" start-ticks "$$" >"$run_dir/owner.start-ticks"
 tr -d '\n' </proc/sys/kernel/random/boot_id >"$run_dir/owner.boot-id"
+if ((selected_scenario_set == 1)); then
+    sed -n '1p' "$catalog" >"$selected_catalog"
+    printf '%s\n' "$selected_row" >>"$selected_catalog"
+fi
 
 stop_process_groups() {
     local pid
@@ -177,8 +201,12 @@ run_scenarios() {
     local row scenario pattern nodes envoy_replicas memory_mib estimated_seconds timeout
     local -a rows=()
 
-    launch_network_checks
-    mapfile -t rows < <(tail -n +2 "$catalog" | sort -t $'\t' -k6,6nr)
+    if ((selected_scenario_set == 1)); then
+        rows=("$selected_row")
+    else
+        launch_network_checks
+        mapfile -t rows < <(tail -n +2 "$catalog" | sort -t $'\t' -k6,6nr)
+    fi
     for row in "${rows[@]}"; do
         ((signal_status == 0)) || break
         while ((${#scenario_by_pid[@]} >= max_parallel)); do
@@ -205,8 +233,13 @@ report_results() {
     release_status=$?
     "$cleanup_script" operator
     cleanup_status=$?
-    "$reporter" "$run_dir" full 2>&1 |
-        tee "$run_dir/matrix-report.log"
+    if ((selected_scenario_set == 1)); then
+        "$reporter" "$run_dir" scenario "$selected_catalog" 2>&1 |
+            tee "$run_dir/matrix-report.log"
+    else
+        "$reporter" "$run_dir" full 2>&1 |
+            tee "$run_dir/matrix-report.log"
+    fi
     report_status=${PIPESTATUS[0]}
     set -e
     for scenario in "${!status_by_scenario[@]}"; do
@@ -236,11 +269,14 @@ trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 trap report_results EXIT
 "$cleanup_script" operator
-"$validator" "$catalog"
 "$resources" status | tee "$run_dir/resources-before.tsv"
 reserve_preparation_resources
 
-for preparation in fast artifacts valkey; do
+preparations=(artifacts valkey)
+if ((selected_scenario_set == 0)); then
+    preparations=(fast "${preparations[@]}")
+fi
+for preparation in "${preparations[@]}"; do
     ((signal_status == 0)) || exit "$signal_status"
     setsid "$prepare_script" "$preparation" \
         "$run_dir" "$binary" "$operator_image" "$valkey_image" "$pause_image" "$image_archive" \

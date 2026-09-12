@@ -2,6 +2,20 @@
 set -Eeuo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+if [[ -v MANAGED_VALKEY_E2E_FILE ]]; then
+    [[ -n "$MANAGED_VALKEY_E2E_FILE" ]] || {
+        echo "e2e: MANAGED_VALKEY_E2E_FILE не должен быть пустым" >&2
+        exit 2
+    }
+    [[ "$MANAGED_VALKEY_E2E_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.spec\.ts$ ]] || {
+        echo "e2e: небезопасное имя файла: $MANAGED_VALKEY_E2E_FILE" >&2
+        exit 2
+    }
+    [[ -f "$repo_root/tests/e2e/specs/$MANAGED_VALKEY_E2E_FILE" ]] || {
+        echo "e2e: файл теста не найден: $MANAGED_VALKEY_E2E_FILE" >&2
+        exit 2
+    }
+fi
 diagnostics_dir=${DIAGNOSTICS_DIR:?DIAGNOSTICS_DIR не задан}
 state_dir=${MV_STATE_DIR:?MV_STATE_DIR не задан}
 child_pids=()

@@ -28,7 +28,7 @@ function instanceDto(overrides: Record<string, unknown> = {}) {
     applied_vcpu: 1,
     applied_ram_gb: 2,
     host: 'shop-abc123.valkey.test',
-    host_ro: null,
+    host_ro: 'shop-abc123-ro.valkey.test',
     port: 41379,
     is_whitelist_enabled: true,
     whitelist_cidrs: ['192.0.2.0/24'],
@@ -57,7 +57,7 @@ function instanceDto(overrides: Record<string, unknown> = {}) {
 function credentialsDto() {
   return {
     host: 'shop-abc123.valkey.test',
-    host_ro: null,
+    host_ro: 'shop-abc123-ro.valkey.test',
     port: 41379,
     username: 'app',
     password_hint: '0123*****',
@@ -148,6 +148,7 @@ describe('клиент Valkey API', () => {
     await expect(getInstance(INSTANCE_ID)).resolves.toEqual(listed);
     await expect(getValkeyCredentials(INSTANCE_ID)).resolves.toMatchObject({
       host: 'shop-abc123.valkey.test',
+      hostRo: 'shop-abc123-ro.valkey.test',
       port: 41379,
       passwordVersion: 2,
     });
@@ -181,6 +182,7 @@ describe('клиент Valkey API', () => {
         password: PASSWORD,
         isWhitelistEnabled: true,
         whitelistCidrs: ['192.0.2.0/24'],
+        maintenance: { dow: 1, hourUtc: 4, durationMin: 90 },
       },
       'create-key'
     );
@@ -207,6 +209,7 @@ describe('клиент Valkey API', () => {
       password: PASSWORD,
       is_whitelist_enabled: true,
       whitelist_cidrs: ['192.0.2.0/24'],
+      maintenance: { dow: 1, hour_utc: 4, duration_min: 90 },
     });
     expect(new Headers(createInit?.headers).get('Idempotency-Key')).toBe('create-key');
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
@@ -229,6 +232,48 @@ describe('клиент Valkey API', () => {
     expect([...Array(localStorage.length).keys()].map((index) => localStorage.key(index))).toEqual([
       'mv_token',
     ]);
+  });
+
+  it('при создании различает выключенное и неуказанное окно обслуживания в точном JSON', async () => {
+    const fetchMock = vi
+      .spyOn(window, 'fetch')
+      .mockResolvedValueOnce(jsonResponse(instanceDto(), 202))
+      .mockResolvedValueOnce(jsonResponse(instanceDto(), 202));
+    const input = {
+      name: 'cache',
+      prefix: 'shop',
+      mode: 'single' as const,
+      vcpu: 1,
+      ramGb: 1,
+      password: PASSWORD,
+      isWhitelistEnabled: false,
+      whitelistCidrs: [],
+    };
+
+    await createInstance({ ...input, maintenance: null }, 'disabled-maintenance');
+    await createInstance(input, 'unspecified-maintenance');
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      name: 'cache',
+      prefix: 'shop',
+      mode: 'single',
+      vcpu: 1,
+      ram_gb: 1,
+      password: PASSWORD,
+      is_whitelist_enabled: false,
+      whitelist_cidrs: [],
+      maintenance: null,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      name: 'cache',
+      prefix: 'shop',
+      mode: 'single',
+      vcpu: 1,
+      ram_gb: 1,
+      password: PASSWORD,
+      is_whitelist_enabled: false,
+      whitelist_cidrs: [],
+    });
   });
 
   it('после немедленного отказа по общей квоте возвращает ошибку без повторного запроса создания', async () => {

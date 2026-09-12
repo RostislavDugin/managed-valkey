@@ -63,6 +63,35 @@ run_mode test failures test:failures 0 0
 run_mode headed all test:headed 1000 500
 run_mode prod all test:prod 0 0
 
+selected_run_id="runner-selected-${RANDOM}"
+selected_artifact_dir="$repo_root/tmp/playwright/e2e/$selected_run_id"
+artifact_dirs+=("$selected_artifact_dir")
+MANAGED_VALKEY_E2E_FILE=00-single-lifecycle.spec.ts \
+    MANAGED_VALKEY_E2E_SECRET_VALUES_FILE="$temporary/selected-secret-values" \
+    MV_E2E_ARTIFACT_DIR="$selected_artifact_dir" \
+    MV_E2E_CAPTURE="$temporary/selected" \
+    MV_E2E_DYNAMIC_SECRET=dynamic-selected \
+    MV_RUN_ID="$selected_run_id" \
+    PATH="$mock_bin:$PATH" \
+    "$repo_root/scripts/run_playwright_e2e.sh" test all
+rg -q ' exec playwright test specs/00-single-lifecycle\.spec\.ts$' "$temporary/selected.args"
+
+if MANAGED_VALKEY_E2E_FILE= PATH="$mock_bin:$PATH" \
+    "$repo_root/scripts/run_playwright_e2e.sh" test all \
+    >"$temporary/empty-file.out" 2>"$temporary/empty-file.err"; then
+    echo "пустое имя файла Playwright было принято запускателем" >&2
+    exit 1
+fi
+rg -q 'MANAGED_VALKEY_E2E_FILE не должен быть пустым' "$temporary/empty-file.err"
+
+if MANAGED_VALKEY_E2E_FILE=unknown.spec.ts PATH="$mock_bin:$PATH" \
+    "$repo_root/scripts/run_playwright_e2e.sh" test all \
+    >"$temporary/unknown-file.out" 2>"$temporary/unknown-file.err"; then
+    echo "неизвестный файл Playwright был принят запускателем" >&2
+    exit 1
+fi
+rg -q 'файл теста не найден: unknown.spec.ts' "$temporary/unknown-file.err"
+
 if PATH="$mock_bin:$PATH" "$repo_root/scripts/run_playwright_e2e.sh" unknown \
     >"$temporary/invalid.out" 2>"$temporary/invalid.err"; then
     echo "неизвестный режим Playwright был принят" >&2

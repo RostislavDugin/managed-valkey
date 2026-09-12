@@ -25,7 +25,7 @@ describe('модель аудита Valkey', () => {
       'instance.create': 'Создана база',
       'instance.update': 'Изменены настройки',
       'instance.resize': 'Изменён тариф',
-      'instance.whitelist.update': 'Изменён доступ по IP',
+      'instance.whitelist.update': 'Изменён белый список',
       'instance.password.rotate': 'Изменён пароль',
       'instance.delete': 'Удалена база',
     });

@@ -19,6 +19,10 @@ export interface CreateFormValues extends ValkeySize {
   isWhitelistEnabled: boolean;
   whitelist: string;
   confirmDenyAll: boolean;
+  maintenanceEnabled: boolean;
+  maintenanceDow: number;
+  maintenanceHourUtc: number;
+  maintenanceDurationMin: number;
 }
 
 export function getCreateFormDefaults(
@@ -40,7 +44,29 @@ export function getCreateFormDefaults(
     isWhitelistEnabled: false,
     whitelist: '',
     confirmDenyAll: false,
+    maintenanceEnabled: false,
+    maintenanceDow: 0,
+    maintenanceHourUtc: 0,
+    maintenanceDurationMin: 30,
   };
+}
+
+export function validateMaintenanceDow(value: number, enabled: boolean) {
+  return enabled && (!Number.isInteger(value) || value < 0 || value > 6)
+    ? 'Укажите число от 0 до 6'
+    : null;
+}
+
+export function validateMaintenanceHourUtc(value: number, enabled: boolean) {
+  return enabled && (!Number.isInteger(value) || value < 0 || value > 23)
+    ? 'Укажите час от 0 до 23'
+    : null;
+}
+
+export function validateMaintenanceDurationMin(value: number, enabled: boolean) {
+  return enabled && (!Number.isInteger(value) || value < 1 || value > 1440)
+    ? 'Укажите длительность от 1 до 1440 минут'
+    : null;
 }
 
 export function describeMissingQuota(check: QuotaCheck) {

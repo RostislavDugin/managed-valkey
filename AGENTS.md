@@ -114,11 +114,25 @@ production через `just test-e2e-prod`. Задания CI API, операт�
 ## Локальные команды компонентов
 
 `api`, `operator` и `web` предоставляют `run`, `format`, `lint`, `test` и
-`test-full`. Если изменение ограничено одним приложением, запускай `format`,
-`lint` и быстрый `test` из его каталога, не проверяя остальные приложения.
+`test-full`. Во время разработки запускай форматирование, линтер, сборку и
+затронутые тесты только изменённого приложения. Полный быстрый `test` нужен,
+когда точный набор определить нельзя или изменение затрагивает общую основу
+приложения. `test-full` запускай только по отдельному запросу или перед релизом.
 Для изменений корневого `internal`, `go.mod`, `go.sum` или `.golangci.yml`
 нужны быстрые проверки и API, и оператора. Корневые команды используй для
 общей обвязки или изменений нескольких приложений.
+
+Инфраструктурные сценарии можно выбрать без запуска соседних проверок:
+
+```text
+MV_OPERATOR_TEST_SCENARIO=single-lifecycle scripts/test_operator.sh
+MV_INTEGRATION_TEST=Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning scripts/test_environment.sh exec integration -- scripts/test_integrations.sh
+MANAGED_VALKEY_E2E_FILE=00-single-lifecycle.spec.ts scripts/test_environment.sh exec e2e -- scripts/test_e2e.sh
+```
+
+Имена должны точно существовать в каталоге оператора, списке Go-тестов или
+`tests/e2e/specs`. Пустое, неизвестное или небезопасное значение завершается до
+подготовки стенда.
 
 `just format` не только форматирует код, но и добавляет изменения своей области
 в индекс Git. Не запускай его, пока другой агент меняет файлы той же области.
