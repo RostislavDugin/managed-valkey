@@ -267,14 +267,31 @@ printf '%s\n' "$*" >>"$TEST_HELM_LOG"
 if [[ $TEST_KUBECTL_MODE != metrics-* ]]; then
     exit 2
 fi
-if [[ $TEST_KUBECTL_MODE == metrics-helm-retry &&
+if [[ ($TEST_KUBECTL_MODE == metrics-helm-retry ||
+    $TEST_KUBECTL_MODE == metrics-helm-network-failure) &&
     $* == *'upgrade --install envoy-gateway '* ]]; then
     retry_count=$(<"$TEST_KUBECTL_STATE/helm-retry-count")
     retry_count=$((retry_count + 1))
     printf '%s\n' "$retry_count" >"$TEST_KUBECTL_STATE/helm-retry-count"
-    if ((retry_count < 3)); then
+    if [[ $TEST_KUBECTL_MODE == metrics-helm-network-failure ]] || ((retry_count < 3)); then
+        echo 'Error: failed to perform "Fetch" on source: connection reset by peer' >&2
         exit 1
     fi
+fi
+if [[ $TEST_KUBECTL_MODE == metrics-cert-manager-helm-retry &&
+    $* == *'upgrade --install cert-manager '* ]]; then
+    retry_count=$(<"$TEST_KUBECTL_STATE/helm-retry-count")
+    retry_count=$((retry_count + 1))
+    printf '%s\n' "$retry_count" >"$TEST_KUBECTL_STATE/helm-retry-count"
+    if ((retry_count < 2)); then
+        echo 'Error: failed to perform "Resolve" on source: i/o timeout' >&2
+        exit 1
+    fi
+fi
+if [[ $TEST_KUBECTL_MODE == metrics-helm-permanent-failure &&
+    $* == *'upgrade --install envoy-gateway '* ]]; then
+    echo 'Error: rendered manifests contain a resource that already exists' >&2
+    exit 1
 fi
 if [[ $* == 'repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update' ]]; then
     exit 0
@@ -456,8 +473,33 @@ run_case metrics-helm-retry "$work_dir/metrics-helm-retry.log"
 [[ $case_status == 0 ]]
 [[ $(grep -Fc 'upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm' \
     "$state_dir/helm.log") == 3 ]]
-grep -Fq 'попытка 1 не удалась, повтор через 10 с' "$work_dir/metrics-helm-retry.log"
-grep -Fq 'попытка 2 не удалась, повтор через 10 с' "$work_dir/metrics-helm-retry.log"
+grep -Fq 'временная ошибка загрузки OCI chart, повтор через 10 с (1/4)' \
+    "$work_dir/metrics-helm-retry.log"
+grep -Fq 'временная ошибка загрузки OCI chart, повтор через 10 с (2/4)' \
+    "$work_dir/metrics-helm-retry.log"
+
+run_case metrics-cert-manager-helm-retry "$work_dir/metrics-cert-manager-helm-retry.log"
+[[ $case_status == 0 ]]
+[[ $(grep -Fc 'upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager' \
+    "$state_dir/helm.log") == 2 ]]
+grep -Fq 'временная ошибка загрузки OCI chart, повтор через 10 с (1/4)' \
+    "$work_dir/metrics-cert-manager-helm-retry.log"
+
+run_case metrics-helm-network-failure "$work_dir/metrics-helm-network-failure.log"
+[[ $case_status == 1 ]]
+[[ $(grep -Fc 'upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm' \
+    "$state_dir/helm.log") == 5 ]]
+grep -Fq 'временная ошибка загрузки OCI chart, повтор через 10 с (4/4)' \
+    "$work_dir/metrics-helm-network-failure.log"
+
+run_case metrics-helm-permanent-failure "$work_dir/metrics-helm-permanent-failure.log"
+[[ $case_status == 1 ]]
+[[ $(grep -Fc 'upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm' \
+    "$state_dir/helm.log") == 1 ]]
+if grep -Fq 'повтор через 10 с' "$work_dir/metrics-helm-permanent-failure.log"; then
+    echo "Helm повторил постоянную ошибку" >&2
+    exit 1
+fi
 
 run_case metrics-api-unavailable "$work_dir/metrics-api-unavailable.log"
 [[ $case_status == 1 ]]

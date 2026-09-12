@@ -41,19 +41,46 @@ cleanup() {
 
 trap cleanup EXIT
 
-retry() {
-    local attempt
+is_retryable_helm_oci_error() {
+    local error_file=$1
 
+    grep -Eiq \
+        'failed to (perform "(Fetch|Resolve)" on source|fetch|resolve)|unexpected status from (GET|HEAD) request' \
+        "$error_file" &&
+        grep -Eiq \
+            'connection (refused|reset by peer|timed out)|i/o timeout|TLS handshake timeout|temporary failure in name resolution|no such host|context deadline exceeded|unexpected EOF|unexpected status from (GET|HEAD) request.*(408|429|500|502|503|504)' \
+            "$error_file"
+}
+
+retry_helm_oci_fetch() {
+    local attempt
+    local command_status=1
+    local error_file
+
+    error_file=$(mktemp)
     for attempt in {1..5}; do
-        if "$@"; then
+        : >"$error_file"
+        if "$@" 2>"$error_file"; then
+            cat "$error_file" >&2
+            rm -f -- "$error_file"
             return 0
+        else
+            command_status=$?
+        fi
+
+        cat "$error_file" >&2
+        if ! is_retryable_helm_oci_error "$error_file"; then
+            rm -f -- "$error_file"
+            return "$command_status"
         fi
         if ((attempt < 5)); then
-            echo "попытка $attempt не удалась, повтор через 10 с" >&2
+            echo "временная ошибка загрузки OCI chart, повтор через 10 с ($attempt/4)" >&2
             sleep 10
         fi
     done
-    return 1
+
+    rm -f -- "$error_file"
+    return "$command_status"
 }
 
 if [[ ! $release_sha =~ ^[0-9a-f]{40}$ ]]; then
@@ -338,7 +365,7 @@ fi
 kubectl apply --server-side --force-conflicts -f \
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/${gateway_api_version}/experimental-install.yaml"
 
-retry helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+retry_helm_oci_fetch helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
     --version "$envoy_gateway_version" \
     --namespace envoy-gateway-system \
     --create-namespace \
@@ -346,7 +373,7 @@ retry helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-he
     --wait \
     --timeout 10m
 
-retry helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+retry_helm_oci_fetch helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
     --version "$cert_manager_version" \
     --namespace cert-manager \
     --create-namespace \
