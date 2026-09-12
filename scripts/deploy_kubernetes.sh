@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-    echo "использование: $0 <sha> <административный-kubeconfig> <kubeconfig-api>" >&2
+if [[ $# -ne 4 ]]; then
+    echo "использование: $0 <sha> <административный-kubeconfig> <kubeconfig-api> <CA-kubelet>" >&2
     exit 2
 fi
 
 release_sha=$1
 admin_kubeconfig=$2
 api_kubeconfig=$3
+kubelet_ca_file=$4
 repo_root=$(git rev-parse --show-toplevel)
 operator_image="ghcr.io/rostislavdugin/managed-valkey-operator:$release_sha"
 operator_placeholder=ghcr.io/rostislavdugin/managed-valkey-operator:0000000000000000000000000000000000000000
@@ -19,9 +20,9 @@ metrics_server_chart_version=3.14.0
 metrics_server_version=v0.9.0
 metrics_max_age_seconds=60
 metrics_server_values="$repo_root/deploy/prod/metrics-server-values.yaml"
-metrics_server_kubelet_ca="$repo_root/deploy/prod/kubelet-ca.crt"
 cert_manager_webhook_host=cert-manager-webhook.valkey.h3llo-demo.com
 cloudflare_token_file=""
+kubelet_ca_validation_dir=""
 restart_check_pods=()
 
 cleanup() {
@@ -32,6 +33,9 @@ cleanup() {
     done
     if [[ -n $cloudflare_token_file ]]; then
         rm -f -- "$cloudflare_token_file"
+    fi
+    if [[ -n $kubelet_ca_validation_dir ]]; then
+        rm -rf -- "$kubelet_ca_validation_dir"
     fi
 }
 
@@ -45,17 +49,57 @@ if [[ ! -s $admin_kubeconfig ]]; then
     echo "административный kubeconfig отсутствует или пуст" >&2
     exit 1
 fi
+if [[ ! -s $kubelet_ca_file ]]; then
+    echo "CA kubelet отсутствует или пуст" >&2
+    exit 1
+fi
 if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
     echo "не задан CLOUDFLARE_API_TOKEN" >&2
     exit 1
 fi
 
-for command in kubectl helm docker sed base64 getent awk sort date jq; do
+for command in kubectl helm docker sed base64 getent awk sort date jq openssl sha256sum grep; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "не установлена команда $command" >&2
         exit 1
     fi
 done
+
+kubelet_ca_validation_dir=$(mktemp -d)
+if ! awk -v output_dir="$kubelet_ca_validation_dir" '
+    BEGIN { certificate_count = 0; inside_certificate = 0; invalid = 0 }
+    $0 == "-----BEGIN CERTIFICATE-----" {
+        if (inside_certificate) invalid = 1
+        inside_certificate = 1
+        certificate_count++
+        output_file = output_dir "/certificate-" certificate_count ".pem"
+    }
+    inside_certificate {
+        print > output_file
+        if ($0 == "-----END CERTIFICATE-----") {
+            close(output_file)
+            inside_certificate = 0
+        }
+        next
+    }
+    $0 !~ /^[[:space:]]*$/ { invalid = 1 }
+    END { if (inside_certificate || invalid || certificate_count == 0) exit 1 }
+' "$kubelet_ca_file"; then
+    echo "набор CA kubelet должен содержать только PEM-сертификаты" >&2
+    exit 1
+fi
+for kubelet_ca_certificate in "$kubelet_ca_validation_dir"/*.pem; do
+    if ! openssl verify -CAfile "$kubelet_ca_file" "$kubelet_ca_certificate" >/dev/null 2>&1 ||
+        ! openssl x509 -in "$kubelet_ca_certificate" -noout -text 2>/dev/null | grep -Fq 'CA:TRUE'; then
+        echo "набор CA kubelet содержит недействующий сертификат CA" >&2
+        exit 1
+    fi
+    if ! openssl x509 -in "$kubelet_ca_certificate" -noout -checkend 2592000 >/dev/null 2>&1; then
+        echo "CA kubelet истёк или истечёт менее чем через 30 дней" >&2
+        exit 1
+    fi
+done
+kubelet_ca_sha256=$(sha256sum "$kubelet_ca_file" | awk '{print $1}')
 
 export KUBECONFIG=$admin_kubeconfig
 kubectl get --raw=/readyz >/dev/null
@@ -199,7 +243,7 @@ kubectl apply -f "$repo_root/deploy/prod/namespace.yaml"
 kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/valkey-system --timeout=60s
 
 kubectl -n kube-system create configmap metrics-server-kubelet-ca \
-    --from-file="ca.crt=$metrics_server_kubelet_ca" \
+    --from-file="ca.crt=$kubelet_ca_file" \
     --dry-run=client \
     -o yaml | kubectl apply -f -
 helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update
@@ -224,7 +268,8 @@ if [[ $(jq length <<<"$metrics_server_host_aliases") -ne ${#worker_nodes[@]} ]];
 fi
 metrics_server_patch=$(jq -cn \
     --argjson host_aliases "$metrics_server_host_aliases" \
-    '{spec: {template: {spec: {hostAliases: $host_aliases}}}}')
+    --arg kubelet_ca_sha256 "$kubelet_ca_sha256" \
+    '{spec: {template: {metadata: {annotations: {"managed-valkey.io/kubelet-ca-sha256": $kubelet_ca_sha256}}, spec: {hostAliases: $host_aliases}}}}')
 kubectl -n kube-system patch deployment metrics-server \
     --type=merge \
     --patch "$metrics_server_patch"

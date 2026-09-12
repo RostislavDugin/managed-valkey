@@ -11,6 +11,22 @@ admin_kubeconfig=$work_dir/admin.kubeconfig
 api_kubeconfig=$work_dir/api.kubeconfig
 mkdir -p "$fake_bin" "$state_dir/active"
 printf '%s\n' 'apiVersion: v1' >"$admin_kubeconfig"
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    -subj /CN=managed-valkey-test-kubelet-ca \
+    -keyout "$work_dir/kubelet-ca.key" \
+    -out "$work_dir/kubelet-ca.crt" >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    -subj /CN=managed-valkey-test-kubelet-ca-rotated \
+    -keyout "$work_dir/kubelet-ca-rotated.key" \
+    -out "$work_dir/kubelet-ca-rotated.crt" >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+    -subj /CN=managed-valkey-test-kubelet-ca-expiring \
+    -keyout "$work_dir/kubelet-ca-expiring.key" \
+    -out "$work_dir/kubelet-ca-expiring.crt" >/dev/null 2>&1
+printf '%s\n' 'not a certificate' >"$work_dir/kubelet-ca-invalid.crt"
+cp "$work_dir/kubelet-ca.crt" "$work_dir/kubelet-ca-rotation-bundle.crt"
+printf '\n' >>"$work_dir/kubelet-ca-rotation-bundle.crt"
+cat "$work_dir/kubelet-ca-rotated.crt" >>"$work_dir/kubelet-ca-rotation-bundle.crt"
 
 cat >"$fake_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
@@ -154,7 +170,7 @@ fi
 if [[ $metrics_mode == true && ${1:-} == wait ]]; then
     exit 0
 fi
-if [[ $TEST_KUBECTL_MODE == metrics-install && ${1:-} == apply && ${2:-} == --server-side ]]; then
+if [[ $TEST_KUBECTL_MODE == metrics-install* && ${1:-} == apply && ${2:-} == --server-side ]]; then
     exit 73
 fi
 if [[ $metrics_mode == true && ${1:-} == apply ]]; then
@@ -290,6 +306,7 @@ chmod 0755 \
 run_case() {
     local mode=$1
     local output=$2
+    local kubelet_ca=${3:-$work_dir/kubelet-ca.crt}
 
     rm -rf -- "$state_dir/active"
     mkdir -p "$state_dir/active"
@@ -308,7 +325,8 @@ run_case() {
         "$repo_root/scripts/deploy_kubernetes.sh" \
         aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
         "$admin_kubeconfig" \
-        "$api_kubeconfig" >"$output" 2>&1
+        "$api_kubeconfig" \
+        "$kubelet_ca" >"$output" 2>&1
     case_status=$?
     set -e
 }
@@ -355,17 +373,47 @@ if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-val
     echo "проверка TLS kubelet отключена в значениях chart" >&2
     exit 1
 fi
-grep -Fq -- "-n kube-system create configmap metrics-server-kubelet-ca --from-file=ca.crt=$repo_root/deploy/prod/kubelet-ca.crt --dry-run=client -o yaml" \
+grep -Fq -- "-n kube-system create configmap metrics-server-kubelet-ca --from-file=ca.crt=$work_dir/kubelet-ca.crt --dry-run=client -o yaml" \
     "$state_dir/kubectl.log"
 grep -Fq -- '-n kube-system patch deployment metrics-server --type=merge --patch' \
     "$state_dir/kubectl.log"
 grep -Fq -- '"hostAliases":[{"ip":"10.17.0.35","hostnames":["node-a"]}]' \
+    "$state_dir/kubectl.log"
+initial_ca_sha256=$(sha256sum "$work_dir/kubelet-ca.crt" | awk '{print $1}')
+grep -Fq -- "\"managed-valkey.io/kubelet-ca-sha256\":\"$initial_ca_sha256\"" \
     "$state_dir/kubectl.log"
 grep -Fq '  name: metrics-server-control-plane' "$state_dir/pods.yaml"
 grep -Fq '  externalName: cert-manager-webhook.valkey.h3llo-demo.com' \
     "$state_dir/pods.yaml"
 grep -Fq -- 'patch apiservice v1beta1.metrics.k8s.io --type=merge --patch {"spec":{"service":{"name":"metrics-server-control-plane","namespace":"kube-system","port":4443}}}' \
     "$state_dir/kubectl.log"
+
+run_case metrics-install-rotated "$work_dir/metrics-install-rotated.log" \
+    "$work_dir/kubelet-ca-rotation-bundle.crt"
+[[ $case_status == 73 ]]
+rotated_ca_sha256=$(sha256sum "$work_dir/kubelet-ca-rotation-bundle.crt" | awk '{print $1}')
+grep -Fq -- "-n kube-system create configmap metrics-server-kubelet-ca --from-file=ca.crt=$work_dir/kubelet-ca-rotation-bundle.crt --dry-run=client -o yaml" \
+    "$state_dir/kubectl.log"
+grep -Fq -- "\"managed-valkey.io/kubelet-ca-sha256\":\"$rotated_ca_sha256\"" \
+    "$state_dir/kubectl.log"
+if grep -Fq -- "$initial_ca_sha256" "$state_dir/kubectl.log"; then
+    echo "ротация CA сохранила прежнюю контрольную сумму" >&2
+    exit 1
+fi
+
+run_case invalid-kubelet-ca "$work_dir/invalid-kubelet-ca.log" \
+    "$work_dir/kubelet-ca-invalid.crt"
+[[ $case_status == 1 ]]
+grep -Fq 'набор CA kubelet должен содержать только PEM-сертификаты' \
+    "$work_dir/invalid-kubelet-ca.log"
+[[ ! -s $state_dir/kubectl.log ]]
+
+run_case expiring-kubelet-ca "$work_dir/expiring-kubelet-ca.log" \
+    "$work_dir/kubelet-ca-expiring.crt"
+[[ $case_status == 1 ]]
+grep -Fq 'CA kubelet истёк или истечёт менее чем через 30 дней' \
+    "$work_dir/expiring-kubelet-ca.log"
+[[ ! -s $state_dir/kubectl.log ]]
 
 run_case metrics-deployment-unavailable "$work_dir/metrics-deployment-unavailable.log"
 [[ $case_status == 1 ]]
