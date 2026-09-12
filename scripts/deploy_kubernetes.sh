@@ -19,6 +19,7 @@ metrics_server_chart_version=3.14.0
 metrics_server_version=v0.9.0
 metrics_max_age_seconds=60
 metrics_server_values="$repo_root/deploy/prod/metrics-server-values.yaml"
+metrics_server_kubelet_ca="$repo_root/deploy/prod/kubelet-ca.crt"
 cert_manager_webhook_host=cert-manager-webhook.valkey.h3llo-demo.com
 cloudflare_token_file=""
 restart_check_pods=()
@@ -197,6 +198,10 @@ done
 kubectl apply -f "$repo_root/deploy/prod/namespace.yaml"
 kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/valkey-system --timeout=60s
 
+kubectl -n kube-system create configmap metrics-server-kubelet-ca \
+    --from-file="ca.crt=$metrics_server_kubelet_ca" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f -
 helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update
 helm upgrade --install metrics-server metrics-server/metrics-server \
     --version "$metrics_server_chart_version" \

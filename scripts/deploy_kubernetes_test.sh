@@ -161,6 +161,11 @@ if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == cert-manager &&
     printf '%s\n' 'apiVersion: v1' 'kind: Secret' 'metadata:' '  name: cloudflare-api-token'
     exit 0
 fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
+    ${3:-} == create && ${4:-} == configmap && ${5:-} == metrics-server-kubelet-ca ]]; then
+    printf '%s\n' 'apiVersion: v1' 'kind: ConfigMap' 'metadata:' '  name: metrics-server-kubelet-ca'
+    exit 0
+fi
 if [[ $metrics_mode == true && ${1:-} == kustomize ]]; then
     printf '%s\n' 'apiVersion: v1' 'kind: List' 'items: []'
     exit 0
@@ -337,10 +342,14 @@ if grep -Fq -- '--kubelet-insecure-tls' "$state_dir/helm.log"; then
 fi
 grep -Fxq '  - --kubelet-preferred-address-types=Hostname,InternalDNS,InternalIP,ExternalDNS,ExternalIP' \
     "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq '  - --kubelet-certificate-authority=/etc/kubelet-ca/ca.crt' \
+    "$repo_root/deploy/prod/metrics-server-values.yaml"
 if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-values.yaml"; then
     echo "проверка TLS kubelet отключена в значениях chart" >&2
     exit 1
 fi
+grep -Fq -- "-n kube-system create configmap metrics-server-kubelet-ca --from-file=ca.crt=$repo_root/deploy/prod/kubelet-ca.crt --dry-run=client -o yaml" \
+    "$state_dir/kubectl.log"
 grep -Fq -- '-n kube-system patch deployment metrics-server --type=merge --patch' \
     "$state_dir/kubectl.log"
 grep -Fq -- '"hostAliases":[{"ip":"10.17.0.35","hostnames":["node-a"]}]' \
