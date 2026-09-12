@@ -503,7 +503,7 @@ func (r *ValkeyInstanceReconciler) validateProductionCertificate(ctx context.Con
 	certificate.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "cert-manager.io", Version: "v1", Kind: "Certificate",
 	})
-	key := client.ObjectKey{Namespace: r.SystemNamespace, Name: wildcardSecretName}
+	key := client.ObjectKey{Namespace: r.SystemNamespace, Name: wildcardCertificateName}
 	if err := r.Get(ctx, key, certificate); err != nil {
 		return checkError("CertificateResourceUnavailable", "прочитать Certificate", err)
 	}

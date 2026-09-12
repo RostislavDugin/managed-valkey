@@ -396,7 +396,7 @@ func Test_CertificateResourceRules_WithDevelopmentAndProduction_UseEnvironmentSp
 		"apiVersion": "cert-manager.io/v1",
 		"kind":       "Certificate",
 		"metadata": map[string]any{
-			"name": wildcardSecretName, "namespace": "valkey-system", "generation": int64(3),
+			"name": wildcardCertificateName, "namespace": "valkey-system", "generation": int64(3),
 		},
 		"status": map[string]any{"conditions": []any{map[string]any{
 			"type": "Ready", "status": "True", "observedGeneration": int64(3),

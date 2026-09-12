@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	gatewayName        = "valkey"
-	wildcardSecretName = "valkey-wildcard-tls"
+	gatewayName             = "valkey"
+	wildcardCertificateName = "valkey-wildcard"
+	wildcardSecretName      = "valkey-wildcard-tls"
 )
 
 func (r *ValkeyInstanceReconciler) reconcileNetworkResources(
