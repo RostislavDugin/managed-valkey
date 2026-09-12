@@ -432,7 +432,7 @@ jobs:
   deploy:
     name: Развёртывание рабочего окружения
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'RostislavDugin/managed-valkey'
-    needs: [build-api, build-web, build-operator]
+    needs: [ci-success]
     runs-on: ubuntu-24.04
     environment: production
     concurrency:
