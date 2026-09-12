@@ -8,6 +8,11 @@ import {
   TEST_INSTANCE_ID,
   valkeyInstanceDto,
 } from '../../../../test/valkey-api-fixture';
+import {
+  formatLocalMaintenance,
+  MAINTENANCE_WEEKDAYS,
+  utcMaintenanceToLocal,
+} from '../model/valkey-maintenance';
 
 const WAIT = { timeout: 10_000 };
 const instancePath = `/valkey/management/${TEST_INSTANCE_ID}`;
@@ -34,13 +39,15 @@ describe('управление базой Valkey', () => {
     renderValkeySection(instancePath, session);
 
     expect(await screen.findByRole('heading', { name: 'cache' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Применённая конфигурация').parentElement).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Текущая конфигурация' })).toHaveTextContent(
       '2 vCPU / 8 ГБ'
     );
-    expect(screen.getByText('Primary').parentElement).toHaveTextContent(
+    expect(screen.queryByText('Применённая конфигурация')).not.toBeInTheDocument();
+    expect(screen.queryByText('Суммарные ресурсы')).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Адрес для записи и чтения' })).toHaveTextContent(
       'redis://shop-abc123.valkey.test:41379'
     );
-    expect(screen.getByText('Для чтения').parentElement).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Адрес только для чтения' })).toHaveTextContent(
       'redis://shop-abc123-ro.valkey.test:41379'
     );
     expect(screen.getByText('Белый список')).toBeVisible();
@@ -48,8 +55,13 @@ describe('управление базой Valkey', () => {
     expect(screen.queryByText('Создана')).not.toBeInTheDocument();
     expect(document.body).toHaveTextContent("const primaryHost = 'shop-abc123.valkey.test'");
     expect(document.body).toHaveTextContent("const readHost = 'shop-abc123-ro.valkey.test'");
+    expect(document.body).not.toHaveTextContent('tls: true');
+    await user.hover(screen.getByRole('img', { name: 'Подсказка: Адрес для записи и чтения' }));
+    expect(
+      await screen.findByText(/Если primary недоступен, одна из реплик принимает его роль/)
+    ).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Скопировать Primary' }));
+    await user.click(screen.getByRole('button', { name: 'Скопировать адрес для записи и чтения' }));
     await expect(navigator.clipboard.readText()).resolves.toBe(
       'redis://shop-abc123.valkey.test:41379'
     );
@@ -66,10 +78,10 @@ describe('управление базой Valkey', () => {
     renderValkeySection(instancePath, session);
 
     expect(await screen.findByRole('heading', { name: 'cache' }, WAIT)).toBeVisible();
-    expect(screen.getByText('Primary').parentElement).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Адрес для записи и чтения' })).toHaveTextContent(
       'redis://shop-abc123.valkey.test:41379'
     );
-    expect(screen.getByText('Для чтения').parentElement).toHaveTextContent(
+    expect(screen.getByRole('group', { name: 'Адрес только для чтения' })).toHaveTextContent(
       'redis://shop-abc123-ro.valkey.test:41379'
     );
   });
@@ -104,7 +116,7 @@ describe('управление базой Valkey', () => {
     expect(api.requests.filter((request) => request.path === '/v1/me').length).toBeGreaterThan(1);
   });
 
-  it('задаёт, заменяет и очищает окно обслуживания отдельными PATCH без имени', async () => {
+  it('показывает и заменяет обязательное окно обслуживания в местном времени', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi([
       valkeyInstanceDto({
@@ -114,6 +126,11 @@ describe('управление базой Valkey', () => {
       }),
     ]);
     const user = userEvent.setup();
+    const timezoneOffsetMinutes = new Date().getTimezoneOffset();
+    const current = { dow: 2, hourUtc: 3, durationMin: 60 };
+    const currentLocal = utcMaintenanceToLocal(current, timezoneOffsetMinutes);
+    const next = { dow: 4, hourUtc: 5, durationMin: 60 };
+    const nextLocal = utcMaintenanceToLocal(next, timezoneOffsetMinutes);
 
     renderValkeySection(instancePath, session);
     await screen.findByRole('heading', { name: 'cache' }, WAIT);
@@ -121,36 +138,32 @@ describe('управление базой Valkey', () => {
     expect(action).toBeEnabled();
     await user.click(action);
 
-    const day = screen.getByRole('textbox', { name: 'День недели, 0–6' });
-    const hour = screen.getByRole('textbox', { name: 'Час UTC, 0–23' });
-    const duration = screen.getByRole('textbox', { name: 'Длительность, минуты' });
-    expect(day).toHaveValue('2');
-    expect(hour).toHaveValue('3');
-    expect(duration).toHaveValue('60');
-    await user.clear(day);
-    await user.type(day, '4');
-    await user.clear(hour);
-    await user.type(hour, '5');
-    await user.clear(duration);
-    await user.type(duration, '90');
+    const day = screen.getByRole('combobox', { name: 'День недели' });
+    const time = screen.getByRole('combobox', { name: 'Время начала, местное' });
+    expect(day).toHaveValue(MAINTENANCE_WEEKDAYS[currentLocal.dow].label);
+    expect(time).toHaveValue(currentLocal.time);
+    expect(screen.queryByRole('textbox', { name: 'Длительность, минуты' })).not.toBeInTheDocument();
+    await user.click(day);
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
+    await user.click(time);
+    await user.keyboard('{ArrowDown}{ArrowDown}{Enter}');
+    expect(day).toHaveValue(MAINTENANCE_WEEKDAYS[nextLocal.dow].label);
+    expect(time).toHaveValue(nextLocal.time);
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
     await waitFor(() =>
       expect(api.requests.filter((request) => request.method === 'PATCH').at(-1)?.body).toEqual({
-        maintenance: { dow: 4, hour_utc: 5, duration_min: 90 },
+        maintenance: { dow: 4, hour_utc: 5, duration_min: 60 },
       })
     );
-    expect(await screen.findByText('День 4, 5:00 UTC, 90 мин.', {}, WAIT)).toBeVisible();
+    expect(
+      await screen.findByText(formatLocalMaintenance(next, timezoneOffsetMinutes), {}, WAIT)
+    ).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Изменить окно обслуживания' }));
-    await user.click(screen.getByRole('switch', { name: 'Задать окно обслуживания' }));
-    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
-    await waitFor(() =>
-      expect(api.requests.filter((request) => request.method === 'PATCH').at(-1)?.body).toEqual({
-        maintenance: null,
-      })
-    );
-    expect(await screen.findByText('Не задано', {}, WAIT)).toBeVisible();
+    expect(
+      screen.queryByRole('switch', { name: 'Задать окно обслуживания' })
+    ).not.toBeInTheDocument();
   });
 
   it('при сохранении списка доступа преобразует одиночный IP-адрес в канонический CIDR и отправляет его серверу', async () => {
@@ -163,6 +176,11 @@ describe('управление базой Valkey', () => {
     await user.click(screen.getByRole('button', { name: 'Изменить белый список' }));
     expect(await screen.findByRole('dialog', { name: 'Белый список' }, WAIT)).toBeVisible();
     await user.click(screen.getByRole('switch', { name: 'Ограничить доступ по IP-адресам' }));
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(
+      await screen.findByText('Добавьте хотя бы один IPv4-адрес или диапазон CIDR')
+    ).toBeVisible();
+    expect(api.requests.some((request) => request.method === 'PUT')).toBe(false);
     await user.type(
       screen.getByRole('textbox', { name: 'Разрешённые IPv4-адреса и CIDR' }),
       '203.0.113.10'
@@ -185,13 +203,13 @@ describe('управление базой Valkey', () => {
 
     renderValkeySection(instancePath, session);
     await screen.findByRole('heading', { name: 'cache' }, WAIT);
-    const rotateAction = await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    const rotateAction = await screen.findByRole('button', { name: 'Изменить пароль' }, WAIT);
     await user.click(rotateAction);
     expect(api.requests.some((request) => request.path.endsWith('/credentials/rotate'))).toBe(
       false
     );
 
-    await user.click(screen.getByRole('button', { name: 'Подтвердить смену пароля' }));
+    await user.click(screen.getByRole('button', { name: 'Подтвердить изменение пароля' }));
 
     const passwordInput = await screen.findByRole('textbox', { name: 'Новый пароль' }, WAIT);
     const rotateRequest = api.requests.find((request) =>
@@ -241,7 +259,7 @@ describe('управление базой Valkey', () => {
     expect(screen.getByRole('button', { name: 'Изменить тариф' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Изменить белый список' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Изменить окно обслуживания' })).toBeEnabled();
-    expect(await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT)).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Изменить пароль' }, WAIT)).toBeDisabled();
   });
 
   it('при открытой карточке обновляет статус каждые пять секунд и не запускает параллельные запросы', async () => {

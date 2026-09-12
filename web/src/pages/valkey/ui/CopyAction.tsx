@@ -10,7 +10,7 @@ export function CopyAction({ label, value }: { label: string; value: string }) {
         <Tooltip label={copied ? 'Скопировано' : label}>
           <ActionIcon
             aria-label={copied ? 'Скопировано' : label}
-            className={styles.touchTarget}
+            className={`${styles.touchTarget} ${styles.copyAction}`}
             onClick={copy}
             variant={buttonVariants.ghost}
           >

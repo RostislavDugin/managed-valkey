@@ -243,7 +243,7 @@ export function parseWhitelistCidrs(value: string) {
 export function validateWhitelistCidrs(value: string) {
   const cidrs = parseWhitelistCidrs(value);
   if (cidrs.length === 0) {
-    return null;
+    return 'Добавьте хотя бы один IPv4-адрес или диапазон CIDR';
   }
   for (const cidr of cidrs) {
     const [address, prefix, extra] = cidr.split('/');

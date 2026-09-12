@@ -6,10 +6,8 @@ import {
   Alert,
   Anchor,
   Button,
-  Checkbox,
   Container,
   Group,
-  NumberInput,
   Radio,
   SimpleGrid,
   Skeleton,
@@ -54,6 +52,7 @@ import {
   type ValkeySize,
 } from '../model/valkey';
 import { useValkeyCapacityPolling } from '../model/valkey-capacity-polling';
+import { formatValkeyAddress, getValkeyConnectionScheme } from '../model/valkey-connection';
 import { generateValkeyPassword } from '../model/valkey-credentials';
 import {
   checkCandidateCapacity,
@@ -62,12 +61,17 @@ import {
   getRequestErrorMessage,
   shouldReuseSubmission,
   SUPPORT_URL,
-  validateMaintenanceDow,
-  validateMaintenanceDurationMin,
-  validateMaintenanceHourUtc,
   type CreateFormValues,
 } from '../model/valkey-form';
+import {
+  getDefaultLocalMaintenance,
+  localMaintenanceToUtc,
+  MAINTENANCE_HINT,
+  MAINTENANCE_WEEKDAYS,
+  validateLocalMaintenanceTime,
+} from '../model/valkey-maintenance';
 import { FormRow } from './FormRow';
+import { MaintenanceWindowFields } from './MaintenanceWindowFields';
 import { PricePanel, PricePeriodTabs } from './PricePanel';
 import { SizePlans } from './SizePlans';
 import { ValkeyAside } from './ValkeyAside';
@@ -175,6 +179,7 @@ export function CreateValkeyPage() {
   const [period, setPeriod] = useState<PricePeriod>('month');
   const [submitting, setSubmitting] = useState(false);
   const defaultsAppliedRef = useRef(false);
+  const timezoneOffsetMinutesRef = useRef(new Date().getTimezoneOffset());
   const loadControllerRef = useRef<AbortController | null>(null);
   const submissionControllerRef = useRef<AbortController | null>(null);
   const pendingSubmissionRef = useRef<{
@@ -187,6 +192,8 @@ export function CreateValkeyPage() {
     error: capacityError,
     refresh: refreshCapacity,
   } = useValkeyCapacityPolling(session.userId);
+  const timezoneOffsetMinutes = timezoneOffsetMinutesRef.current;
+  const defaultMaintenance = getDefaultLocalMaintenance(timezoneOffsetMinutes);
 
   const form = useForm<CreateFormValues>({
     mode: 'controlled',
@@ -198,11 +205,9 @@ export function CreateValkeyPage() {
       ramGb: 1,
       isWhitelistEnabled: false,
       whitelist: '',
-      confirmDenyAll: false,
-      maintenanceEnabled: false,
-      maintenanceDow: 0,
-      maintenanceHourUtc: 0,
-      maintenanceDurationMin: 30,
+      maintenanceDow: String(defaultMaintenance.dow),
+      maintenanceTime: defaultMaintenance.time,
+      maintenanceDurationMin: defaultMaintenance.durationMin,
     },
     validateInputOnBlur: true,
     validate: {
@@ -210,18 +215,11 @@ export function CreateValkeyPage() {
       prefix: (value) => validateInstancePrefix(value.trim()),
       whitelist: (value, formValues) =>
         formValues.isWhitelistEnabled ? validateWhitelistCidrs(value) : null,
-      confirmDenyAll: (value, formValues) =>
-        formValues.isWhitelistEnabled &&
-        parseWhitelistCidrs(formValues.whitelist).length === 0 &&
-        !value
-          ? 'Подтвердите закрытие доступа всем'
-          : null,
-      maintenanceDow: (value, formValues) =>
-        validateMaintenanceDow(value, formValues.maintenanceEnabled),
-      maintenanceHourUtc: (value, formValues) =>
-        validateMaintenanceHourUtc(value, formValues.maintenanceEnabled),
-      maintenanceDurationMin: (value, formValues) =>
-        validateMaintenanceDurationMin(value, formValues.maintenanceEnabled),
+      maintenanceDow: (value) =>
+        MAINTENANCE_WEEKDAYS.some((weekday) => weekday.value === value)
+          ? null
+          : 'Выберите день недели',
+      maintenanceTime: (value) => validateLocalMaintenanceTime(value, timezoneOffsetMinutes),
     },
   });
 
@@ -265,7 +263,12 @@ export function CreateValkeyPage() {
     }
 
     setValues(
-      getCreateFormDefaults(instances, catalog?.items ?? [{ vcpu: 1, ramGb: 1 }], capacitySnapshot)
+      getCreateFormDefaults(
+        instances,
+        catalog?.items ?? [{ vcpu: 1, ramGb: 1 }],
+        capacitySnapshot,
+        timezoneOffsetMinutes
+      )
     );
     defaultsAppliedRef.current = true;
   }, [capacitySnapshot, catalog, instances, setValues]);
@@ -323,17 +326,21 @@ export function CreateValkeyPage() {
       : null;
 
   const slugPreview = getSlugPreview(values.prefix.trim() || 'valkey');
+  const connectionScheme = getValkeyConnectionScheme(window.location.protocol);
   const primaryAddressPreview = catalog
-    ? `redis://${slugPreview}.${catalog.connection.domain}:${catalog.connection.port}`
-    : `redis://${slugPreview}`;
+    ? formatValkeyAddress(
+        `${slugPreview}.${catalog.connection.domain}`,
+        catalog.connection.port,
+        connectionScheme
+      )
+    : formatValkeyAddress(slugPreview, undefined, connectionScheme);
   const readAddressPreview = catalog
-    ? `redis://${slugPreview}-ro.${catalog.connection.domain}:${catalog.connection.port}`
-    : `redis://${slugPreview}-ro`;
-  const needsDenyAllConfirmation =
-    values.isWhitelistEnabled &&
-    parseWhitelistCidrs(values.whitelist).length === 0 &&
-    !values.confirmDenyAll;
-
+    ? formatValkeyAddress(
+        `${slugPreview}-ro.${catalog.connection.domain}`,
+        catalog.connection.port,
+        connectionScheme
+      )
+    : formatValkeyAddress(`${slugPreview}-ro`, undefined, connectionScheme);
   const submit = async (formValues: CreateFormValues) => {
     setSubmitting(true);
     const input: CreateInstanceInput = {
@@ -347,13 +354,14 @@ export function CreateValkeyPage() {
       whitelistCidrs: formValues.isWhitelistEnabled
         ? parseWhitelistCidrs(formValues.whitelist)
         : [],
-      maintenance: formValues.maintenanceEnabled
-        ? {
-            dow: formValues.maintenanceDow,
-            hourUtc: formValues.maintenanceHourUtc,
-            durationMin: formValues.maintenanceDurationMin,
-          }
-        : null,
+      maintenance: localMaintenanceToUtc(
+        {
+          dow: Number(formValues.maintenanceDow),
+          time: formValues.maintenanceTime,
+          durationMin: Number(formValues.maintenanceDurationMin),
+        },
+        timezoneOffsetMinutes
+      ),
     };
     const fingerprint = JSON.stringify({ ...input, password: undefined });
     const existing = pendingSubmissionRef.current;
@@ -619,8 +627,8 @@ export function CreateValkeyPage() {
               />
 
               <Text c="h3_text_2" size="h3_xs">
-                Primary: {primaryAddressPreview}. Для чтения: {readAddressPreview}. После дефиса
-                будут шесть случайных символов.
+                Адрес для записи и чтения: {primaryAddressPreview}. Адрес только для чтения:{' '}
+                {readAddressPreview}. После дефиса будут шесть случайных символов.
               </Text>
             </Stack>
           </FormRow>
@@ -644,56 +652,26 @@ export function CreateValkeyPage() {
                     rows={3}
                     {...form.getInputProps('whitelist')}
                   />
-
-                  {parseWhitelistCidrs(values.whitelist).length === 0 ? (
-                    <Checkbox
-                      label="Запретить все подключения к базе"
-                      {...form.getInputProps('confirmDenyAll', { type: 'checkbox' })}
-                    />
-                  ) : null}
                 </Stack>
               )}
             </Stack>
           </FormRow>
 
-          <FormRow
-            hint="Окно можно изменить после создания базы. Время указывается в UTC."
-            label="Окно обслуживания"
-          >
-            <Stack gap="h3_sm">
-              <Switch
-                label="Задать окно обслуживания"
-                {...form.getInputProps('maintenanceEnabled', { type: 'checkbox' })}
-              />
-
-              {values.maintenanceEnabled ? (
-                <SimpleGrid cols={{ base: 1, mobile: 3 }} spacing="h3_sm">
-                  <NumberInput
-                    label="День недели, 0–6"
-                    max={6}
-                    min={0}
-                    {...form.getInputProps('maintenanceDow')}
-                  />
-                  <NumberInput
-                    label="Час UTC, 0–23"
-                    max={23}
-                    min={0}
-                    {...form.getInputProps('maintenanceHourUtc')}
-                  />
-                  <NumberInput
-                    label="Длительность, минуты"
-                    max={1440}
-                    min={1}
-                    {...form.getInputProps('maintenanceDurationMin')}
-                  />
-                </SimpleGrid>
-              ) : null}
-            </Stack>
+          <FormRow hint={MAINTENANCE_HINT} label="Окно обслуживания">
+            <MaintenanceWindowFields
+              day={values.maintenanceDow}
+              dayError={form.errors.maintenanceDow}
+              onDayChange={(value) => form.setFieldValue('maintenanceDow', value ?? '')}
+              onTimeChange={(value) => form.setFieldValue('maintenanceTime', value ?? '')}
+              time={values.maintenanceTime}
+              timeError={form.errors.maintenanceTime}
+              timezoneOffsetMinutes={timezoneOffsetMinutes}
+            />
           </FormRow>
 
           <FormRow>
             <Button
-              disabled={!catalog || !capacity.fits || needsDenyAllConfirmation}
+              disabled={!catalog || !capacity.fits}
               mt="h3_md"
               loading={submitting}
               type="submit"

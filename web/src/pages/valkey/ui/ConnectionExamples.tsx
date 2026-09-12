@@ -9,6 +9,7 @@ interface ConnectionExamplesProps {
   host: string;
   hostRo: string;
   port: number | string;
+  secure: boolean;
 }
 
 const LANGUAGES = [
@@ -20,7 +21,19 @@ const LANGUAGES = [
 
 type LanguageValue = (typeof LANGUAGES)[number]['value'];
 
-function getExamples(host: string, hostRo: string, port: number | string) {
+export function getConnectionExamples(
+  host: string,
+  hostRo: string,
+  port: number | string,
+  secure: boolean
+) {
+  const javascriptTls = secure ? ', tls: true, servername: host' : '';
+  const pythonTls = secure ? '\n        ssl=True,' : '';
+  const goTlsImport = secure ? '\n    "crypto/tls"' : '';
+  const goTlsConfig = secure
+    ? `\n        TLSConfig: &tls.Config{\n            ServerName: host,\n            MinVersion: tls.VersionTLS12,\n        },`
+    : '';
+
   return {
     javascript: `import { createClient } from 'redis';
 
@@ -29,7 +42,7 @@ const readHost = '${hostRo}';
 const createValkeyClient = (host) => createClient({
     username: 'app',
     password: '<PASSWORD>',
-    socket: { host, port: ${port}, tls: true, servername: host },
+    socket: { host, port: ${port}${javascriptTls} },
   });
 
 const primary = createValkeyClient(primaryHost);
@@ -45,7 +58,7 @@ const createValkeyClient = (host: string) => {
   const options = {
     username: 'app',
     password: '<PASSWORD>',
-    socket: { host, port: ${port}, tls: true, servername: host },
+    socket: { host, port: ${port}${javascriptTls} },
   } satisfies RedisClientOptions;
   return createClient(options);
 };
@@ -63,8 +76,7 @@ def create_client(host):
         host=host,
         port=${port},
         username="app",
-        password="<PASSWORD>",
-        ssl=True,
+        password="<PASSWORD>",${pythonTls}
         decode_responses=True,
     )
 
@@ -75,8 +87,7 @@ read_only.ping()`,
     go: `package main
 
 import (
-    "context"
-    "crypto/tls"
+    "context"${goTlsImport}
     "log"
 
     "github.com/redis/go-redis/v9"
@@ -100,21 +111,17 @@ func createClient(host string) *redis.Client {
     return redis.NewClient(&redis.Options{
         Addr:     host + ":${port}",
         Username: "app",
-        Password: "<PASSWORD>",
-        TLSConfig: &tls.Config{
-            ServerName: host,
-            MinVersion: tls.VersionTLS12,
-        },
+        Password: "<PASSWORD>",${goTlsConfig}
     })
 }`,
   };
 }
 
-export function ConnectionExamples({ host, hostRo, port }: ConnectionExamplesProps) {
+export function ConnectionExamples({ host, hostRo, port, secure }: ConnectionExamplesProps) {
   const codeRegionId = useId();
   const [activeLanguage, setActiveLanguage] = useState<LanguageValue>('javascript');
   const [expanded, setExpanded] = useState(true);
-  const examples = getExamples(host, hostRo, port);
+  const examples = getConnectionExamples(host, hostRo, port, secure);
   const activeCode = examples[activeLanguage];
 
   const toggleLabel = expanded ? 'Свернуть' : 'Развернуть';

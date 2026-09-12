@@ -78,6 +78,10 @@
   background: var(--h3-bg-3);
 }
 
+.emailIcon {
+  flex: none;
+}
+
 .email {
   min-width: 0;
   overflow: hidden;

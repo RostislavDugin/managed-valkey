@@ -19,11 +19,25 @@ export interface CreatedInstance {
   connection: ValkeyInstanceConnection;
 }
 
+export interface LocalMaintenance {
+  dow: number;
+  time: string;
+}
+
 const operationTimeout = 5 * 60_000;
 const modeLabels: Record<ValkeyMode, string> = {
   single: "Одна нода",
   ha: "Отказоустойчивый",
 };
+const weekdayLabels = [
+  "Воскресенье",
+  "Понедельник",
+  "Вторник",
+  "Среда",
+  "Четверг",
+  "Пятница",
+  "Суббота",
+];
 
 function accountEmail(scenario: string) {
   const runId = (process.env.MV_RUN_ID ?? "manual").toLowerCase().replace(/[^a-z0-9-]/g, "-");
@@ -57,7 +71,12 @@ function endpointFromAddress(address: string, password: string) {
   } catch {
     throw new Error(`Не удалось разобрать адрес Valkey из строки «${address}»`);
   }
-  if (parsed.protocol !== "redis:" || !parsed.hostname || !parsed.port || parsed.pathname !== "") {
+  if (
+    !["redis:", "rediss:"].includes(parsed.protocol) ||
+    !parsed.hostname ||
+    !parsed.port ||
+    parsed.pathname !== ""
+  ) {
     throw new Error(`Не удалось разобрать адрес Valkey из строки «${address}»`);
   }
   return { host: parsed.hostname, port: Number.parseInt(parsed.port, 10), password };
@@ -176,7 +195,7 @@ export class ConsoleDriver {
       size: ValkeySize;
       name: string;
       prefix: string;
-      maintenance?: { dow: number; hourUtc: number; durationMin: number };
+      maintenance?: LocalMaintenance;
     },
   ) {
     await this.prepareCreation(input);
@@ -199,7 +218,7 @@ export class ConsoleDriver {
     size: ValkeySize;
     name: string;
     prefix: string;
-    maintenance?: { dow: number; hourUtc: number; durationMin: number };
+    maintenance?: LocalMaintenance;
   }) {
     await this.chooseMode(input.mode);
     await this.chooseSize(input.size);
@@ -213,19 +232,16 @@ export class ConsoleDriver {
     );
     if (input.maintenance) {
       await this.actions.click(
-        this.page.getByRole("switch", { name: "Задать окно обслуживания", exact: true }),
+        this.page.getByRole("combobox", { name: "День недели", exact: true }),
       );
-      await this.actions.fill(
-        this.page.getByRole("textbox", { name: "День недели, 0–6", exact: true }),
-        String(input.maintenance.dow),
+      await this.actions.click(
+        this.page.getByRole("option", { name: weekdayLabels[input.maintenance.dow], exact: true }),
       );
-      await this.actions.fill(
-        this.page.getByRole("textbox", { name: "Час UTC, 0–23", exact: true }),
-        String(input.maintenance.hourUtc),
+      await this.actions.click(
+        this.page.getByRole("combobox", { name: "Время начала, местное", exact: true }),
       );
-      await this.actions.fill(
-        this.page.getByRole("textbox", { name: "Длительность, минуты", exact: true }),
-        String(input.maintenance.durationMin),
+      await this.actions.click(
+        this.page.getByRole("option", { name: input.maintenance.time, exact: true }),
       );
     }
   }
@@ -236,40 +252,32 @@ export class ConsoleDriver {
   }
 
   async readConnection(password: string, _requireReadOnly = true) {
-    const primaryAddress = await this.propertyText("Primary");
-    const readOnlyAddress = await this.propertyText("Для чтения");
+    const primaryAddress = await this.propertyText("Адрес для записи и чтения");
+    const readOnlyAddress = await this.propertyText("Адрес только для чтения");
     return {
       primary: endpointFromAddress(primaryAddress, password),
       readOnly: endpointFromAddress(readOnlyAddress, password),
     } satisfies ValkeyInstanceConnection;
   }
 
-  async updateMaintenance(
-    maintenance: { dow: number; hourUtc: number; durationMin: number } | null,
-  ) {
+  async updateMaintenance(maintenance: LocalMaintenance) {
     await this.actions.click(
       this.page.getByRole("button", { name: "Изменить окно обслуживания", exact: true }),
     );
     const dialog = this.page.getByRole("dialog", { name: "Окно обслуживания" });
     await expect(dialog).toBeVisible();
-    const enabled = dialog.getByRole("switch", { name: "Задать окно обслуживания", exact: true });
-    if ((await enabled.isChecked()) !== (maintenance !== null)) {
-      await this.actions.click(enabled);
-    }
-    if (maintenance) {
-      await this.actions.fill(
-        dialog.getByRole("textbox", { name: "День недели, 0–6", exact: true }),
-        String(maintenance.dow),
-      );
-      await this.actions.fill(
-        dialog.getByRole("textbox", { name: "Час UTC, 0–23", exact: true }),
-        String(maintenance.hourUtc),
-      );
-      await this.actions.fill(
-        dialog.getByRole("textbox", { name: "Длительность, минуты", exact: true }),
-        String(maintenance.durationMin),
-      );
-    }
+    await this.actions.click(
+      dialog.getByRole("combobox", { name: "День недели", exact: true }),
+    );
+    await this.actions.click(
+      this.page.getByRole("option", { name: weekdayLabels[maintenance.dow], exact: true }),
+    );
+    await this.actions.click(
+      dialog.getByRole("combobox", { name: "Время начала, местное", exact: true }),
+    );
+    await this.actions.click(
+      this.page.getByRole("option", { name: maintenance.time, exact: true }),
+    );
     const responsePromise = this.page.waitForResponse(
       (response) =>
         response.request().method() === "PATCH" &&
@@ -282,15 +290,7 @@ export class ConsoleDriver {
   }
 
   async readCurrentSize() {
-    return parseSize(await this.propertyText("Текущий тариф"));
-  }
-
-  async readAppliedSize() {
-    return parseSize(await this.propertyText("Применённая конфигурация"));
-  }
-
-  async readTotalResources() {
-    return parseSize(await this.propertyText("Суммарные ресурсы"));
+    return parseSize(await this.propertyText("Текущая конфигурация"));
   }
 
   async assertConfigurationDisabled() {
@@ -298,7 +298,7 @@ export class ConsoleDriver {
       this.page.getByRole("button", { name: "Изменить тариф", exact: true }),
     ).toBeDisabled();
     await expect(
-      this.page.getByRole("button", { name: "Сменить пароль", exact: true }),
+      this.page.getByRole("button", { name: "Изменить пароль", exact: true }),
     ).toBeDisabled();
     await expect(
       this.page.getByRole("button", { name: "Изменить белый список", exact: true }),
@@ -320,7 +320,6 @@ export class ConsoleDriver {
   async waitForRunningSize(size: ValkeySize) {
     await this.waitForRunning();
     await expect.poll(() => this.readCurrentSize(), { timeout: operationTimeout }).toEqual(size);
-    await expect.poll(() => this.readAppliedSize(), { timeout: operationTimeout }).toEqual(size);
   }
 
   async resize(size: ValkeySize) {
@@ -347,11 +346,11 @@ export class ConsoleDriver {
 
   async rotatePassword(password: string) {
     await this.actions.click(
-      this.page.getByRole("button", { name: "Сменить пароль", exact: true }),
+      this.page.getByRole("button", { name: "Изменить пароль", exact: true }),
     );
-    const dialog = this.page.getByRole("dialog", { name: "Сменить пароль" });
+    const dialog = this.page.getByRole("dialog", { name: "Изменить пароль" });
     await expect(dialog).toBeVisible();
-    await this.actions.click(dialog.getByLabel("Подтвердить смену пароля"));
+    await this.actions.click(dialog.getByLabel("Подтвердить изменение пароля"));
     const revealed = this.page.getByRole("dialog", { name: "Сохраните пароль" });
     await expect(revealed).toBeVisible({ timeout: operationTimeout });
     const nextPassword = await this.page.getByLabel("Новый пароль").inputValue();
@@ -361,7 +360,7 @@ export class ConsoleDriver {
     recordSecret(nextPassword);
     await this.closePasswordWindow();
     await expect(
-      this.page.getByRole("button", { name: "Сменить пароль", exact: true }),
+      this.page.getByRole("button", { name: "Изменить пароль", exact: true }),
     ).toBeEnabled({ timeout: operationTimeout });
     return nextPassword;
   }
@@ -448,7 +447,7 @@ export class ConsoleDriver {
   }
 
   async propertyText(label: string) {
-    const row = this.page.getByText(label, { exact: true }).locator("..");
+    const row = this.page.getByRole("group", { name: label, exact: true });
     await expect(row).toBeVisible({ timeout: operationTimeout });
     const value = (await row.textContent())?.slice(label.length).trim();
     if (!value) {
@@ -522,7 +521,7 @@ export async function cleanupAccounts(
         const link = row.getByRole("link").first();
         const name = (await link.textContent())?.trim() || "неизвестное имя";
         await console.actions.click(link);
-        const address = await console.propertyText("Primary");
+        const address = await console.propertyText("Адрес для записи и чтения");
         const slug = endpointFromAddress(address, "").host.split(".", 1)[0];
         observed.set(slug, { name, slug });
         await console.deleteInstance(account, { name, slug });

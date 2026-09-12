@@ -282,10 +282,6 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.properties > :first-child {
-  grid-column: 1 / -1;
-}
-
 .propertyRow {
   display: flex;
   min-height: 3.1875rem;
@@ -328,11 +324,20 @@
 }
 
 .monoValue {
+  flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
   font-family: var(--h3-font-family-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.addressValue {
+  width: 100%;
+  min-width: 0;
+}
+
+.copyAction {
+  flex: none;
 }
 
 .passwordInput input {
@@ -357,7 +362,7 @@
 }
 
 .inlineAction:disabled {
-  color: var(--h3-text-1);
+  color: var(--h3-text-accent);
   cursor: not-allowed;
   text-decoration: none;
 }
@@ -564,10 +569,6 @@
 
   .properties {
     grid-template-columns: 1fr;
-  }
-
-  .properties > :first-child {
-    grid-column: auto;
   }
 }
 

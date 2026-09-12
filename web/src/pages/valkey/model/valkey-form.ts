@@ -9,6 +9,7 @@ import {
   type ValkeyMode,
   type ValkeySize,
 } from './valkey';
+import { getDefaultLocalMaintenance } from './valkey-maintenance';
 
 export const SUPPORT_URL = 'https://t.me/rostislav_dugin';
 
@@ -18,22 +19,23 @@ export interface CreateFormValues extends ValkeySize {
   mode: ValkeyMode;
   isWhitelistEnabled: boolean;
   whitelist: string;
-  confirmDenyAll: boolean;
-  maintenanceEnabled: boolean;
-  maintenanceDow: number;
-  maintenanceHourUtc: number;
+  maintenanceDow: string;
+  maintenanceTime: string;
   maintenanceDurationMin: number;
 }
 
 export function getCreateFormDefaults(
   instances: ValkeyInstance[],
   sizes: readonly ValkeySize[],
-  capacity: ValkeyCapacity
+  capacity: ValkeyCapacity,
+  timezoneOffsetMinutes = new Date().getTimezoneOffset()
 ): CreateFormValues {
   const size = sizes.find(
     (candidate) => checkCapacity(capacity, { size: candidate, mode: 'single' }).fits
   ) ??
     sizes[0] ?? { vcpu: 1, ramGb: 1 };
+
+  const maintenance = getDefaultLocalMaintenance(timezoneOffsetMinutes);
 
   return {
     name: generateInstanceName(instances.map((instance) => instance.name)),
@@ -43,32 +45,11 @@ export function getCreateFormDefaults(
     ramGb: size.ramGb,
     isWhitelistEnabled: false,
     whitelist: '',
-    confirmDenyAll: false,
-    maintenanceEnabled: false,
-    maintenanceDow: 0,
-    maintenanceHourUtc: 0,
-    maintenanceDurationMin: 30,
+    maintenanceDow: String(maintenance.dow),
+    maintenanceTime: maintenance.time,
+    maintenanceDurationMin: maintenance.durationMin,
   };
 }
-
-export function validateMaintenanceDow(value: number, enabled: boolean) {
-  return enabled && (!Number.isInteger(value) || value < 0 || value > 6)
-    ? 'Укажите число от 0 до 6'
-    : null;
-}
-
-export function validateMaintenanceHourUtc(value: number, enabled: boolean) {
-  return enabled && (!Number.isInteger(value) || value < 0 || value > 23)
-    ? 'Укажите час от 0 до 23'
-    : null;
-}
-
-export function validateMaintenanceDurationMin(value: number, enabled: boolean) {
-  return enabled && (!Number.isInteger(value) || value < 1 || value > 1440)
-    ? 'Укажите длительность от 1 до 1440 минут'
-    : null;
-}
-
 export function describeMissingQuota(check: QuotaCheck) {
   const parts: string[] = [];
   if (check.missing.vcpu > 0) {

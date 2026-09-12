@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Button, Container, Group, Skeleton, Stack, Text } from '@mantine/core';
+import { Info } from 'lucide-react';
+import { Alert, Button, Container, Group, Skeleton, Stack, Text, Tooltip } from '@mantine/core';
 import { buttonVariants } from '@/shared/config';
 import { formatDateTime, formatRelativeTime } from '@/shared/lib';
 import { getValkeyCredentials } from '../api/valkey-api';
-import { formatRam, formatSize, formatVcpu, getTotalResources, MODE_LABELS } from '../model/valkey';
+import { formatSize, MODE_LABELS } from '../model/valkey';
+import { formatValkeyAddress, getValkeyConnectionScheme } from '../model/valkey-connection';
 import type { ValkeyCredentials } from '../model/valkey-credentials';
 import { getRequestErrorMessage } from '../model/valkey-form';
+import { formatLocalMaintenance, MAINTENANCE_HINT } from '../model/valkey-maintenance';
 import { ConnectionExamples } from './ConnectionExamples';
 import { CopyAction } from './CopyAction';
 import { MaintenanceInstanceModal } from './MaintenanceInstanceModal';
@@ -15,10 +18,26 @@ import { ValkeyPasswordModal } from './ValkeyPasswordModal';
 import { WhitelistModal } from './WhitelistModal';
 import styles from './ValkeyPage.module.css';
 
-function PropertyRow({ label, value }: { label: string; value: ReactNode }) {
+const CONNECTION_HINT =
+  'В отказоустойчивом режиме адрес для записи и чтения ведёт на primary. Адрес только для чтения ведёт на реплики. Если primary недоступен, одна из реплик принимает его роль. В режиме с одной нодой оба адреса ведут на один инстанс.';
+function PropertyRow({ hint, label, value }: { hint?: string; label: string; value: ReactNode }) {
   return (
-    <div className={styles.propertyRow}>
-      <Text size="h3_sm">{label}</Text>
+    <div aria-label={label} className={styles.propertyRow} role="group">
+      <Group align="center" gap={4} wrap="nowrap">
+        <Text size="h3_sm">{label}</Text>
+        {hint ? (
+          <Tooltip label={hint} multiline w={280} withArrow>
+            <Info
+              aria-label={`Подсказка: ${label}`}
+              className={styles.formHint}
+              role="img"
+              size={16}
+              strokeWidth={1.5}
+              tabIndex={0}
+            />
+          </Tooltip>
+        ) : null}
+      </Group>
       {value}
     </div>
   );
@@ -113,12 +132,13 @@ export function ValkeyInstancePage() {
     };
   }, [credentials, requestCredentials]);
 
-  const total = getTotalResources(instance, instance.mode);
+  const timezoneOffsetMinutes = new Date().getTimezoneOffset();
   const host = credentials?.host ?? instance.host;
   const hostRo = credentials?.hostRo ?? instance.hostRo;
   const port = credentials?.port ?? instance.port;
-  const address = `redis://${host}:${port}`;
-  const readOnlyAddress = `redis://${hostRo}:${port}`;
+  const connectionScheme = getValkeyConnectionScheme(window.location.protocol);
+  const address = formatValkeyAddress(host, port, connectionScheme);
+  const readOnlyAddress = formatValkeyAddress(hostRo, port, connectionScheme);
   const canConfigure =
     !instance.isUpdating &&
     !instance.isStale &&
@@ -128,24 +148,31 @@ export function ValkeyInstancePage() {
   return (
     <Container className={`${styles.page} ${styles.instanceContent}`} fluid>
       <Stack gap="h3_lg">
-        <ConnectionExamples host={host} hostRo={hostRo} port={port} />
+        <ConnectionExamples
+          host={host}
+          hostRo={hostRo}
+          port={port}
+          secure={connectionScheme === 'rediss'}
+        />
 
         <div className={styles.properties}>
           <PropertyRow
-            label="Primary"
+            hint={CONNECTION_HINT}
+            label="Адрес для записи и чтения"
             value={
-              <Group gap="h3_xs" wrap="nowrap">
+              <Group className={styles.addressValue} gap="h3_xs" wrap="nowrap">
                 <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
                   {address}
                 </Text>
-                <CopyAction label="Скопировать Primary" value={address} />
+                <CopyAction label="Скопировать адрес для записи и чтения" value={address} />
               </Group>
             }
           />
           <PropertyRow
-            label="Для чтения"
+            hint={CONNECTION_HINT}
+            label="Адрес только для чтения"
             value={
-              <Group gap="h3_xs" wrap="nowrap">
+              <Group className={styles.addressValue} gap="h3_xs" wrap="nowrap">
                 <Text className={styles.monoValue} c="h3_text_2" size="h3_sm">
                   {readOnlyAddress}
                 </Text>
@@ -188,7 +215,7 @@ export function ValkeyInstancePage() {
                       {credentials.passwordHint}
                     </Text>
                     <Text
-                      aria-label="Сменить пароль"
+                      aria-label="Изменить пароль"
                       className={`${styles.inlineAction} ${styles.touchTarget}`}
                       component="button"
                       disabled={
@@ -198,7 +225,7 @@ export function ValkeyInstancePage() {
                       onClick={() => setPasswordOpened(true)}
                       size="h3_sm"
                     >
-                      (сменить)
+                      (изменить)
                     </Text>
                   </Group>
                 }
@@ -216,7 +243,7 @@ export function ValkeyInstancePage() {
             }
           />
           <PropertyRow
-            label="Текущий тариф"
+            label="Текущая конфигурация"
             value={
               <Group gap="h3_xs" wrap="nowrap">
                 <Text c="h3_text_2" size="h3_sm">
@@ -233,16 +260,6 @@ export function ValkeyInstancePage() {
                   (изменить)
                 </Text>
               </Group>
-            }
-          />
-          <PropertyRow
-            label="Применённая конфигурация"
-            value={
-              <Text c="h3_text_2" size="h3_sm">
-                {instance.appliedVcpu > 0 && instance.appliedRamGb > 0
-                  ? `${formatVcpu(instance.appliedVcpu)} / ${formatRam(instance.appliedRamGb)}`
-                  : 'Ещё не применена'}
-              </Text>
             }
           />
           <PropertyRow
@@ -270,12 +287,13 @@ export function ValkeyInstancePage() {
             }
           />
           <PropertyRow
+            hint={MAINTENANCE_HINT}
             label="Окно обслуживания"
             value={
               <Group gap="h3_xs" wrap="wrap">
                 <Text c="h3_text_2" size="h3_sm">
                   {instance.maintenance
-                    ? `День ${instance.maintenance.dow}, ${instance.maintenance.hourUtc}:00 UTC, ${instance.maintenance.durationMin} мин.`
+                    ? formatLocalMaintenance(instance.maintenance, timezoneOffsetMinutes)
                     : 'Не задано'}
                 </Text>
                 <Text
@@ -289,14 +307,6 @@ export function ValkeyInstancePage() {
                   (изменить)
                 </Text>
               </Group>
-            }
-          />
-          <PropertyRow
-            label="Суммарные ресурсы"
-            value={
-              <Text c="h3_text_2" size="h3_sm">
-                {formatVcpu(total.vcpu)} / {formatRam(total.ramGb)}
-              </Text>
             }
           />
           <PropertyRow

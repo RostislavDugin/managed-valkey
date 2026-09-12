@@ -20,7 +20,7 @@ test(
     const initialSize = minimumSize(catalog);
     const largerSize = nextSize(catalog, initialSize);
     const identity = scenarioIdentity("single");
-    const initialMaintenance = { dow: 2, hourUtc: 3, durationMin: 60 };
+    const initialMaintenance = { dow: 2, time: "04:00" };
 
     const created = await console.submitCreation(account, {
       mode: "single",
@@ -32,16 +32,21 @@ test(
     await console.assertConfigurationDisabled();
     await console.closePasswordWindow();
     await console.waitForRunningSize(initialSize);
-    await expect(page.getByText("Primary", { exact: true })).toBeVisible();
-    await expect(page.getByText("Для чтения", { exact: true })).toBeVisible();
+    const connectionScheme = new URL(page.url()).protocol === "https:" ? "rediss" : "redis";
+    await expect(page.getByText("Адрес для записи и чтения", { exact: true })).toBeVisible();
+    await expect(page.getByText("Адрес только для чтения", { exact: true })).toBeVisible();
     await expect(page.getByText("Белый список", { exact: true })).toBeVisible();
     await expect(page.getByText("Создано", { exact: true })).toBeVisible();
     await expect(page.getByText("Создана", { exact: true })).toHaveCount(0);
-    await expect.poll(() => console.propertyText("Primary")).toMatch(/^redis:\/\//);
-    await expect.poll(() => console.propertyText("Для чтения")).toMatch(/^redis:\/\//);
+    await expect
+      .poll(() => console.propertyText("Адрес для записи и чтения"))
+      .toMatch(new RegExp(`^${connectionScheme}://`));
+    await expect
+      .poll(() => console.propertyText("Адрес только для чтения"))
+      .toMatch(new RegExp(`^${connectionScheme}://`));
     await expect
       .poll(() => console.propertyText("Окно обслуживания"))
-      .toContain("День 2, 3:00 UTC, 60 мин.");
+      .toContain("Вторник, 04:00 по местному времени");
     await assertValkeySharedPrimary(
       created.connection.primary,
       created.connection.readOnly,
@@ -49,14 +54,14 @@ test(
       initialSize,
     );
 
-    await console.updateMaintenance({ dow: 4, hourUtc: 5, durationMin: 90 });
+    await console.updateMaintenance({ dow: 4, time: "05:00" });
     await expect
       .poll(() => console.propertyText("Окно обслуживания"))
-      .toContain("День 4, 5:00 UTC, 90 мин.");
+      .toContain("Четверг, 05:00 по местному времени");
     await console.actions.goto(page.url());
     await expect
       .poll(() => console.propertyText("Окно обслуживания"))
-      .toContain("День 4, 5:00 UTC, 90 мин.");
+      .toContain("Четверг, 05:00 по местному времени");
 
     await console.resize(largerSize);
     await assertValkeyReadWrite(created.connection.primary, "single-grown", largerSize);

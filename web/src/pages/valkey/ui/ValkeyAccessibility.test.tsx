@@ -37,7 +37,7 @@ describe('доступность управления Valkey', () => {
 
     renderValkeySection(`/valkey/management/${TEST_INSTANCE_ID}`, session);
     await screen.findByRole('heading', { name: 'cache' }, WAIT);
-    await screen.findByRole('button', { name: 'Сменить пароль' }, WAIT);
+    await screen.findByRole('button', { name: 'Изменить пароль' }, WAIT);
     expectNamedControls();
 
     const monitoring = screen.getByRole('tab', { name: 'Мониторинг' });

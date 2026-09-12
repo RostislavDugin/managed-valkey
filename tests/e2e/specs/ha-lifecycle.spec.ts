@@ -39,24 +39,12 @@ test(
       throw new Error('Интерфейс HA не показал адрес только для чтения');
     }
     expect(connection.readOnly.host).not.toBe(connection.primary.host);
-    expect(await console.readTotalResources()).toEqual({
-      vcpu: initialSize.vcpu * 3,
-      ramGb: initialSize.ramGb * 3,
-    });
     await assertValkeyReadOnly(connection.primary, connection.readOnly, 'ha-created', initialSize);
 
     await console.resize(largerSize);
-    expect(await console.readTotalResources()).toEqual({
-      vcpu: largerSize.vcpu * 3,
-      ramGb: largerSize.ramGb * 3,
-    });
     await assertValkeyReadOnly(connection.primary, connection.readOnly, 'ha-grown', largerSize);
 
     await console.resize(initialSize);
-    expect(await console.readTotalResources()).toEqual({
-      vcpu: initialSize.vcpu * 3,
-      ramGb: initialSize.ramGb * 3,
-    });
     await assertValkeyReadOnly(connection.primary, connection.readOnly, 'ha-shrunk', initialSize);
 
     const oldPrimary = await connectValkey(connection.primary);

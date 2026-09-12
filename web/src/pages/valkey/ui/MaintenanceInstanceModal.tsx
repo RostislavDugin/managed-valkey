@@ -1,17 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
-import { Button, Group, Modal, NumberInput, Stack, Switch } from '@mantine/core';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Group, Modal, Stack, Text } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { ApiError } from '@/shared/api';
 import { buttonVariants } from '@/shared/config';
 import { patchInstance } from '../api/valkey-api';
 import type { ValkeyInstance } from '../model/valkey';
+import { getRequestErrorMessage } from '../model/valkey-form';
 import {
-  getRequestErrorMessage,
-  validateMaintenanceDow,
-  validateMaintenanceDurationMin,
-  validateMaintenanceHourUtc,
-} from '../model/valkey-form';
+  getDefaultLocalMaintenance,
+  localMaintenanceToUtc,
+  MAINTENANCE_HINT,
+  MAINTENANCE_WEEKDAYS,
+  utcMaintenanceToLocal,
+  validateLocalMaintenanceTime,
+} from '../model/valkey-maintenance';
+import { MaintenanceWindowFields } from './MaintenanceWindowFields';
 
 interface MaintenanceInstanceModalProps {
   instance: ValkeyInstance | null;
@@ -29,20 +33,27 @@ export function MaintenanceInstanceModal({
   const [loading, setLoading] = useState(false);
   const requestControllerRef = useRef<AbortController | null>(null);
   const initializedInstanceRef = useRef<string | null>(null);
+  const timezoneOffsetMinutesRef = useRef(new Date().getTimezoneOffset());
   const openedInstanceId = instance?.id ?? null;
-  const form = useForm({
+  const timezoneOffsetMinutes = timezoneOffsetMinutesRef.current;
+  const defaultMaintenance = useMemo(
+    () => getDefaultLocalMaintenance(timezoneOffsetMinutes),
+    [timezoneOffsetMinutes]
+  );
+  const form = useForm<{ dow: string; time: string; durationMin: number }>({
     mode: 'controlled',
     initialValues: {
-      enabled: false,
-      dow: 0,
-      hourUtc: 0,
-      durationMin: 30,
+      dow: String(defaultMaintenance.dow),
+      time: defaultMaintenance.time,
+      durationMin: defaultMaintenance.durationMin,
     },
     validateInputOnBlur: true,
     validate: {
-      dow: (value, values) => validateMaintenanceDow(value, values.enabled),
-      hourUtc: (value, values) => validateMaintenanceHourUtc(value, values.enabled),
-      durationMin: (value, values) => validateMaintenanceDurationMin(value, values.enabled),
+      dow: (value) =>
+        MAINTENANCE_WEEKDAYS.some((weekday) => weekday.value === value)
+          ? null
+          : 'Выберите день недели',
+      time: (value) => validateLocalMaintenanceTime(value, timezoneOffsetMinutes),
     },
   });
   const { setValues } = form;
@@ -57,13 +68,15 @@ export function MaintenanceInstanceModal({
     }
 
     initializedInstanceRef.current = instance.id;
+    const maintenance = instance.maintenance
+      ? utcMaintenanceToLocal(instance.maintenance, timezoneOffsetMinutes)
+      : defaultMaintenance;
     setValues({
-      enabled: instance.maintenance !== null,
-      dow: instance.maintenance?.dow ?? 0,
-      hourUtc: instance.maintenance?.hourUtc ?? 0,
-      durationMin: instance.maintenance?.durationMin ?? 30,
+      dow: String(maintenance.dow),
+      time: maintenance.time,
+      durationMin: maintenance.durationMin,
     });
-  }, [instance, setValues]);
+  }, [defaultMaintenance, instance, setValues, timezoneOffsetMinutes]);
 
   useEffect(() => {
     requestControllerRef.current?.abort();
@@ -89,9 +102,10 @@ export function MaintenanceInstanceModal({
       const updated = await patchInstance(
         instance.id,
         {
-          maintenance: values.enabled
-            ? { dow: values.dow, hourUtc: values.hourUtc, durationMin: values.durationMin }
-            : null,
+          maintenance: localMaintenanceToUtc(
+            { dow: Number(values.dow), time: values.time, durationMin: Number(values.durationMin) },
+            timezoneOffsetMinutes
+          ),
         },
         controller.signal
       );
@@ -101,7 +115,7 @@ export function MaintenanceInstanceModal({
 
       onUpdated(updated);
       notifications.show({
-        message: values.enabled ? 'Новое окно сохранено.' : 'Окно обслуживания очищено.',
+        message: 'Новое окно сохранено.',
         title: 'Окно обслуживания изменено',
       });
       onClose();
@@ -132,33 +146,19 @@ export function MaintenanceInstanceModal({
     <Modal onClose={onClose} opened radius="h3_xl" title="Окно обслуживания" centered>
       <form onSubmit={form.onSubmit((values) => void submit(values))}>
         <Stack gap="h3_md">
-          <Switch
-            label="Задать окно обслуживания"
-            {...form.getInputProps('enabled', { type: 'checkbox' })}
-          />
+          <Text c="h3_text_2" size="h3_sm">
+            {MAINTENANCE_HINT}
+          </Text>
 
-          {form.values.enabled ? (
-            <>
-              <NumberInput
-                label="День недели, 0–6"
-                max={6}
-                min={0}
-                {...form.getInputProps('dow')}
-              />
-              <NumberInput
-                label="Час UTC, 0–23"
-                max={23}
-                min={0}
-                {...form.getInputProps('hourUtc')}
-              />
-              <NumberInput
-                label="Длительность, минуты"
-                max={1440}
-                min={1}
-                {...form.getInputProps('durationMin')}
-              />
-            </>
-          ) : null}
+          <MaintenanceWindowFields
+            day={form.values.dow}
+            dayError={form.errors.dow}
+            onDayChange={(value) => form.setFieldValue('dow', value ?? '')}
+            onTimeChange={(value) => form.setFieldValue('time', value ?? '')}
+            time={form.values.time}
+            timeError={form.errors.time}
+            timezoneOffsetMinutes={timezoneOffsetMinutes}
+          />
 
           <Group justify="flex-end">
             <Button onClick={onClose} type="button" variant={buttonVariants.ghost}>

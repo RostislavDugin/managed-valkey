@@ -6,6 +6,11 @@ import {
   installStatefulValkeyApi,
   jsonResponse as statefulJsonResponse,
 } from '../../../../test/valkey-api-fixture';
+import {
+  getDefaultLocalMaintenance,
+  localMaintenanceToUtc,
+  MAINTENANCE_HINT,
+} from '../model/valkey-maintenance';
 
 const WAIT = { timeout: 10_000 };
 const catalog = {
@@ -184,7 +189,7 @@ describe('форма создания Valkey', () => {
     await user.clear(prefix);
     await user.type(prefix, 'shop');
 
-    expect(screen.getByText(/Primary: redis:\/\/shop-xxxxxx/)).toBeVisible();
+    expect(screen.getByText(/Адрес для записи и чтения: redis:\/\/shop-xxxxxx/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: 'Повторить' }));
@@ -192,16 +197,18 @@ describe('форма создания Valkey', () => {
     await waitFor(() => expect(screen.queryByText('Каталог недоступен')).not.toBeInTheDocument());
     expect(name).toHaveValue('cache-prod');
     expect(prefix).toHaveValue('shop');
-    expect(screen.getByText(/Primary: redis:\/\/shop-xxxxxx\.valkey\.test:41379/)).toBeVisible();
     expect(
-      screen.getByText(/Для чтения: redis:\/\/shop-xxxxxx-ro\.valkey\.test:41379/)
+      screen.getByText(/Адрес для записи и чтения: redis:\/\/shop-xxxxxx\.valkey\.test:41379/)
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Адрес только для чтения: redis:\/\/shop-xxxxxx-ro\.valkey\.test:41379/)
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Создать базу' })).toBeEnabled();
   });
 
-  it('при включённом пустом списке адресов требует явного подтверждения недоступности базы', async () => {
+  it('при включённом пустом списке требует добавить разрешённый адрес', async () => {
     const session = seedSession();
-    installApi([jsonResponse(catalog)]);
+    const api = installStatefulValkeyApi([]);
     const user = userEvent.setup();
 
     renderValkeySection('/valkey/management/new', session);
@@ -210,58 +217,49 @@ describe('форма создания Valkey', () => {
     expect(create).toBeEnabled();
 
     await user.click(screen.getByRole('switch', { name: 'Ограничить доступ по IP-адресам' }));
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    await user.click(create);
 
-    const confirmation = screen.getByRole('checkbox', {
-      name: 'Запретить все подключения к базе',
-    });
-    expect(create).toBeDisabled();
-
-    await user.click(confirmation);
-
-    expect(create).toBeEnabled();
+    expect(
+      await screen.findByText('Добавьте хотя бы один IPv4-адрес или диапазон CIDR')
+    ).toBeVisible();
+    expect(api.requests.some((request) => request.method === 'POST')).toBe(false);
   });
 
-  it('проверяет окно обслуживания и отправляет его в одном POST создания', async () => {
+  it('показывает обязательное локальное окно и отправляет его в UTC одним POST создания', async () => {
     const session = seedSession();
     const api = installStatefulValkeyApi([]);
     const user = userEvent.setup();
+    const timezoneOffsetMinutes = new Date().getTimezoneOffset();
+    const defaultMaintenance = getDefaultLocalMaintenance(timezoneOffsetMinutes);
 
     renderValkeySection('/valkey/management/new', session);
 
-    const maintenance = await screen.findByRole(
-      'switch',
-      { name: 'Задать окно обслуживания' },
-      WAIT
+    await screen.findByRole('combobox', { name: 'День недели' }, WAIT);
+    expect(
+      screen.queryByRole('switch', { name: 'Задать окно обслуживания' })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'День недели' })).toHaveValue('Воскресенье');
+    expect(screen.getByRole('combobox', { name: 'Время начала, местное' })).toHaveValue(
+      defaultMaintenance.time
     );
-    expect(maintenance).not.toBeChecked();
+    await user.hover(screen.getByRole('img', { name: 'Подсказка: Окно обслуживания' }));
+    expect(await screen.findByText(MAINTENANCE_HINT)).toBeVisible();
+    expect(screen.queryByText(/5–15 минут/)).not.toBeInTheDocument();
     expect(screen.getByText('Белый список')).toBeVisible();
     expect(screen.queryByText('Белый список адресов')).not.toBeInTheDocument();
-    await user.click(maintenance);
+    expect(screen.queryByRole('textbox', { name: 'Длительность, минуты' })).not.toBeInTheDocument();
 
-    const day = screen.getByRole('textbox', { name: 'День недели, 0–6' });
-    const hour = screen.getByRole('textbox', { name: 'Час UTC, 0–23' });
-    const duration = screen.getByRole('textbox', { name: 'Длительность, минуты' });
-    await user.clear(day);
-    await user.clear(hour);
-    await user.clear(duration);
     await user.click(screen.getByRole('button', { name: 'Создать базу' }));
 
-    expect(await screen.findByText('Укажите число от 0 до 6')).toBeVisible();
-    expect(screen.getByText('Укажите час от 0 до 23')).toBeVisible();
-    expect(screen.getByText('Укажите длительность от 1 до 1440 минут')).toBeVisible();
-    expect(api.requests.some((request) => request.method === 'POST')).toBe(false);
-
-    await user.clear(day);
-    await user.type(day, '2');
-    await user.clear(hour);
-    await user.type(hour, '3');
-    await user.clear(duration);
-    await user.type(duration, '60');
-    await user.click(screen.getByRole('button', { name: 'Создать базу' }));
-
+    const expected = localMaintenanceToUtc(defaultMaintenance, timezoneOffsetMinutes);
     await waitFor(() =>
       expect(api.requests.find((request) => request.method === 'POST')?.body).toMatchObject({
-        maintenance: { dow: 2, hour_utc: 3, duration_min: 60 },
+        maintenance: {
+          dow: expected.dow,
+          hour_utc: expected.hourUtc,
+          duration_min: expected.durationMin,
+        },
       })
     );
     expect(api.requests.some((request) => request.method === 'PATCH')).toBe(false);

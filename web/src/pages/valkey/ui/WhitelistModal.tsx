@@ -115,7 +115,7 @@ export function WhitelistModal({ instance, onClose, onRefresh, onUpdated }: Whit
           />
           {form.values.enabled ? (
             <Textarea
-              description="Пустой список запрещает все подключения"
+              description="По одному IPv4-адресу или диапазону CIDR в строке"
               label="Разрешённые IPv4-адреса и CIDR"
               rows={5}
               {...form.getInputProps('cidrs')}

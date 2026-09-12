@@ -53,7 +53,7 @@ function ConsoleNavigation({ email, onNavigate }: { email: string; onNavigate?: 
         <Menu position="top" shadow="md" width="target" withinPortal>
           <Menu.Target>
             <UnstyledButton className={styles.emailRow} title={email}>
-              <User aria-hidden="true" size={16} strokeWidth={1.5} />
+              <User aria-hidden="true" className={styles.emailIcon} size={16} strokeWidth={1.5} />
               <Text className={styles.email} size="h3_sm">
                 {email}
               </Text>

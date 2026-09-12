@@ -137,7 +137,7 @@ export function ValkeyPasswordModal({
       notifications.show({
         color: 'red',
         message: getRequestErrorMessage(error),
-        title: 'Не удалось сменить пароль',
+        title: 'Не удалось изменить пароль',
       });
     } finally {
       if (attemptRef.current === attempt && requestControllerRef.current === controller) {
@@ -153,7 +153,7 @@ export function ValkeyPasswordModal({
       onClose={close}
       opened={opened}
       radius="h3_xl"
-      title={revealed ? 'Сохраните пароль' : 'Сменить пароль'}
+      title={revealed ? 'Сохраните пароль' : 'Изменить пароль'}
       centered
     >
       {revealed ? (
@@ -212,7 +212,7 @@ export function ValkeyPasswordModal({
               Отмена
             </Button>
             <Button
-              aria-label="Подтвердить смену пароля"
+              aria-label="Подтвердить изменение пароля"
               disabled={
                 instance.isUpdating ||
                 instance.isStale ||
@@ -223,7 +223,7 @@ export function ValkeyPasswordModal({
               onClick={() => void rotate()}
               variant={buttonVariants.accent}
             >
-              Сменить пароль
+              Изменить пароль
             </Button>
           </Group>
         </Stack>

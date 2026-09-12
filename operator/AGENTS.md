@@ -8,8 +8,6 @@
 2. [../SYSTEM.md](../SYSTEM.md) — разделы 3 (границы и права), 6 (оператор),
    7 (сеть и TLS), 9 (отказоустойчивость), 11 (логи), 13 (окружения) и
    14 (тесты).
-3. [SCAFFOLD.md](SCAFFOLD.md) — из какого каркаса Kubebuilder получены `cmd`,
-   `api/v1alpha1`, `internal/operator` и `config`.
 
 ## Ответственность
 
