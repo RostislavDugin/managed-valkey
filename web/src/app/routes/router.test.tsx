@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH_INVALIDATED_EVENT, AUTH_TOKEN_KEY } from '@/shared/api';
 import { renderRoutes, seedInstances, seedSession, TEST_USER_ID } from '../../../test/render';
 import { routeTable } from './router';
@@ -9,6 +9,22 @@ const WAIT = { timeout: 10_000 };
 
 function renderAt(path: string) {
   return renderRoutes(routeTable, path);
+}
+
+function installRybbitClient() {
+  const script = document.createElement('script');
+  script.dataset.siteId = 'test-site';
+  script.src = 'https://rybbit.databasus.com/api/script.js';
+  script.type = 'application/json';
+  document.head.append(script);
+
+  const client = {
+    clearUserId: vi.fn(),
+    identify: vi.fn(),
+  };
+  window.rybbit = client;
+
+  return { client, script };
 }
 
 function crumbText() {
@@ -187,7 +203,40 @@ describe('хлебные крошки', () => {
   });
 });
 
-describe('завершение сессии', () => {
+describe('идентификация Rybbit и завершение сессии', () => {
+  let rybbit: ReturnType<typeof installRybbitClient>;
+
+  beforeEach(() => {
+    rybbit = installRybbitClient();
+  });
+
+  afterEach(() => {
+    delete window.rybbit;
+    rybbit.script.remove();
+  });
+
+  it('при действующей сессии передаёт в Rybbit UUID аккаунта и почту', async () => {
+    renderAt('/valkey/management');
+
+    await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
+
+    await waitFor(() => {
+      expect(rybbit.client.identify).toHaveBeenCalledWith(TEST_USER_ID, {
+        email: 'user@example.com',
+      });
+    });
+    expect(rybbit.client.clearUserId).not.toHaveBeenCalled();
+  });
+
+  it('при прямом открытии страницы входа очищает пользователя Rybbit', async () => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+
+    renderAt('/auth');
+
+    expect(await screen.findByRole('heading', { name: 'Вход в консоль' }, WAIT)).toBeVisible();
+    await waitFor(() => expect(rybbit.client.clearUserId).toHaveBeenCalled());
+  });
+
   it('после нажатия «Выйти» удаляет токен и открывает страницу /auth', async () => {
     const user = userEvent.setup();
     const { router } = renderAt('/valkey/management');
@@ -198,6 +247,7 @@ describe('завершение сессии', () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/auth'), WAIT);
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+    await waitFor(() => expect(rybbit.client.clearUserId).toHaveBeenCalled());
   });
 
   it('после удаления токена в другой вкладке завершает сессию и открывает страницу входа', async () => {
@@ -214,6 +264,7 @@ describe('завершение сессии', () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/auth'), WAIT);
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+    await waitFor(() => expect(rybbit.client.clearUserId).toHaveBeenCalled());
   });
 
   it('после ответа 401 или истечения JWT завершает сессию и открывает страницу входа', async () => {
@@ -221,14 +272,17 @@ describe('завершение сессии', () => {
     await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
     window.dispatchEvent(new Event(AUTH_INVALIDATED_EVENT));
     await waitFor(() => expect(first.router.state.location.pathname).toBe('/auth'), WAIT);
+    await waitFor(() => expect(rybbit.client.clearUserId).toHaveBeenCalled());
     first.unmount();
 
+    rybbit.client.clearUserId.mockClear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     seedSession();
     const second = renderAt('/valkey/management');
     await screen.findByRole('heading', { name: 'Управляемые базы Valkey на DDR5' }, WAIT);
     await vi.advanceTimersByTimeAsync(3_600_000);
     await vi.waitFor(() => expect(second.router.state.location.pathname).toBe('/auth'));
+    expect(rybbit.client.clearUserId).toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -242,6 +296,7 @@ describe('завершение сессии', () => {
 
     expect(router.state.location.pathname).toBe('/valkey/management');
     expect(localStorage.getItem(AUTH_TOKEN_KEY)).not.toBeNull();
+    expect(rybbit.client.clearUserId).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 });

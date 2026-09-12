@@ -18,6 +18,7 @@ import {
 import { notifications } from '@mantine/notifications';
 import { AUTH_INVALIDATED_EVENT, AUTH_TOKEN_KEY, logout, type Session } from '@/shared/api';
 import { buttonVariants, routes } from '@/shared/config';
+import { setRybbitUser } from '@/shared/lib';
 import { LogoWide } from '@/shared/ui';
 import styles from './ConsoleShell.module.css';
 
@@ -104,6 +105,10 @@ export function ConsoleShell() {
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const [asideSlot, setAsideSlot] = useState<HTMLElement | null>(null);
   const endingSession = useRef(false);
+
+  useEffect(() => {
+    setRybbitUser({ email: session.email, userId: session.userId });
+  }, [session.email, session.userId]);
 
   const endExpiredSession = useCallback(async () => {
     if (endingSession.current) {

@@ -6,6 +6,7 @@ import { useForm } from '@mantine/form';
 import { notifications } from '@mantine/notifications';
 import { ApiError, checkEmail, login, register } from '@/shared/api';
 import { buttonVariants, routes } from '@/shared/config';
+import { setRybbitUser } from '@/shared/lib';
 import { LogoWide } from '@/shared/ui';
 import { getEmailRequestError } from '../model/auth-form';
 import { useCapsLock } from '../model/use-caps-lock';
@@ -69,6 +70,10 @@ export function AuthPage() {
   const [stepMessage, setStepMessage] = useState<string | null>(null);
 
   const capsLock = useCapsLock();
+
+  useEffect(() => {
+    setRybbitUser(null);
+  }, []);
 
   const form = useForm<AuthFormValues>({
     mode: 'controlled',
