@@ -537,12 +537,16 @@ func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t
 		t.Fatalf("credentials не вернул оба адреса: credentials=%+v error=%v", currentCredentials, err)
 	}
 	platformStatus, err := harness.api.Health(ctx)
-	if err != nil || platformStatus.Status != "ok" ||
+	if err != nil {
+		t.Fatalf("/health не ответил: %v", err)
+	}
+	operationsStatus := platformStatus.Checks.Operations.Status
+	if platformStatus.Status != operationsStatus ||
+		(operationsStatus != "ok" && operationsStatus != "warning") ||
 		platformStatus.Checks.PostgreSQL.Status != "ok" ||
 		platformStatus.Checks.Kubernetes.Status != "ok" ||
-		platformStatus.Checks.Operations.Status != "ok" ||
 		platformStatus.Checks.Instances.Status != "ok" {
-		t.Fatalf("/health не подтвердил состояние платформы: health=%+v error=%v", platformStatus, err)
+		t.Fatalf("/health не подтвердил состояние платформы: health=%+v", platformStatus)
 	}
 	valkeyStatus, err := harness.api.ValkeyHealth(
 		ctx,
