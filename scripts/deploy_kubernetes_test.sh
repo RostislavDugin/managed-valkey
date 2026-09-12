@@ -28,22 +28,34 @@ if [[ ${1:-} == get && ${2:-} == statefulsets.apps ]]; then
     exit 0
 fi
 if [[ ${1:-} == get && ${2:-} == nodes ]]; then
-    if [[ $* == *InternalIP* ]]; then
-        printf '%s\n' 10.17.0.26 10.17.0.27
+    if [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
+        if [[ $* == *InternalIP* ]]; then
+            printf '%s\n' 10.17.0.26 10.17.0.27
+        else
+            printf '%s\n' node-a node-b
+        fi
+    elif [[ $* == *InternalIP* ]]; then
+        printf '%s\n' 10.17.0.35
     else
-        printf '%s\n' node-a node-b
+        printf '%s\n' node-a
     fi
     exit 0
 fi
 if [[ $* == '-n kube-system get pods -l k8s-app=cilium --field-selector=status.phase=Running -o name' ]]; then
-    printf '%s\n' pod/cilium-a pod/cilium-b
+    if [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
+        printf '%s\n' pod/cilium-a pod/cilium-b
+    else
+        printf '%s\n' pod/cilium-a
+    fi
     exit 0
 fi
 if [[ ${1:-} == -n && ${2:-} == kube-system && ${3:-} == exec ]]; then
     if [[ $TEST_KUBECTL_MODE == broken-node-network && ${4:-} == pod/cilium-a ]]; then
         printf '%s\n' 'Cluster health: 1/2 reachable'
-    else
+    elif [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
         printf '%s\n' 'Cluster health: 2/2 reachable'
+    else
+        printf '%s\n' 'Cluster health: 1/1 reachable'
     fi
     exit 0
 fi
@@ -65,13 +77,13 @@ if [[ ${1:-} == -n && ${3:-} == get && ${4:-} == pod ]]; then
     pod=${5:-}
     expected_exit_code=${pod##*-}
     actual_exit_code=$expected_exit_code
-    if [[ $TEST_KUBECTL_MODE == wrong-exit && $pod == *-1-42 ]]; then
+    if [[ $TEST_KUBECTL_MODE == wrong-exit && $pod == *-0-42 ]]; then
         actual_exit_code=17
     fi
     query=${*: -1}
     case "$query" in
     *restartCount*)
-        if [[ $TEST_KUBECTL_MODE == restarted && $pod == *-1-42 ]]; then
+        if [[ $TEST_KUBECTL_MODE == restarted && $pod == *-0-42 ]]; then
             printf 1
         else
             printf 0
@@ -119,9 +131,13 @@ cat >"$fake_bin/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ ${1:-} == ahostsv4 && ${2:-} == cert-manager-webhook.valkey.h3llo-demo.com ]]
-printf '%s\n' '10.17.0.26 STREAM webhook' '10.17.0.27 STREAM webhook'
+if [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
+    printf '%s\n' '10.17.0.26 STREAM webhook' '10.17.0.27 STREAM webhook'
+else
+    printf '%s\n' '10.17.0.35 STREAM webhook'
+fi
 if [[ $TEST_KUBECTL_MODE == stale-webhook-dns ]]; then
-    printf '%s\n' '10.17.0.28 STREAM webhook'
+    printf '%s\n' '10.17.0.36 STREAM webhook'
 fi
 EOF
 
@@ -160,11 +176,10 @@ run_case() {
 run_case success "$work_dir/success.log"
 [[ $case_status == 73 ]]
 grep -Fq "apply -f $repo_root/deploy/prod/namespace.yaml" "$state_dir/kubectl.log"
-[[ $(grep -c '^  restartPolicy: Never$' "$state_dir/pods.yaml") == 4 ]]
-[[ $(grep -c 'command: \["/bin/sh", "-c", "exit 0"\]' "$state_dir/pods.yaml") == 2 ]]
-[[ $(grep -c 'command: \["/bin/sh", "-c", "exit 42"\]' "$state_dir/pods.yaml") == 2 ]]
+[[ $(grep -c '^  restartPolicy: Never$' "$state_dir/pods.yaml") == 2 ]]
+[[ $(grep -c 'command: \["/bin/sh", "-c", "exit 0"\]' "$state_dir/pods.yaml") == 1 ]]
+[[ $(grep -c 'command: \["/bin/sh", "-c", "exit 42"\]' "$state_dir/pods.yaml") == 1 ]]
 [[ $(grep -c '^  nodeName: node-a$' "$state_dir/pods.yaml") == 2 ]]
-[[ $(grep -c '^  nodeName: node-b$' "$state_dir/pods.yaml") == 2 ]]
 if grep -Eq '^      restartPolicy:' "$state_dir/pods.yaml"; then
     echo "политика перезапуска задана контейнеру" >&2
     exit 1
@@ -222,6 +237,16 @@ if ! rg -Fq 'valkeyinstances.valkey.h3llo-demo.com --subresource=status' \
 fi
 if ! rg -q '^podDnsPolicy: Default$' "$repo_root/deploy/prod/cert-manager-values.yaml"; then
     echo "контроллер cert-manager не использует DNS рабочей ноды" >&2
+    exit 1
+fi
+if ! rg -q '^  replicaCount: 1$' "$repo_root/deploy/prod/cert-manager-values.yaml" ||
+    ! rg -q '^    minAvailable: 1$' "$repo_root/deploy/prod/cert-manager-values.yaml"; then
+    echo "cert-manager-webhook не настроен для одной рабочей ноды" >&2
+    exit 1
+fi
+if ! rg -q 'preferredDuringSchedulingIgnoredDuringExecution:' "$repo_root/deploy/prod/envoy.yaml" ||
+    rg -q 'requiredDuringSchedulingIgnoredDuringExecution:' "$repo_root/deploy/prod/envoy.yaml"; then
+    echo "Envoy требует разные рабочие ноды" >&2
     exit 1
 fi
 

@@ -203,6 +203,20 @@ func Test_LoadConfig_WithTwelveVCPUAndFortyEightGiB_CalculatesAvailableBudgets(t
 	}
 }
 
+func Test_LoadConfig_WithSixteenVCPUAndSixtyFourGiB_CalculatesProductionBudgets(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvManagedK8SClusterVCPU, "16")
+	t.Setenv(config.EnvManagedK8SClusterRAMGB, "64")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузить конфигурацию: %v", err)
+	}
+	if cfg.ManagedK8SClusterAvailableCPUMilli != 13600 || cfg.ManagedK8SClusterAvailableRAMMiB != 58982 {
+		t.Fatalf("неверный рабочий бюджет управляемого кластера: %+v", cfg)
+	}
+}
+
 func Test_LoadConfig_WithFourVCPUAndSixteenGiB_CalculatesAvailableBudgets(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv(config.EnvManagedK8SClusterVCPU, "4")
