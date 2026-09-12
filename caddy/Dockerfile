@@ -17,7 +17,7 @@ COPY web/package.json web/pnpm-lock.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 COPY web ./
-RUN pnpm build
+RUN RYBBIT_SITE_ID=5e1f44c518f5 pnpm build
 
 FROM ${RUNTIME_IMAGE} AS runtime
 COPY --from=build /usr/bin/caddy /usr/bin/caddy
