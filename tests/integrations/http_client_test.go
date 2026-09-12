@@ -91,6 +91,36 @@ type credentials struct {
 	AppliedPasswordVersion int    `json:"applied_password_version"`
 }
 
+type platformHealth struct {
+	Status string `json:"status"`
+	Checks struct {
+		PostgreSQL struct {
+			Status string `json:"status"`
+		} `json:"postgresql"`
+		Kubernetes struct {
+			Status string `json:"status"`
+		} `json:"kubernetes"`
+		Operations struct {
+			Status string `json:"status"`
+		} `json:"operations"`
+		Instances struct {
+			Status string `json:"status"`
+		} `json:"instances"`
+	} `json:"checks"`
+}
+
+type valkeyHealth struct {
+	Status string `json:"status"`
+	Checks struct {
+		Primary struct {
+			Status string `json:"status"`
+		} `json:"primary"`
+		Read *struct {
+			Status string `json:"status"`
+		} `json:"read,omitempty"`
+	} `json:"checks"`
+}
+
 type currentAccount struct {
 	User struct {
 		ID    string `json:"id"`
@@ -306,6 +336,65 @@ func (client *apiClient) Delete(ctx context.Context, token, instanceID string) e
 	)
 }
 
+func (client *apiClient) Health(ctx context.Context) (platformHealth, error) {
+	var response platformHealth
+	err := client.request(ctx, http.MethodGet, "/health", "", nil, false, &response, http.StatusOK)
+
+	return response, err
+}
+
+func (client *apiClient) ValkeyHealth(
+	ctx context.Context,
+	primaryURI string,
+	readURI string,
+) (valkeyHealth, error) {
+	var response valkeyHealth
+	headers := map[string]string{"X-Valkey-Primary": primaryURI}
+	if readURI != "" {
+		headers["X-Valkey-Read"] = readURI
+	}
+	err := client.getWithHeaders(ctx, "/valkey-health", headers, &response, http.StatusOK)
+
+	return response, err
+}
+
+func (client *apiClient) getWithHeaders(
+	ctx context.Context,
+	path string,
+	headers map[string]string,
+	result any,
+	expectedStatus int,
+) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("создать запрос GET %s: %w", path, err)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+
+	response, err := client.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("выполнить запрос GET %s: %w", path, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maximumHTTPResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("прочитать ответ GET %s: %w", path, err)
+	}
+	if len(responseBody) > maximumHTTPResponseBytes {
+		return fmt.Errorf("ответ GET %s превышает допустимый размер", path)
+	}
+	if response.StatusCode != expectedStatus {
+		return &apiStatusError{Method: http.MethodGet, Path: path, StatusCode: response.StatusCode}
+	}
+	if err := json.Unmarshal(responseBody, result); err != nil {
+		return fmt.Errorf("разобрать ответ GET %s: %w", path, err)
+	}
+
+	return nil
+}
+
 func (client *apiClient) request(
 	ctx context.Context,
 	method string,
@@ -379,7 +468,9 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 	instanceID := uuid.NewString()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		if request.URL.Path != "/v1/auth/register" && request.Header.Get("Authorization") != "Bearer "+token {
+		public := request.URL.Path == "/v1/auth/register" || request.URL.Path == "/health" ||
+			request.URL.Path == "/valkey-health"
+		if !public && request.Header.Get("Authorization") != "Bearer "+token {
 			t.Errorf("неверный Authorization для %s %s", request.Method, request.URL.Path)
 		}
 		if request.Method == http.MethodPost && request.Header.Get("Idempotency-Key") == "" {
@@ -443,6 +534,16 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 			)
 		case http.MethodDelete + " /v1/managed/valkey/instances/" + instanceID:
 			writer.WriteHeader(http.StatusAccepted)
+		case http.MethodGet + " /health":
+			_, _ = writer.Write([]byte(
+				`{"status":"ok","checks":{"postgresql":{"status":"ok"},"kubernetes":{"status":"ok"},` +
+					`"operations":{"status":"ok"},"instances":{"status":"ok"}}}`,
+			))
+		case http.MethodGet + " /valkey-health":
+			if request.Header.Get("X-Valkey-Primary") == "" || request.Header.Get("X-Valkey-Read") == "" {
+				t.Error("нет заголовков проверки Valkey")
+			}
+			_, _ = writer.Write([]byte(`{"status":"ok","checks":{"primary":{"status":"ok"},"read":{"status":"ok"}}}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -485,6 +586,16 @@ func Test_APIClient_WithLifecycleRequests_SendsHTTPHeadersAndDecodesResponses(t 
 	}
 	if err := client.Delete(ctx, token, instanceID); err != nil {
 		t.Fatalf("удаление: %v", err)
+	}
+	if health, err := client.Health(ctx); err != nil || health.Status != "ok" ||
+		health.Checks.PostgreSQL.Status != "ok" || health.Checks.Kubernetes.Status != "ok" ||
+		health.Checks.Operations.Status != "ok" || health.Checks.Instances.Status != "ok" {
+		t.Fatalf("сводная проверка: health=%+v error=%v", health, err)
+	}
+	if health, err := client.ValkeyHealth(ctx, "rediss://primary", "rediss://read"); err != nil ||
+		health.Status != "ok" || health.Checks.Primary.Status != "ok" ||
+		health.Checks.Read == nil || health.Checks.Read.Status != "ok" {
+		t.Fatalf("проверка Valkey: health=%+v error=%v", health, err)
 	}
 }
 

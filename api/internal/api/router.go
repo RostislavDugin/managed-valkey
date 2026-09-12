@@ -12,8 +12,10 @@ import (
 
 // Технические проверки не входят в версионированный продуктовый API.
 const (
-	PathLive  = "/livez"
-	PathReady = "/readyz"
+	PathLive         = "/livez"
+	PathReady        = "/readyz"
+	PathHealth       = "/health"
+	PathValkeyHealth = "/valkey-health"
 )
 
 type Probe interface {
@@ -27,6 +29,8 @@ func NewRouter(
 	authService AuthService,
 	valkeyService ValkeyService,
 	auditService AuditService,
+	platformHealth PlatformHealthService,
+	valkeyHealth ValkeyHealthService,
 ) (*gin.Engine, error) {
 	gin.SetMode(gin.ReleaseMode)
 
@@ -45,6 +49,7 @@ func NewRouter(
 	})
 
 	RegisterHealth(engine, database)
+	RegisterOperationalHealth(engine, platformHealth, valkeyHealth)
 	RegisterAuth(engine, authService, NewRateLimiter(auth.SystemClock{}, AuthRateLimit, AuthRateWindow))
 	RegisterValkey(engine, authService, valkeyService, auditService)
 

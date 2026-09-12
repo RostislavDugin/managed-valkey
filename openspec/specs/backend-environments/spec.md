@@ -130,7 +130,7 @@ Bootstrap SHALL создать отдельные kubeconfig API и операт
 
 ### Requirement: Рабочая конфигурация Docker Compose запускает серверные сервисы
 
-`docker-compose.prod.yml` SHALL запускать Caddy с рабочей сборкой клиентского приложения, одноразовое применение миграций, API, PostgreSQL 18 и VictoriaLogs из готовых образов. Caddy SHALL обслуживать SPA и передавать API только `/v1/*`, `/livez` и `/readyz`. Оператор SHALL разворачиваться в управляемом Kubernetes через `deploy/prod` и MUST NOT входить в рабочую конфигурацию Docker Compose.
+`docker-compose.prod.yml` SHALL запускать Caddy с рабочей сборкой клиентского приложения, одноразовое применение миграций, API, PostgreSQL 18 и VictoriaLogs из готовых образов. Caddy SHALL обслуживать SPA и передавать API только `/v1/*`, `/livez`, `/readyz`, `/health` и `/valkey-health`. Маршруты `/health` и `/valkey-health` SHALL быть доступны без авторизации и SHALL совместно допускать не более 30 запросов в минуту с одного IP-адреса. Превышение лимита SHALL давать HTTP `429` без обращения к API. Оператор SHALL разворачиваться в управляемом Kubernetes через `deploy/prod` и MUST NOT входить в рабочую конфигурацию Docker Compose.
 
 #### Scenario: Запуск рабочего окружения
 
@@ -141,6 +141,16 @@ Bootstrap SHALL создать отдельные kubeconfig API и операт
 
 - **WHEN** сервис миграций возвращает ненулевой код
 - **THEN** Docker Compose не запускает API
+
+#### Scenario: Внешний монитор запрашивает состояние платформы
+
+- **WHEN** клиент без JWT запрашивает `/health` или `/valkey-health` в пределах лимита
+- **THEN** Caddy передаёт запрос в API, не отдаёт вместо него SPA и не журналирует значения заголовков Valkey
+
+#### Scenario: Лимит служебных проверок исчерпан
+
+- **WHEN** один IP-адрес отправляет больше 30 запросов к `/health` и `/valkey-health` за одну минуту
+- **THEN** Caddy отвечает `429` на лишние запросы без обращения к API
 
 ### Requirement: Настройки отделены от секретов
 

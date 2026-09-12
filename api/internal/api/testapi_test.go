@@ -24,6 +24,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	apiconfig "github.com/RostislavDugin/managed-valkey/api/internal/config"
+	"github.com/RostislavDugin/managed-valkey/api/internal/platformhealth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
@@ -43,6 +44,8 @@ type testAPIConfig struct {
 	slugGenerator        valkeydomain.SlugGenerator
 	wrapDatabaseClock    func(valkeydomain.DatabaseClock) valkeydomain.DatabaseClock
 	wrapValkeyRepository func(valkeydomain.Repository) valkeydomain.Repository
+	platformHealth       api.PlatformHealthService
+	valkeyHealth         api.ValkeyHealthService
 }
 
 type testAPI struct {
@@ -195,7 +198,28 @@ func newHTTPTestAPI(t *testing.T, config testAPIConfig) *testAPI {
 	if probe == nil {
 		probe = database
 	}
-	router, err := api.NewRouter(logger, probe, authService, valkeyService, auditService)
+	platformService := config.platformHealth
+	if platformService == nil {
+		platformService = platformhealth.NewService(database, nil, false, clock)
+	}
+	valkeyHealthService := config.valkeyHealth
+	if valkeyHealthService == nil {
+		valkeyHealthService = platformhealth.NewValkeyService(
+			"valkey.localhost",
+			41379,
+			clock,
+			platformhealth.ValkeyGoProber{},
+		)
+	}
+	router, err := api.NewRouter(
+		logger,
+		probe,
+		authService,
+		valkeyService,
+		auditService,
+		platformService,
+		valkeyHealthService,
+	)
 	if err != nil {
 		t.Fatalf("создать маршрутизатор: %v", err)
 	}

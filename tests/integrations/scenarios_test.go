@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -534,6 +536,23 @@ func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t
 	if err != nil || currentCredentials.Host != current.Host || currentCredentials.HostRO != current.HostRO {
 		t.Fatalf("credentials не вернул оба адреса: credentials=%+v error=%v", currentCredentials, err)
 	}
+	platformStatus, err := harness.api.Health(ctx)
+	if err != nil || platformStatus.Status != "ok" ||
+		platformStatus.Checks.PostgreSQL.Status != "ok" ||
+		platformStatus.Checks.Kubernetes.Status != "ok" ||
+		platformStatus.Checks.Operations.Status != "ok" ||
+		platformStatus.Checks.Instances.Status != "ok" {
+		t.Fatalf("/health не подтвердил состояние платформы: health=%+v error=%v", platformStatus, err)
+	}
+	valkeyStatus, err := harness.api.ValkeyHealth(
+		ctx,
+		valkeyHealthURI(current.Host, current.Port, password),
+		valkeyHealthURI(current.HostRO, current.Port, password),
+	)
+	if err != nil || valkeyStatus.Status != "ok" || valkeyStatus.Checks.Primary.Status != "ok" ||
+		valkeyStatus.Checks.Read == nil || valkeyStatus.Checks.Read.Status != "ok" {
+		t.Fatalf("/valkey-health не подтвердил primary и read: health=%+v error=%v", valkeyStatus, err)
+	}
 	harness.waitForMetrics(owner, created)
 	primaryConnection := harness.connect(current.Host, password)
 	defer func() { _ = primaryConnection.Close() }()
@@ -546,6 +565,14 @@ func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t
 	if err != nil || value != "create-value" {
 		t.Fatalf("прочитать через адрес для чтения: value=%q error=%v", value, err)
 	}
+}
+
+func valkeyHealthURI(host string, port int, password string) string {
+	return (&url.URL{
+		Scheme: "rediss",
+		User:   url.UserPassword("app", password),
+		Host:   net.JoinHostPort(host, fmt.Sprintf("%d", port)),
+	}).String()
 }
 
 func Test_ResizeSingleValkey_WithRealApiAndOperator_AppliesRequestedResources(t *testing.T) {

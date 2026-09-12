@@ -17,6 +17,7 @@ import (
 	"github.com/RostislavDugin/managed-valkey/api/internal/audit"
 	"github.com/RostislavDugin/managed-valkey/api/internal/auth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/config"
+	"github.com/RostislavDugin/managed-valkey/api/internal/platformhealth"
 	"github.com/RostislavDugin/managed-valkey/api/internal/store"
 	valkeysync "github.com/RostislavDugin/managed-valkey/api/internal/sync"
 	"github.com/RostislavDugin/managed-valkey/api/internal/valkey"
@@ -87,6 +88,7 @@ func run() error {
 		valkey.CryptoSlugGenerator{},
 	)
 	stopKubernetesSync := func() {}
+	var kubernetesHealth platformhealth.KubernetesProbe
 	if cfg.KubernetesBackgroundSyncEnabled {
 		kubernetes, err := valkeysync.NewKubernetesClient()
 		if err != nil {
@@ -110,12 +112,33 @@ func run() error {
 			cancelSync()
 			syncRunner.Wait()
 		}
+		kubernetesHealth = platformhealth.NewNamespaceProbe(kubernetes)
 	} else {
 		logger.Warn("синхронизация с Kubernetes выключена")
 	}
 	defer stopKubernetesSync()
 
-	router, err := api.NewRouter(logger, database, authService, valkeyService, auditService)
+	platformHealth := platformhealth.NewService(
+		database,
+		kubernetesHealth,
+		cfg.KubernetesBackgroundSyncEnabled,
+		clock,
+	)
+	valkeyHealth := platformhealth.NewValkeyService(
+		cfg.ValkeyBaseDomain,
+		cfg.ValkeyPublicPort,
+		clock,
+		platformhealth.ValkeyGoProber{},
+	)
+	router, err := api.NewRouter(
+		logger,
+		database,
+		authService,
+		valkeyService,
+		auditService,
+		platformHealth,
+		valkeyHealth,
+	)
 	if err != nil {
 		return fmt.Errorf("создать маршрутизатор HTTP: %w", err)
 	}

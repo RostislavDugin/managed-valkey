@@ -3,26 +3,34 @@
 }
 
 app.h3llo-demo.com {
-	rate_limit {
-		zone auth {
-			match {
-				path /v1/auth/*
-			}
-			key {remote_host}
-			events 10
-			window 1m
-		}
-		zone api {
-			match {
-				path /v1/*
-			}
-			key {remote_host}
-			events 120
-			window 1m
-		}
-	}
-	@api path /v1/* /livez /readyz
+	@api path /v1/* /livez /readyz /health /valkey-health
 	handle @api {
+		rate_limit {
+			zone auth {
+				match {
+					path /v1/auth/*
+				}
+				key {remote_host}
+				events 10
+				window 1m
+			}
+			zone api {
+				match {
+					path /v1/*
+				}
+				key {remote_host}
+				events 120
+				window 1m
+			}
+			zone health {
+				match {
+					path /health /valkey-health
+				}
+				key {remote_host}
+				events 30
+				window 1m
+			}
+		}
 		reverse_proxy api:8080
 	}
 	handle {

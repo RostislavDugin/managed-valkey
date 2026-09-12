@@ -153,6 +153,11 @@ printf '%s\n' "$jwt_secret" >>"$secret_values_file"
 set -a
 source "${OPERATOR_ENV:?OPERATOR_ENV не задан}"
 set +a
+api_valkey_public_port=${MANAGED_VALKEY_PUBLIC_ADDRESS##*:}
+[[ "$api_valkey_public_port" =~ ^[1-9][0-9]*$ ]] || {
+    echo "integration: внешний порт Valkey должен быть положительным числом" >&2
+    exit 2
+}
 
 processes_started_seconds=$SECONDS
 setsid env \
@@ -164,10 +169,11 @@ setsid env \
     LOG_LEVEL=error \
     MANAGED_K8S_CLUSTER_VCPU=12 \
     MANAGED_K8S_CLUSTER_RAM_GB=48 \
+    SSL_CERT_FILE="${MANAGED_VALKEY_CA_FILE:?MANAGED_VALKEY_CA_FILE не задан}" \
     VALKEY_BASE_DOMAIN="${VALKEY_BASE_DOMAIN:?VALKEY_BASE_DOMAIN не задан}" \
     VALKEY_INSTANCE_MAX_RAM_GB="${VALKEY_INSTANCE_MAX_RAM_GB:-16}" \
     VALKEY_INSTANCE_MAX_VCPU="${VALKEY_INSTANCE_MAX_VCPU:-4}" \
-    VALKEY_PUBLIC_PORT=41379 \
+    VALKEY_PUBLIC_PORT="$api_valkey_public_port" \
     go run ./api/cmd/api >"$diagnostics_dir/api.log" 2>&1 &
 api_pid=$!
 child_pids+=("$api_pid")
