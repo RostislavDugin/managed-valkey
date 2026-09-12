@@ -109,7 +109,7 @@ API и оператор написаны на Go и используют оди�
 | `operator` | Приводит состояние Kubernetes к заданному в CR, переключает основной процесс, выполняет перекатку и записывает состояние вместе со снимками метрик в `status` | Go, `controller-runtime` | Внутри Kubernetes; при разработке как процесс хоста |
 | `web`      | Интерфейс пользователя                                                                                                                                        | React, SPA               | Собирается в CI и входит в образ Caddy              |
 
-Готовые компоненты, которые ставим, а не пишем: Caddy (TLS, rate limit), Envoy Gateway (вход для клиентов Valkey), cert-manager (wildcard-сертификат), PostgreSQL 18, VictoriaLogs.
+Готовые компоненты, которые ставим, а не пишем: Caddy (TLS, rate limit), Envoy Gateway (вход для клиентов Valkey), cert-manager (wildcard-сертификат), Metrics Server (CPU подов), PostgreSQL 18, VictoriaLogs.
 
 ```mermaid
 flowchart LR
@@ -121,6 +121,7 @@ flowchart LR
     vl["VictoriaLogs<br/>OTLP/HTTP, vmui :9428"]
     k8s["k8s API"]
     operator["operator<br/>controller-runtime"]
+    metrics["Metrics Server"]
     gw["Envoy Gateway"]
     pods["прямые Pod Valkey"]
 
@@ -134,7 +135,9 @@ flowchart LR
     operator -- "Pod, Service, NetworkPolicy,<br/>обработчик порта, TCPRoute" --> k8s
     operator -- "INFO, ROLE, ACL,<br/>CLIENT KILL, REPLICAOF" --> pods
     operator -- "status,<br/>служебные поля Secret" --> k8s
-    k8s -. "будущий сбор CPU<br/>через metrics.k8s.io" .-> operator
+    pods -. "метрики ресурсов kubelet" .-> metrics
+    metrics -- "aggregated API<br/>metrics.k8s.io" --> k8s
+    k8s -- "CPU подов" --> operator
     api -- "логи" --> vl
     operator -- "OTLP, HTTPS" --> caddy
     browser -- "публичный vmui, HTTPS" --> caddy
@@ -685,7 +688,7 @@ Failover имеет приоритет; новый primary получает ак
 
 ### Метрики
 
-`ValkeyMetricsReconciler` раз в `config.MetricsInterval`, равный 10 секундам, собирает полный `INFO` через `valkey-go` под пользователем `operator` и CPU контейнера `valkey` из `metrics.k8s.io/v1beta1`. Этот контроллер работает отдельно от `ValkeyInstanceReconciler`, поэтому недоступность Valkey или `metrics.k8s.io` не задерживает обновление `status.observedAt`, переключение основного процесса и применение настроек. API к IP-адресу Pod не подключается и `INFO` не вызывает.
+`ValkeyMetricsReconciler` раз в `config.MetricsInterval`, равный 10 секундам, собирает полный `INFO` через `valkey-go` под пользователем `operator` и CPU контейнера `valkey` из `metrics.k8s.io/v1beta1`. В production этот API предоставляет Metrics Server. Сценарий выпуска устанавливает его официальным Helm chart `3.14.0` с образом `v0.9.0`, не отключает проверку TLS kubelet и запускает один экземпляр. Этот контроллер работает отдельно от `ValkeyInstanceReconciler`, поэтому недоступность Valkey или `metrics.k8s.io` не задерживает обновление `status.observedAt`, переключение основного процесса и применение настроек. API к IP-адресу Pod не подключается и `INFO` не вызывает.
 
 `status.metrics` хранит не больше трёх элементов с уникальным `ordinal`. Каждый снимок содержит `podUID`, `containerID`, `runId`, `collectedAt` в UTC с точностью до микросекунд, роль процесса и поля метрик из [схемы `ValkeyInstance`](SYSTEM-DETAIL.md#cr-valkeyinstance). CPU может быть `null`. Оператор оставляет по одному последнему успешному снимку текущего процесса каждого узла. Перед сбором и после него он сверяет `podUID`, `containerID` и `runId`, а перед записью повторно читает `status.nodes`.
 
@@ -1010,7 +1013,7 @@ Dev сохраняет Compose-проект `managed-valkey-dev`, стабиль
 
 ### docker-compose.prod.yml
 
-На VM работают Caddy, API, PostgreSQL и VictoriaLogs. PostgreSQL опубликован на порту 45432 и требует пароль; VictoriaLogs доступен извне только через Caddy. Рабочий `.env` содержит только `POSTGRES_PASSWORD` и `JWT_SECRET`; остальные значения заданы в `docker-compose.prod.yml` и `release.env`. Оператор работает внутри Managed Kubernetes h3llo вместе с Envoy Gateway и `cert-manager`. API получает отдельный файл подключения Kubernetes только для чтения и запускается с `KUBERNETES_BACKGROUND_SYNC_ENABLED=true`.
+На VM работают Caddy, API, PostgreSQL и VictoriaLogs. PostgreSQL опубликован на порту 45432 и требует пароль; VictoriaLogs доступен извне только через Caddy. Рабочий `.env` содержит только `POSTGRES_PASSWORD` и `JWT_SECRET`; остальные значения заданы в `docker-compose.prod.yml` и `release.env`. Оператор работает внутри Managed Kubernetes h3llo вместе с Envoy Gateway, `cert-manager` и Metrics Server. API получает отдельный файл подключения Kubernetes только для чтения и запускается с `KUBERNETES_BACKGROUND_SYNC_ENABLED=true`.
 
 `docker-compose.prod.yml` задаёт физическую ёмкость кластера 16 vCPU / 64 GiB двумя суммарными параметрами. После резерва API учитывает 13600m / 58982 MiB и показывает в `/capacity` целый лимит 13 vCPU / 57 GiB.
 
@@ -1111,6 +1114,10 @@ envtest без подготовки k3s и сборки тестового об�
 `success` каждого из них. Задание `deploy` зависит от этого барьера и запускается
 только после успешного `push` в `main` через окружение GitHub `production`;
 запрос на слияние сервер не меняет. CodeQL и Trivy пока не входят в этот процесс.
+До фиксации успешного SHA сценарий выпуска ждёт `Available` у
+`v1beta1.metrics.k8s.io`, проверяет право учётной записи оператора читать
+`pods.metrics.k8s.io` и получает свежий неотрицательный CPU `operator-0`.
+Недоступный Metrics Server останавливает выпуск.
 
 [Состав CI, правила сканирования и сборки образов](SYSTEM-DETAIL.md#ci).
 

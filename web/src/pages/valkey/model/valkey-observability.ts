@@ -50,6 +50,7 @@ const TIME_FORMAT = new Intl.DateTimeFormat('ru-RU', {
 const DAY_FORMAT = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
 const NBSP = '\u00A0';
 const GIBIBYTE = 1024 ** 3;
+const MAX_RENDER_GAP_MS = 60_000;
 
 export function formatMetricValue(metric: MetricName, value: number | null) {
   if (value === null) {
@@ -88,6 +89,10 @@ export function getMetricSeriesKey(nodeId: string, metric: MetricName) {
   return `${nodeId}:${metric}`;
 }
 
+export function getMetricRenderSeriesKey(nodeId: string, metric: MetricName) {
+  return `${getMetricSeriesKey(nodeId, metric)}:render`;
+}
+
 export function buildMetricChartRows(nodes: ValkeyMetricNode[], vcpu: number): MetricChartRow[] {
   const rows = new Map<string, MetricChartRow>();
 
@@ -114,4 +119,69 @@ export function buildMetricChartRows(nodes: ValkeyMetricNode[], vcpu: number): M
   return [...rows.values()].sort((left, right) =>
     left.collectedAt.localeCompare(right.collectedAt)
   );
+}
+
+export function buildMetricRenderRows(
+  rows: MetricChartRow[],
+  nodes: ValkeyMetricNode[],
+  metric: MetricName
+): MetricChartRow[] {
+  const renderRows = rows.map((row) => ({ ...row }));
+
+  for (const node of nodes) {
+    const valueKey = getMetricSeriesKey(node.id, metric);
+    const renderKey = getMetricRenderSeriesKey(node.id, metric);
+
+    for (const row of renderRows) {
+      row[renderKey] = typeof row[valueKey] === 'number' ? row[valueKey] : null;
+    }
+
+    let index = 0;
+    while (index < renderRows.length) {
+      if (typeof renderRows[index]?.[valueKey] === 'number') {
+        index += 1;
+        continue;
+      }
+
+      const gapStart = index;
+      while (index < renderRows.length && typeof renderRows[index]?.[valueKey] !== 'number') {
+        index += 1;
+      }
+
+      const leftIndex = gapStart - 1;
+      const rightIndex = index;
+      if (leftIndex < 0 || rightIndex >= renderRows.length) {
+        continue;
+      }
+
+      const timestamps = renderRows
+        .slice(leftIndex, rightIndex + 1)
+        .map((row) => Date.parse(row.collectedAt));
+      const timestampsIncrease = timestamps.every(
+        (timestamp, timestampIndex) =>
+          Number.isFinite(timestamp) &&
+          (timestampIndex === 0 || timestamp > (timestamps[timestampIndex - 1] ?? timestamp))
+      );
+      const elapsed = (timestamps.at(-1) ?? 0) - (timestamps[0] ?? 0);
+      const leftValue = renderRows[leftIndex]?.[valueKey];
+      const rightValue = renderRows[rightIndex]?.[valueKey];
+
+      if (
+        !timestampsIncrease ||
+        elapsed > MAX_RENDER_GAP_MS ||
+        typeof leftValue !== 'number' ||
+        typeof rightValue !== 'number'
+      ) {
+        continue;
+      }
+
+      for (let gapIndex = gapStart; gapIndex < rightIndex; gapIndex += 1) {
+        const offset = (timestamps[gapIndex - leftIndex] ?? 0) - (timestamps[0] ?? 0);
+        renderRows[gapIndex]![renderKey] =
+          leftValue + ((rightValue - leftValue) * offset) / elapsed;
+      }
+    }
+  }
+
+  return renderRows;
 }

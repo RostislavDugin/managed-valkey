@@ -1,11 +1,13 @@
-import { useId, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useId, useMemo, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import type { DotItemDotProps } from 'recharts';
 import { AreaChart } from '@mantine/charts';
 import { Paper, Stack, Text, Title } from '@mantine/core';
 import { formatDateTime, formatRelativeTime } from '@/shared/lib';
 import {
+  buildMetricRenderRows,
   formatMetricAxisTime,
   formatMetricValue,
+  getMetricRenderSeriesKey,
   getMetricSeriesKey,
   type MetricChartRow,
   type MetricName,
@@ -20,6 +22,7 @@ interface ChartSeries {
   color: string;
   label: string;
   name: string;
+  rawName: string;
 }
 
 interface TooltipItem {
@@ -30,21 +33,30 @@ interface TooltipItem {
 }
 
 function MetricsTooltip({
+  data,
   label,
   labels,
   metrics,
   payload,
+  rawNames,
 }: {
+  data: MetricChartRow[];
   label?: unknown;
   labels: Map<string, string>;
   metrics: Map<string, MetricName>;
   payload?: readonly TooltipItem[];
+  rawNames: Map<string, string>;
 }) {
   if (typeof label !== 'string' || !payload?.length) {
     return null;
   }
 
-  const values = payload.filter((item) => typeof item.value === 'number');
+  const row = data.find((item) => item.collectedAt === label);
+  const values = payload.flatMap((item) => {
+    const key = String(item.dataKey ?? item.name);
+    const value = row?.[rawNames.get(key) ?? key];
+    return typeof value === 'number' ? [{ ...item, value }] : [];
+  });
   if (values.length === 0) {
     return null;
   }
@@ -82,6 +94,7 @@ function useKeyboardPoints({
   data,
   labels,
   metrics,
+  rawNames,
   pointSeriesName,
   series,
   title,
@@ -90,6 +103,7 @@ function useKeyboardPoints({
   labels: Map<string, string>;
   metrics: Map<string, MetricName>;
   pointSeriesName?: string;
+  rawNames: Map<string, string>;
   series: ChartSeries[];
   title: string;
 }) {
@@ -143,12 +157,16 @@ function useKeyboardPoints({
     const values = series
       .flatMap((item) => {
         const metric = metrics.get(item.name);
-        const value = row?.[item.name];
+        const value = row?.[item.rawName];
         return metric && typeof value === 'number'
           ? [`${item.label}: ${formatMetricValue(metric, value)}`]
           : [];
       })
       .join('. ');
+
+    if (values.length === 0) {
+      return null;
+    }
 
     return (
       <circle
@@ -175,7 +193,7 @@ function useKeyboardPoints({
       : series.map((item) => ({
           color: item.color,
           dataKey: item.name,
-          value: data[focusedIndex]?.[item.name],
+          value: data[focusedIndex]?.[item.rawName],
         }));
 
   return {
@@ -184,10 +202,12 @@ function useKeyboardPoints({
       focusedIndex === null ? null : (
         <div aria-live="polite" className={styles.keyboardTooltip} id={tooltipId} role="status">
           <MetricsTooltip
+            data={data}
             label={data[focusedIndex]?.collectedAt}
             labels={labels}
             metrics={metrics}
             payload={payload}
+            rawNames={rawNames}
           />
         </div>
       ),
@@ -216,15 +236,22 @@ export function MetricChart({
   const series = nodes.map((node, index) => ({
     color: NODE_COLORS[index],
     label: node.name,
-    name: getMetricSeriesKey(node.id, metric),
+    name: getMetricRenderSeriesKey(node.id, metric),
+    rawName: getMetricSeriesKey(node.id, metric),
   }));
+  const renderData = useMemo(
+    () => buildMetricRenderRows(data, nodes, metric),
+    [data, metric, nodes]
+  );
   const labels = new Map(series.map((item) => [item.name, item.label]));
   const metrics = new Map(series.map((item) => [item.name, metric]));
+  const rawNames = new Map(series.map((item) => [item.name, item.rawName]));
   const keyboard = useKeyboardPoints({
-    data,
+    data: renderData,
     labels,
     metrics,
-    pointSeriesName: series[0]?.name,
+    pointSeriesName: series[0]?.rawName,
+    rawNames,
     series,
     title,
   });
@@ -245,7 +272,7 @@ export function MetricChart({
         className={styles.chart}
         connectNulls={false}
         curveType="monotone"
-        data={data}
+        data={renderData}
         dataKey="collectedAt"
         fillOpacity={0.22}
         gridAxis="xy"
@@ -253,7 +280,14 @@ export function MetricChart({
         strokeWidth={2}
         tooltipProps={{
           content: ({ label, payload }) => (
-            <MetricsTooltip label={label} labels={labels} metrics={metrics} payload={payload} />
+            <MetricsTooltip
+              data={renderData}
+              label={label}
+              labels={labels}
+              metrics={metrics}
+              payload={payload}
+              rawNames={rawNames}
+            />
           ),
         }}
         valueFormatter={(value) => formatMetricValue(metric, value)}

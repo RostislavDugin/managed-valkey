@@ -33,33 +33,48 @@ vi.mock('@mantine/charts', async () => {
     connectNulls: boolean;
     curveType: string;
     data: Array<Record<string, unknown>>;
-    series: Array<{ name: string }>;
+    series: Array<{ name: string; rawName?: string }>;
     strokeDasharray?: string;
     tooltipProps: {
       content: (props: { label: string; payload: unknown[] }) => ReactNode;
     };
     yAxisProps: { domain?: number[] };
   }) {
-    const [tooltipVisible, setTooltipVisible] = useState(false);
-    const last = props.data.at(-1);
+    const [tooltipIndex, setTooltipIndex] = useState<number | null>(null);
     const firstSeries = props.series[0];
     const dot = firstSeries ? props.areaProps(firstSeries).dot : false;
+    const seriesGaps = Object.fromEntries(
+      props.series.map((series) => [
+        series.name,
+        props.data.some((row) => row[series.name] === null),
+      ])
+    );
+    const tooltipRow = tooltipIndex === null ? undefined : props.data[tooltipIndex];
 
     return (
       <div
         data-connect-nulls={String(props.connectNulls)}
         data-curve={props.curveType}
-        data-has-gap={String(
-          Boolean(firstSeries && props.data.some((row) => row[firstSeries.name] === null))
-        )}
+        data-has-gap={String(Boolean(firstSeries && seriesGaps[firstSeries.name]))}
         data-points={props.data.length}
+        data-series-gaps={JSON.stringify(seriesGaps)}
         data-series={JSON.stringify(props.series)}
         data-stroke-dasharray={props.strokeDasharray}
         data-sync-id={props.areaChartProps.syncId}
         data-testid="area-chart"
         data-y-domain={JSON.stringify(props.yAxisProps.domain)}
-        onMouseEnter={() => setTooltipVisible(true)}
-        onMouseLeave={() => setTooltipVisible(false)}
+        onDoubleClick={() =>
+          setTooltipIndex(
+            props.data.findIndex(
+              (row) =>
+                firstSeries?.rawName &&
+                row[firstSeries.rawName] === null &&
+                typeof row[firstSeries.name] === 'number'
+            )
+          )
+        }
+        onMouseEnter={() => setTooltipIndex(props.data.length - 1)}
+        onMouseLeave={() => setTooltipIndex(null)}
       >
         <svg>
           {typeof dot === 'function'
@@ -78,17 +93,15 @@ vi.mock('@mantine/charts', async () => {
               ))
             : null}
         </svg>
-        {tooltipVisible && last && firstSeries
+        {tooltipRow && firstSeries
           ? props.tooltipProps.content({
-              label: String(last.collectedAt),
-              payload: [
-                {
-                  color: 'green',
-                  dataKey: firstSeries.name,
-                  name: firstSeries.name,
-                  value: last[firstSeries.name],
-                },
-              ],
+              label: String(tooltipRow.collectedAt),
+              payload: props.series.map((series) => ({
+                color: 'green',
+                dataKey: series.name,
+                name: series.name,
+                value: tooltipRow[series.name],
+              })),
             })
           : null}
       </div>
@@ -129,6 +142,46 @@ function response(range: MetricWindow, value = POINT_COUNTS[range]): ValkeyMetri
   };
 }
 
+function gapPoint(collectedAt: string, value: number | null): MetricPoint {
+  return {
+    collectedAt,
+    usedMemoryBytes: value,
+    cpuMillicores: value,
+    connectedClients: value,
+    opsPerSec: value,
+    keyspaceHits: value,
+    keyspaceMisses: value,
+    evictedKeys: value,
+  };
+}
+
+function responseWithGap(elapsedMs: number, replicaGapIsUnbounded = false): ValkeyMetricsResponse {
+  const startedAt = Date.UTC(2026, 8, 8, 12);
+  const timestamps = [0, 30_000, elapsedMs].map((offset) =>
+    new Date(startedAt + offset).toISOString()
+  );
+  const primaryPoints = [
+    gapPoint(timestamps[0]!, 10),
+    gapPoint(timestamps[1]!, null),
+    gapPoint(timestamps[2]!, 30),
+  ];
+  const replicaPoints = [
+    gapPoint(timestamps[0]!, 40),
+    gapPoint(timestamps[1]!, null),
+    gapPoint(timestamps[2]!, replicaGapIsUnbounded ? null : 60),
+  ];
+
+  return {
+    from: timestamps[0]!,
+    to: timestamps[2]!,
+    stepSeconds: 10,
+    nodes: [
+      { id: '0', ordinal: 0, name: 'valkey-0', role: 'primary', points: primaryPoints },
+      { id: '1', ordinal: 1, name: 'valkey-1', role: 'replica', points: replicaPoints },
+    ],
+  };
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -148,7 +201,7 @@ beforeEach(() => {
 });
 
 describe('экран мониторинга', () => {
-  it('после загрузки метрик показывает сводку, четыре графика, единицы измерения, роли нод и разрывы данных', async () => {
+  it('после загрузки метрик показывает сводку, четыре графика, единицы измерения, роли нод и соединение короткого пропуска', async () => {
     renderPage();
 
     expect(await screen.findAllByTestId('area-chart')).toHaveLength(4);
@@ -167,12 +220,45 @@ describe('экран мониторинга', () => {
       expect(chart).toHaveAttribute('data-sync-id', 'valkey-metrics-instance-1');
       expect(chart).not.toHaveAttribute('data-stroke-dasharray');
     }
-    expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute('data-has-gap', 'true');
+    expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute('data-has-gap', 'false');
     expect(screen.getAllByTestId('area-chart')[0]).toHaveAttribute(
       'data-y-domain',
       '[0,8589934592]'
     );
     expect(screen.getAllByTestId('area-chart')[1]).toHaveAttribute('data-y-domain', '[0,100]');
+  });
+
+  it('если известные значения разделяет не больше минуты, соединяет пропуск на всех четырёх графиках только при отрисовке', async () => {
+    const metrics = responseWithGap(60_000);
+    vi.mocked(getValkeyMetrics).mockResolvedValue(metrics);
+    renderPage();
+
+    const charts = await screen.findAllByTestId('area-chart');
+    for (const chart of charts) {
+      expect(chart).toHaveAttribute('data-has-gap', 'false');
+      expect(chart.querySelectorAll('[data-keyboard-point]')).toHaveLength(2);
+    }
+
+    fireEvent.doubleClick(charts[0]!);
+    expect(screen.queryByText(formatDateTime(metrics.nodes[0]!.points[1]!.collectedAt))).toBeNull();
+  });
+
+  it('если известные значения разделяет больше минуты, оставляет разрыв на всех четырёх графиках', async () => {
+    vi.mocked(getValkeyMetrics).mockResolvedValue(responseWithGap(60_001));
+    renderPage();
+
+    for (const chart of await screen.findAllByTestId('area-chart')) {
+      expect(chart).toHaveAttribute('data-has-gap', 'true');
+    }
+  });
+
+  it('для каждой ноды независимо соединяет только ограниченный с двух сторон минутный пропуск', async () => {
+    vi.mocked(getValkeyMetrics).mockResolvedValue(responseWithGap(60_000, true));
+    renderPage();
+
+    for (const chart of await screen.findAllByTestId('area-chart')) {
+      expect(Object.values(JSON.parse(chart.dataset.seriesGaps ?? '{}'))).toEqual([false, true]);
+    }
   });
 
   it('при первом ответе в StrictMode выбирает все ноды и не теряет выбор после повторного эффекта', async () => {

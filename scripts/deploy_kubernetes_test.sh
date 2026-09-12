@@ -18,6 +18,11 @@ set -euo pipefail
 
 printf '%s\n' "$*" >>"$TEST_KUBECTL_LOG"
 
+metrics_mode=false
+if [[ $TEST_KUBECTL_MODE == metrics-* ]]; then
+    metrics_mode=true
+fi
+
 if [[ $* == 'get --raw=/readyz' ]]; then
     exit 0
 fi
@@ -66,11 +71,18 @@ fi
 if [[ ${1:-} == apply && ${2:-} == -f && ${3:-} == - ]]; then
     payload=$TEST_KUBECTL_STATE/payload.$$
     cat >"$payload"
-    pod=$(awk '$1 == "name:" { print $2; exit }' "$payload")
-    cp "$payload" "$TEST_KUBECTL_STATE/active/$pod"
-    printf '%s\n' '---' >>"$TEST_KUBECTL_YAML_LOG"
-    cat "$payload" >>"$TEST_KUBECTL_YAML_LOG"
+    if grep -Fq 'kind: Pod' "$payload"; then
+        pod=$(awk '$1 == "name:" { print $2; exit }' "$payload")
+        cp "$payload" "$TEST_KUBECTL_STATE/active/$pod"
+        printf '%s\n' '---' >>"$TEST_KUBECTL_YAML_LOG"
+        cat "$payload" >>"$TEST_KUBECTL_YAML_LOG"
+    fi
     rm -f -- "$payload"
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == valkey-system &&
+    ${3:-} == get && ${4:-} == pod && ${5:-} == operator-0 ]]; then
+    printf '%s' 'ghcr.io/rostislavdugin/managed-valkey-operator:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     exit 0
 fi
 if [[ ${1:-} == -n && ${3:-} == get && ${4:-} == pod ]]; then
@@ -109,7 +121,92 @@ if [[ ${1:-} == -n && ${3:-} == get && ${4:-} == pod ]]; then
     exit 0
 fi
 if [[ ${1:-} == apply && ${2:-} == -f && ${3:-} == */deploy/prod/namespace.yaml ]]; then
+    if [[ $metrics_mode == true ]]; then
+        exit 0
+    fi
     exit 73
+fi
+if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == namespace/valkey-system ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == apiservice/v1beta1.metrics.k8s.io ]]; then
+    [[ $TEST_KUBECTL_MODE != metrics-api-unavailable ]]
+    exit
+fi
+if [[ $metrics_mode == true && ${1:-} == wait ]]; then
+    exit 0
+fi
+if [[ $TEST_KUBECTL_MODE == metrics-install && ${1:-} == apply && ${2:-} == --server-side ]]; then
+    exit 73
+fi
+if [[ $metrics_mode == true && ${1:-} == apply ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == cert-manager &&
+    ${3:-} == create && ${4:-} == secret ]]; then
+    printf '%s\n' 'apiVersion: v1' 'kind: Secret' 'metadata:' '  name: cloudflare-api-token'
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == kustomize ]]; then
+    printf '%s\n' 'apiVersion: v1' 'kind: List' 'items: []'
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == valkey-system &&
+    ${3:-} == wait && ${5:-} == pod/operator-0 ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == auth && ${2:-} == can-i &&
+    $* == *pods.metrics.k8s.io* ]]; then
+    if [[ $TEST_KUBECTL_MODE == metrics-rbac-denied ]]; then
+        printf '%s\n' no
+    else
+        printf '%s\n' yes
+    fi
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == --as=* && $* == *'get pods.metrics.k8s.io operator-0'* ]]; then
+    if [[ $TEST_KUBECTL_MODE == metrics-timeout ]]; then
+        printf '%s\t%s\n' '2000-01-01T00:00:00Z' '12500000n'
+    else
+        printf '%s\t%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" '12500000n'
+    fi
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == valkey-system &&
+    ${3:-} == get && ${4:-} == secret && ${5:-} == managed-valkey-api-token ]]; then
+    printf '%s' test-api-token
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == config && ${2:-} == view ]]; then
+    if [[ $* == *certificate-authority-data* ]]; then
+        printf '%s' dGVzdC1jYQ==
+    else
+        printf '%s' https://127.0.0.1:6443
+    fi
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == --kubeconfig && ${3:-} == auth && ${4:-} == can-i ]]; then
+    if [[ $* == *--subresource=status* ]]; then
+        printf '%s\n' no
+    else
+        printf '%s\n' yes
+    fi
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == --kubeconfig && ${3:-} == get &&
+    ${4:-} == namespace ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${3:-} == wait ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == envoy-gateway-system &&
+    ${3:-} == get && ${4:-} == service ]]; then
+    if [[ $* == *ingress*hostname* ]]; then
+        exit 0
+    fi
+    printf '%s' 203.0.113.10
+    exit 0
 fi
 
 echo "неожиданный вызов kubectl: $*" >&2
@@ -124,13 +221,31 @@ EOF
 
 cat >"$fake_bin/helm" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >>"$TEST_HELM_LOG"
+
+if [[ $TEST_KUBECTL_MODE != metrics-* ]]; then
+    exit 2
+fi
+if [[ $* == 'repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update' ]]; then
+    exit 0
+fi
+if [[ ${1:-} == upgrade && ${2:-} == --install ]]; then
+    exit 0
+fi
 exit 2
 EOF
 
 cat >"$fake_bin/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ ${1:-} == ahostsv4 && ${2:-} == cert-manager-webhook.valkey.h3llo-demo.com ]]
+[[ ${1:-} == ahostsv4 ]]
+if [[ ${2:-} == probe.valkey.h3llo-demo.com ]]; then
+    printf '%s\n' '203.0.113.10 STREAM probe'
+    exit 0
+fi
+[[ ${2:-} == cert-manager-webhook.valkey.h3llo-demo.com ]]
 if [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
     printf '%s\n' '10.17.0.26 STREAM webhook' '10.17.0.27 STREAM webhook'
 else
@@ -156,12 +271,14 @@ run_case() {
     rm -rf -- "$state_dir/active"
     mkdir -p "$state_dir/active"
     : >"$state_dir/kubectl.log"
+    : >"$state_dir/helm.log"
     : >"$state_dir/pods.yaml"
 
     set +e
     PATH="$fake_bin:$PATH" \
         TEST_KUBECTL_MODE="$mode" \
         TEST_KUBECTL_LOG="$state_dir/kubectl.log" \
+        TEST_HELM_LOG="$state_dir/helm.log" \
         TEST_KUBECTL_STATE="$state_dir" \
         TEST_KUBECTL_YAML_LOG="$state_dir/pods.yaml" \
         CLOUDFLARE_API_TOKEN=test-token \
@@ -185,6 +302,56 @@ if grep -Eq '^      restartPolicy:' "$state_dir/pods.yaml"; then
     exit 1
 fi
 [[ -z $(find "$state_dir/active" -type f -print -quit) ]]
+
+run_case metrics-install "$work_dir/metrics-install.log"
+[[ $case_status == 73 ]]
+grep -Fq 'repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update' \
+    "$state_dir/helm.log"
+grep -Fq 'upgrade --install metrics-server metrics-server/metrics-server --version 3.14.0' \
+    "$state_dir/helm.log"
+grep -Fq -- '--namespace kube-system --set replicas=1 --set-string image.tag=v0.9.0' \
+    "$state_dir/helm.log"
+if grep -Fq -- '--kubelet-insecure-tls' "$state_dir/helm.log"; then
+    echo "проверка TLS kubelet отключена" >&2
+    exit 1
+fi
+
+run_case metrics-success "$work_dir/metrics-success.log"
+[[ $case_status == 0 ]]
+grep -Fq 'wait --for=condition=Available apiservice/v1beta1.metrics.k8s.io --timeout=180s' \
+    "$state_dir/kubectl.log"
+grep -Fq 'auth can-i --as=system:serviceaccount:valkey-system:managed-valkey-operator get pods.metrics.k8s.io --all-namespaces' \
+    "$state_dir/kubectl.log"
+grep -Fq -- '--as=system:serviceaccount:valkey-system:managed-valkey-operator -n valkey-system get pods.metrics.k8s.io operator-0' \
+    "$state_dir/kubectl.log"
+grep -Fq 'Kubernetes подготовлен, адрес Envoy: 203.0.113.10' \
+    "$work_dir/metrics-success.log"
+
+run_case metrics-api-unavailable "$work_dir/metrics-api-unavailable.log"
+[[ $case_status == 1 ]]
+grep -Fq 'API metrics.k8s.io не достиг состояния Available' \
+    "$work_dir/metrics-api-unavailable.log"
+if grep -Fq 'auth can-i --as=system:serviceaccount:valkey-system:managed-valkey-operator' \
+    "$state_dir/kubectl.log"; then
+    echo "проверка продолжилась при недоступном metrics.k8s.io" >&2
+    exit 1
+fi
+
+run_case metrics-rbac-denied "$work_dir/metrics-rbac-denied.log"
+[[ $case_status == 1 ]]
+grep -Fq 'учётная запись оператора не может читать pods.metrics.k8s.io' \
+    "$work_dir/metrics-rbac-denied.log"
+if grep -Fq -- '--as=system:serviceaccount:valkey-system:managed-valkey-operator -n valkey-system get pods.metrics.k8s.io operator-0' \
+    "$state_dir/kubectl.log"; then
+    echo "получение CPU началось после отказа RBAC" >&2
+    exit 1
+fi
+
+run_case metrics-timeout "$work_dir/metrics-timeout.log"
+[[ $case_status == 1 ]]
+grep -Fq 'metrics.k8s.io не вернул свежий неотрицательный CPU operator-0' \
+    "$work_dir/metrics-timeout.log"
+[[ $(grep -Fc 'get pods.metrics.k8s.io operator-0' "$state_dir/kubectl.log") == 60 ]]
 
 run_case legacy-statefulset "$work_dir/legacy.log"
 [[ $case_status == 1 ]]

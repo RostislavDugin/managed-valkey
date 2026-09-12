@@ -15,6 +15,9 @@ operator_placeholder=ghcr.io/rostislavdugin/managed-valkey-operator:000000000000
 gateway_api_version=v1.5.1
 envoy_gateway_version=v1.8.4
 cert_manager_version=v1.21.1
+metrics_server_chart_version=3.14.0
+metrics_server_version=v0.9.0
+metrics_max_age_seconds=60
 cert_manager_webhook_host=cert-manager-webhook.valkey.h3llo-demo.com
 cloudflare_token_file=""
 restart_check_pods=()
@@ -45,7 +48,7 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
     exit 1
 fi
 
-for command in kubectl helm docker sed base64 getent awk sort; do
+for command in kubectl helm docker sed base64 getent awk sort date; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "не установлена команда $command" >&2
         exit 1
@@ -193,6 +196,21 @@ done
 kubectl apply -f "$repo_root/deploy/prod/namespace.yaml"
 kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/valkey-system --timeout=60s
 
+helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update
+helm upgrade --install metrics-server metrics-server/metrics-server \
+    --version "$metrics_server_chart_version" \
+    --namespace kube-system \
+    --set replicas=1 \
+    --set-string image.tag="$metrics_server_version" \
+    --wait \
+    --timeout 10m
+if ! kubectl wait --for=condition=Available \
+    apiservice/v1beta1.metrics.k8s.io \
+    --timeout=180s; then
+    echo "API metrics.k8s.io не достиг состояния Available" >&2
+    exit 1
+fi
+
 kubectl apply --server-side --force-conflicts -f \
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/${gateway_api_version}/experimental-install.yaml"
 
@@ -240,6 +258,40 @@ running_operator_image=$(kubectl -n valkey-system get pod operator-0 \
     -o jsonpath='{.spec.containers[?(@.name=="operator")].image}')
 if [[ $running_operator_image != "$operator_image" ]]; then
     echo "оператор запущен с образом $running_operator_image вместо $operator_image" >&2
+    exit 1
+fi
+
+operator_identity=system:serviceaccount:valkey-system:managed-valkey-operator
+if [[ $(kubectl auth can-i \
+    --as="$operator_identity" \
+    get pods.metrics.k8s.io \
+    --all-namespaces) != yes ]]; then
+    echo "учётная запись оператора не может читать pods.metrics.k8s.io" >&2
+    exit 1
+fi
+
+operator_cpu_ready=false
+for _ in {1..60}; do
+    operator_metrics=$(kubectl \
+        --as="$operator_identity" \
+        -n valkey-system \
+        get pods.metrics.k8s.io operator-0 \
+        -o jsonpath='{.timestamp}{"\t"}{.containers[?(@.name=="operator")].usage.cpu}{"\n"}' \
+        2>/dev/null || true)
+    IFS=$'\t' read -r metric_timestamp metric_cpu <<<"$operator_metrics"
+    metric_epoch=$(date -d "$metric_timestamp" +%s 2>/dev/null || true)
+    now_epoch=$(date +%s)
+    if [[ -n $metric_epoch &&
+        $metric_cpu =~ ^[0-9]+([.][0-9]+)?([numkKMGTPE]|[EPTGMK]i|[eE][+-]?[0-9]+)?$ &&
+        $metric_epoch -le $now_epoch &&
+        $((now_epoch - metric_epoch)) -le $metrics_max_age_seconds ]]; then
+        operator_cpu_ready=true
+        break
+    fi
+    sleep 2
+done
+if [[ $operator_cpu_ready != true ]]; then
+    echo "metrics.k8s.io не вернул свежий неотрицательный CPU operator-0" >&2
     exit 1
 fi
 
