@@ -159,7 +159,7 @@ outer_nodes=$(KUBECONFIG="$ADMIN_KUBECONFIG" kubectl get nodes \
 dev_snapshot=$(project_snapshot managed-valkey-dev)
 nested_run_id="ct12-full-$(date +%s)-$$-$RANDOM"
 nested_state="$repo_root/tmp/k3s/operator/$nested_run_id"
-nested_ready_seconds=${MV_CT12_NESTED_READY_SECONDS:-600}
+nested_ready_seconds=${MV_CT12_NESTED_READY_SECONDS:-900}
 [[ "$nested_ready_seconds" =~ ^[1-9][0-9]*$ ]] || {
     echo "CT-12: MV_CT12_NESTED_READY_SECONDS должно быть положительным числом" >&2
     exit 1

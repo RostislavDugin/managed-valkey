@@ -26,6 +26,48 @@ import (
 	valkeyv1alpha1 "github.com/RostislavDugin/managed-valkey/operator/api/v1alpha1"
 )
 
+func Test_HA09_CreateHA_WithOneAvailableNode_RunsWithThreeColocatedProcesses(t *testing.T) {
+	runHACreationWithExpectedHostnameCount(t, "haone", 1)
+}
+
+func Test_HA10_CreateHA_WithTwoAvailableNodes_RunsWithThreeProcessesAcrossBothNodes(t *testing.T) {
+	runHACreationWithExpectedHostnameCount(t, "hatwo", 2)
+}
+
+func Test_HA11_CreateHA_WithThreeAvailableNodes_RunsWithOneProcessPerNode(t *testing.T) {
+	runHACreationWithExpectedHostnameCount(t, "hathree", 3)
+}
+
+func runHACreationWithExpectedHostnameCount(t *testing.T, prefix string, expectedHostnames int) {
+	t.Helper()
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
+	h.requireNodeCount(t, expectedHostnames)
+
+	instance := h.createHA(t, prefix)
+	status := h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, expectedHostnames)
+
+	primary := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	setValue(t, primary, "placement-key", "replicated")
+	readOnlyInstance := *instance
+	readOnlyInstance.hostname = instance.slug + "-ro." + h.baseDomain
+	readOnly := openPersistentConnection(t, h.publicAddr, &readOnlyInstance, h.caFile, false, func() {})
+	if value := getValue(t, readOnly, "placement-key"); value != "replicated" {
+		closeConnections([]*persistentConnection{primary, readOnly})
+		t.Fatalf("RO-адрес вернул %q после записи через primary", value)
+	}
+	writeRESP(t, readOnly, "SET", "placement-read-only-key", "blocked")
+	if _, err := readRESPResult(t, readOnly); err == nil || !strings.Contains(err.Error(), "READONLY") {
+		closeConnections([]*persistentConnection{primary, readOnly})
+		t.Fatalf("RO-адрес принял запись: %v", err)
+	}
+	closeConnections([]*persistentConnection{primary, readOnly})
+	h.deleteInstance(t, instance)
+}
+
 func Test_HA01HA04HA07FP04PW01RZ02RZ03_RunHALifecycle_WithFailuresAndMutations_PreservesAvailabilityAndData(
 	t *testing.T,
 ) {
@@ -468,13 +510,11 @@ func assertHAComposition(
 	if len(status.Status.Nodes) != 3 || status.Status.PrimaryOrdinal == nil {
 		t.Fatalf("неполный status HA: %+v", status.Status)
 	}
-	nodes := make(map[string]struct{}, 3)
 	primaries := 0
 	replicas := 0
 	primary := processAtOrdinal(t, status, *status.Status.PrimaryOrdinal)
 	primaryPod := h.getPodOrdinal(t, instance, primary.Ordinal)
 	for _, process := range status.Status.Nodes {
-		nodes[process.NodeName] = struct{}{}
 		switch process.Role {
 		case valkeyv1alpha1.NodeRolePrimary:
 			primaries++
@@ -489,8 +529,22 @@ func assertHAComposition(
 		}
 		waitForPodMetadata(t, h, instance, process)
 	}
-	if len(nodes) != 3 || primaries != 1 || replicas != 2 {
-		t.Fatalf("неверное размещение или роли HA: nodes=%v status=%+v", nodes, status.Status.Nodes)
+	if primaries != 1 || replicas != 2 {
+		t.Fatalf("неверные роли HA: status=%+v", status.Status.Nodes)
+	}
+}
+
+func assertHAHostnameCount(t *testing.T, status *valkeyv1alpha1.ValkeyInstance, expected int) {
+	t.Helper()
+	hostnames := make(map[string]struct{}, expected)
+	for _, process := range status.Status.Nodes {
+		if process.NodeName == "" {
+			t.Fatalf("процесс без hostname: %+v", process)
+		}
+		hostnames[process.NodeName] = struct{}{}
+	}
+	if len(hostnames) != expected {
+		t.Fatalf("ожидалось hostname: %d, получено %d: %+v", expected, len(hostnames), status.Status.Nodes)
 	}
 }
 

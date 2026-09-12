@@ -101,7 +101,7 @@ export const STATUS_LABELS: Record<ValkeyStatus, string> = {
   deleted: 'Удалена',
 };
 
-export function getNodeCount(mode: ValkeyMode) {
+export function getProcessCount(mode: ValkeyMode) {
   return mode === 'ha' ? 3 : 1;
 }
 
@@ -122,12 +122,12 @@ export function getPeriodCoins(
   period: PricePeriod,
   pricing: ValkeyPricing
 ) {
-  const perNode = pricing.vcpuCoinsPerHour * size.vcpu + pricing.ramGbCoinsPerHour * size.ramGb;
-  return perNode * getNodeCount(mode) * periodHours(period, pricing);
+  const perProcess = pricing.vcpuCoinsPerHour * size.vcpu + pricing.ramGbCoinsPerHour * size.ramGb;
+  return perProcess * getProcessCount(mode) * periodHours(period, pricing);
 }
 
 export interface PriceBreakdown {
-  nodes: number;
+  processes: number;
   vcpuCoins: number;
   ramCoins: number;
   totalCoins: number;
@@ -139,12 +139,12 @@ export function getPriceBreakdown(
   period: PricePeriod,
   pricing: ValkeyPricing
 ): PriceBreakdown {
-  const multiplier = periodHours(period, pricing) * getNodeCount(mode);
+  const multiplier = periodHours(period, pricing) * getProcessCount(mode);
   const vcpuCoins = pricing.vcpuCoinsPerHour * size.vcpu * multiplier;
   const ramCoins = pricing.ramGbCoinsPerHour * size.ramGb * multiplier;
 
   return {
-    nodes: getNodeCount(mode),
+    processes: getProcessCount(mode),
     vcpuCoins,
     ramCoins,
     totalCoins: vcpuCoins + ramCoins,
@@ -152,8 +152,8 @@ export function getPriceBreakdown(
 }
 
 export function getTotalResources(size: ValkeySize, mode: ValkeyMode) {
-  const nodes = getNodeCount(mode);
-  return { vcpu: size.vcpu * nodes, ramGb: size.ramGb * nodes };
+  const processes = getProcessCount(mode);
+  return { vcpu: size.vcpu * processes, ramGb: size.ramGb * processes };
 }
 
 const NBSP = '\u00A0';

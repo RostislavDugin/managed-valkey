@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -762,10 +763,19 @@ func Test_Envtest_ReconcileSingleResources_WhenRepeated_CreatesOwnedResourcesIde
 	}
 	haPods := waitForPods(t, ctx, k8s, ha.Namespace, 3)
 	for index := range haPods.Items {
-		affinity := haPods.Items[index].Spec.Affinity
-		if affinity == nil || affinity.PodAntiAffinity == nil ||
-			len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
+		pod := &haPods.Items[index]
+		if pod.Spec.Affinity != nil || len(pod.Spec.TopologySpreadConstraints) != 1 {
 			t.Fatalf("неверный Pod HA: %+v", haPods.Items[index].Spec)
+		}
+		constraint := pod.Spec.TopologySpreadConstraints[0]
+		if constraint.MaxSkew != 1 || constraint.TopologyKey != corev1.LabelHostname ||
+			constraint.WhenUnsatisfiable != corev1.ScheduleAnyway || constraint.MinDomains != nil ||
+			constraint.LabelSelector == nil ||
+			!maps.Equal(constraint.LabelSelector.MatchLabels, map[string]string{
+				"app.kubernetes.io/name":         "valkey",
+				"valkey.h3llo-demo.com/instance": ha.Name,
+			}) {
+			t.Fatalf("неверное мягкое распределение HA: %+v", constraint)
 		}
 		assertOwnedBy(t, &haPods.Items[index], ha.UID)
 	}

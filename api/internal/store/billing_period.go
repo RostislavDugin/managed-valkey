@@ -18,7 +18,7 @@ type BillingPeriod struct {
 	Mode              domain.ValkeyInstanceMode       `gorm:"column:mode"`
 	VCPU              int                             `gorm:"column:vcpu"`
 	RAMGB             int                             `gorm:"column:ram_gb"`
-	NodeCount         int                             `gorm:"column:node_count"`
+	ProcessCount      int                             `gorm:"column:node_count"`
 	PriceCoinsPerHour int64                           `gorm:"column:price_coins_per_hour"`
 	StartedReason     domain.BillingPeriodStartReason `gorm:"column:started_reason"`
 	EndedReason       *domain.BillingPeriodEndReason  `gorm:"column:ended_reason"`

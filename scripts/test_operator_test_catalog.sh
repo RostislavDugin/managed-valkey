@@ -52,7 +52,7 @@ printf '%s\n' pass >"$results/network-faults.status"
 printf '%s\n' $'unit\t100\t3' $'envtest\t103\t5' >"$results/durations.tsv"
 {
     printf '%s' '--- PASS: Test_'
-    for prefix_and_last in HA:8 FP:12 ND:9 NT:6 OP:8 RZ:11 PW:10 DL:4; do
+    for prefix_and_last in HA:11 FP:12 ND:11 NT:6 OP:8 RZ:12 PW:11 DL:4; do
         prefix=${prefix_and_last%:*}
         last=${prefix_and_last#*:}
         for ((number = 1; number <= last; number++)); do
@@ -74,7 +74,7 @@ printf '%s\n' \
 grep -Fq 'OPERATOR TEST MODE full' "$work_dir/report-pass.out"
 grep -Fq 'RESULT network-faults PASS' "$work_dir/report-pass.out"
 grep -Fq $'envtest\t5s' "$work_dir/report-pass.out"
-grep -Fq 'MATRIX TOTAL 82/82 PASS' "$work_dir/report-pass.out"
+grep -Fq 'MATRIX TOTAL 89/89 PASS' "$work_dir/report-pass.out"
 if grep -Fq 'journal-sentinel-must-stay-separate' "$work_dir/report-pass.out"; then
     echo 'отчёт смешал журнал сценария со сводкой' >&2
     exit 1

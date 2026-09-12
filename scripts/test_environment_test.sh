@@ -242,11 +242,28 @@ MANAGED_VALKEY_VALKEY_IMAGE=valkey/valkey:8.1.9
 load_image_into_k3s() {
     printf '%s\n' "$*" >"$temporary/preload.args"
 }
-preload_e2e_valkey_image k3s-server k3s-agent-1 k3s-agent-2
+preload_valkey_image k3s-server k3s-agent-1 k3s-agent-2
 rg -q '^managed-valkey-e2e-preload valkey/valkey:8\.1\.9 k3s-server k3s-agent-1 k3s-agent-2$' \
     "$temporary/preload.args"
 [[ "$(wc -l <"$preload_state/preloaded-images.tsv")" == 3 ]]
 rg -q '^k3s-server[[:space:]]+valkey/valkey:8\.1\.9$' "$preload_state/preloaded-images.tsv"
+MV_SUITE=integration
+preload_valkey_image k3s-server
+rg -q '^managed-valkey-e2e-preload valkey/valkey:8\.1\.9 k3s-server$' "$temporary/preload.args"
+MV_SUITE=operator
+: >"$temporary/preload.args"
+preload_valkey_image k3s-server
+[[ ! -s "$temporary/preload.args" ]]
+MV_SUITE=e2e
+
+MANAGED_VALKEY_K3S_IMAGE_ARCHIVE=$temporary/operator-images.tar
+preload_k3s_image_archive k3s-server k3s-agent-1
+rg -q "^managed-valkey-e2e-preload --archive $temporary/operator-images\.tar k3s-server k3s-agent-1$" \
+    "$temporary/preload.args"
+unset MANAGED_VALKEY_K3S_IMAGE_ARCHIVE
+: >"$temporary/preload.args"
+preload_k3s_image_archive k3s-server
+[[ ! -s "$temporary/preload.args" ]]
 
 [[ "$(MV_TEST_K3S_ENABLED=0 default_memory_mib_for_suite api)" == 512 ]]
 [[ "$(default_memory_mib_for_suite api)" == 3072 ]]

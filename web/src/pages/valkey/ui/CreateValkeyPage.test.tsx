@@ -90,6 +90,34 @@ describe('форма создания Valkey', () => {
     expect(screen.getAllByText(/\/ мес\./).length).toBeGreaterThan(0);
   });
 
+  it('при лимите кластера 3 vCPU и 14 ГБ показывает размер 4 vCPU и 16 ГБ, но запрещает создание', async () => {
+    const session = seedSession();
+    const fullCatalog = {
+      ...catalog,
+      items: [...catalog.items, { vcpu: 4, ram_gb: 16 }],
+    };
+    installApi(
+      [jsonResponse(fullCatalog)],
+      [
+        {
+          user: { limit: { vcpu: 8, ram_gb: 32 }, used: { vcpu: 0, ram_gb: 0 } },
+          cluster: { limit: { vcpu: 3, ram_gb: 14 }, used: { vcpu: 0, ram_gb: 0 } },
+          instances: { limit: 32, used: 0 },
+        },
+      ]
+    );
+    const user = userEvent.setup();
+
+    renderValkeySection('/valkey/management/new', session);
+
+    const size = await screen.findByRole('radio', { name: /4\s*vCPU.*16\s*ГБ/i }, WAIT);
+    expect(size).toBeVisible();
+    await user.click(size);
+
+    expect(screen.getByText('Недостаточно ресурсов Managed Kubernetes')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Создать базу' })).toBeDisabled();
+  });
+
   it('при одновременном исчерпании личной квоты и общего бюджета показывает личную квоту', async () => {
     const session = seedSession();
     installApi(

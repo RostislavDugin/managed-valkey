@@ -40,6 +40,7 @@ write_script "$temporary/cleanup" \
 write_script "$temporary/validator" 'printf '\''validate\n'\'' >>"$MV_TEST_EVENTS"'
 write_script "$temporary/prepare" \
     'printf '\''prepare:%s\n'\'' "$1" >>"$MV_TEST_EVENTS"' \
+    'printf '\''prepare-images:%s:%s\n'\'' "$8" "$9" >>"$MV_TEST_EVENTS"' \
     '[[ "$1" != fast ]] || { printf '\''PASS\n'\'' >"$2/unit.log"; printf '\''PASS\n'\'' >"$2/envtest.log"; }' \
     'sleep 0.05'
 write_script "$temporary/job" \
@@ -104,6 +105,7 @@ export MV_OPERATOR_TEST_MAX_PARALLEL=3
 [[ $(grep -c '^prepare:artifacts$' "$events") == 1 ]]
 [[ $(grep -c '^prepare:valkey$' "$events") == 1 ]]
 [[ $(grep -c '^prepare:bundle$' "$events") == 1 ]]
+[[ $(grep -c '^prepare-images:docker.io/envoyproxy/gateway:v1\.8\.4:docker.io/envoyproxy/envoy:distroless-v1\.38\.4@sha256:b28fbee81528c5b6e8857412e5e0f48ea5baa0199cf73ab611aa7f88a808eba7$' "$events") == 4 ]]
 [[ $(grep -c '^start:' "$events") == 4 ]]
 [[ $(grep -c '^reserve$' "$events") == 1 ]]
 [[ $(grep -c '^release$' "$events") == 1 ]]

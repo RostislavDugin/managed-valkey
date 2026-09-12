@@ -34,6 +34,8 @@ const (
 	EnvValkeyVCPUPriceCoinsPerHour      = "VALKEY_INSTANCE_VCPU_PRICE_COINS_PER_HOUR"
 	EnvValkeyRAMGBPriceCoinsPerHour     = "VALKEY_INSTANCE_RAM_GB_PRICE_COINS_PER_HOUR"
 	EnvValkeyMetricsRetention           = "VALKEY_METRICS_RETENTION"
+	EnvManagedK8SClusterVCPU            = "MANAGED_K8S_CLUSTER_VCPU"
+	EnvManagedK8SClusterRAMGB           = "MANAGED_K8S_CLUSTER_RAM_GB"
 	EnvManagedK8SNodeCount              = "MANAGED_K8S_NODE_COUNT"
 	EnvManagedK8SNodeCapacityVCPU       = "MANAGED_K8S_NODE_CAPACITY_VCPU"
 	EnvManagedK8SNodeCapacityRAMGB      = "MANAGED_K8S_NODE_CAPACITY_RAM_GB"
@@ -46,6 +48,8 @@ const (
 	DefaultValkeyRAMGBPriceCoinsPerHour = 50
 	DefaultValkeyMetricsRetention       = 168 * time.Hour
 	MaxValkeyNodes                      = 3
+	managedK8SAvailableCPUPercent       = 85
+	managedK8SAvailableRAMPercent       = 90
 )
 
 var (
@@ -65,13 +69,8 @@ type Config struct {
 	ValkeyVCPUPriceCoinsPerHour        int64
 	ValkeyRAMGBPriceCoinsPerHour       int64
 	ValkeyMetricsRetention             time.Duration
-	ManagedK8SNodeCount                int
-	ManagedK8SNodeCapacityCPUMilli     int64
-	ManagedK8SNodeCapacityRAMMiB       int64
-	ManagedK8SNodeReservedCPUMilli     int64
-	ManagedK8SNodeReservedRAMMiB       int64
-	ManagedK8SNodeAvailableCPUMilli    int64
-	ManagedK8SNodeAvailableRAMMiB      int64
+	ManagedK8SClusterVCPU              int64
+	ManagedK8SClusterRAMGB             int64
 	ManagedK8SClusterAvailableCPUMilli int64
 	ManagedK8SClusterAvailableRAMMiB   int64
 	Logging                            logging.Config
@@ -124,7 +123,7 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	managedK8STopology, err := loadManagedK8STopology()
+	managedK8SCapacity, err := loadManagedK8SCapacity()
 	if err != nil {
 		return Config{}, err
 	}
@@ -169,105 +168,87 @@ func Load() (Config, error) {
 		ValkeyVCPUPriceCoinsPerHour:        valkeyVCPUPrice,
 		ValkeyRAMGBPriceCoinsPerHour:       valkeyRAMGBPrice,
 		ValkeyMetricsRetention:             valkeyMetricsRetention,
-		ManagedK8SNodeCount:                managedK8STopology.nodeCount,
-		ManagedK8SNodeCapacityCPUMilli:     managedK8STopology.nodeCapacityCPUMilli,
-		ManagedK8SNodeCapacityRAMMiB:       managedK8STopology.nodeCapacityRAMMiB,
-		ManagedK8SNodeReservedCPUMilli:     managedK8STopology.nodeReservedCPUMilli,
-		ManagedK8SNodeReservedRAMMiB:       managedK8STopology.nodeReservedRAMMiB,
-		ManagedK8SNodeAvailableCPUMilli:    managedK8STopology.nodeAvailableCPUMilli,
-		ManagedK8SNodeAvailableRAMMiB:      managedK8STopology.nodeAvailableRAMMiB,
-		ManagedK8SClusterAvailableCPUMilli: managedK8STopology.clusterAvailableCPUMilli,
-		ManagedK8SClusterAvailableRAMMiB:   managedK8STopology.clusterAvailableRAMMiB,
+		ManagedK8SClusterVCPU:              managedK8SCapacity.clusterVCPU,
+		ManagedK8SClusterRAMGB:             managedK8SCapacity.clusterRAMGB,
+		ManagedK8SClusterAvailableCPUMilli: managedK8SCapacity.availableCPUMilli,
+		ManagedK8SClusterAvailableRAMMiB:   managedK8SCapacity.availableRAMMiB,
 		Logging:                            logging.ConfigFromEnv(ServiceName),
 	}, nil
 }
 
-type managedK8STopology struct {
-	nodeCount                int
-	nodeCapacityCPUMilli     int64
-	nodeCapacityRAMMiB       int64
-	nodeReservedCPUMilli     int64
-	nodeReservedRAMMiB       int64
-	nodeAvailableCPUMilli    int64
-	nodeAvailableRAMMiB      int64
-	clusterAvailableCPUMilli int64
-	clusterAvailableRAMMiB   int64
+type managedK8SCapacity struct {
+	clusterVCPU       int64
+	clusterRAMGB      int64
+	availableCPUMilli int64
+	availableRAMMiB   int64
 }
 
-func loadManagedK8STopology() (managedK8STopology, error) {
-	for _, legacy := range []string{EnvLegacyManagedK8SNodeVCPU, EnvLegacyManagedK8SNodeRAMGB} {
-		if strings.TrimSpace(os.Getenv(legacy)) != "" {
-			return managedK8STopology{}, fmt.Errorf("переменная %s устарела", legacy)
+func loadManagedK8SCapacity() (managedK8SCapacity, error) {
+	deprecated := [...]string{
+		EnvManagedK8SNodeCount,
+		EnvManagedK8SNodeCapacityVCPU,
+		EnvManagedK8SNodeCapacityRAMGB,
+		EnvManagedK8SNodeReservedCPUMilli,
+		EnvManagedK8SNodeReservedRAMMiB,
+		EnvLegacyManagedK8SNodeVCPU,
+		EnvLegacyManagedK8SNodeRAMGB,
+	}
+	for _, name := range deprecated {
+		if _, exists := os.LookupEnv(name); exists {
+			return managedK8SCapacity{}, fmt.Errorf("переменная %s устарела", name)
 		}
 	}
 
-	nodeCount, err := requiredPositiveInt(EnvManagedK8SNodeCount)
+	clusterVCPU, err := requiredPositiveInt64(EnvManagedK8SClusterVCPU)
 	if err != nil {
-		return managedK8STopology{}, err
+		return managedK8SCapacity{}, err
 	}
-	nodeCapacityVCPU, err := requiredPositiveInt64(EnvManagedK8SNodeCapacityVCPU)
+	clusterRAMGB, err := requiredPositiveInt64(EnvManagedK8SClusterRAMGB)
 	if err != nil {
-		return managedK8STopology{}, err
-	}
-	nodeCapacityRAMGB, err := requiredPositiveInt64(EnvManagedK8SNodeCapacityRAMGB)
-	if err != nil {
-		return managedK8STopology{}, err
-	}
-	nodeReservedCPUMilli, err := requiredNonnegativeInt64(EnvManagedK8SNodeReservedCPUMilli)
-	if err != nil {
-		return managedK8STopology{}, err
-	}
-	nodeReservedRAMMiB, err := requiredNonnegativeInt64(EnvManagedK8SNodeReservedRAMMiB)
-	if err != nil {
-		return managedK8STopology{}, err
+		return managedK8SCapacity{}, err
 	}
 
-	nodeCapacityCPUMilli, ok := multiplyInt64(nodeCapacityVCPU, 1000)
+	clusterCPUMilli, ok := multiplyInt64(clusterVCPU, 1000)
 	if !ok {
-		return managedK8STopology{}, fmt.Errorf(
+		return managedK8SCapacity{}, fmt.Errorf(
 			"переменная %s переполняет расчёт тысячных долей CPU",
-			EnvManagedK8SNodeCapacityVCPU,
+			EnvManagedK8SClusterVCPU,
 		)
 	}
-	nodeCapacityRAMMiB, ok := multiplyInt64(nodeCapacityRAMGB, 1024)
+	clusterRAMMiB, ok := multiplyInt64(clusterRAMGB, 1024)
 	if !ok {
-		return managedK8STopology{}, fmt.Errorf("переменная %s переполняет расчёт MiB", EnvManagedK8SNodeCapacityRAMGB)
+		return managedK8SCapacity{}, fmt.Errorf("переменная %s переполняет расчёт MiB", EnvManagedK8SClusterRAMGB)
 	}
-	if nodeReservedCPUMilli >= nodeCapacityCPUMilli {
-		return managedK8STopology{}, fmt.Errorf(
-			"переменная %s должна оставлять положительный бюджет CPU",
-			EnvManagedK8SNodeReservedCPUMilli,
+	availableCPUMilli, ok := percentageFloor(clusterCPUMilli, managedK8SAvailableCPUPercent)
+	if !ok {
+		return managedK8SCapacity{}, fmt.Errorf(
+			"переменная %s переполняет расчёт доступного CPU",
+			EnvManagedK8SClusterVCPU,
 		)
 	}
-	if nodeReservedRAMMiB >= nodeCapacityRAMMiB {
-		return managedK8STopology{}, fmt.Errorf(
-			"переменная %s должна оставлять положительный бюджет RAM",
-			EnvManagedK8SNodeReservedRAMMiB,
+	availableRAMMiB, ok := percentageFloor(clusterRAMMiB, managedK8SAvailableRAMPercent)
+	if !ok {
+		return managedK8SCapacity{}, fmt.Errorf(
+			"переменная %s переполняет расчёт доступной RAM",
+			EnvManagedK8SClusterRAMGB,
 		)
 	}
 
-	nodeAvailableCPUMilli := nodeCapacityCPUMilli - nodeReservedCPUMilli
-	nodeAvailableRAMMiB := nodeCapacityRAMMiB - nodeReservedRAMMiB
-	clusterAvailableCPUMilli, ok := multiplyInt64(nodeAvailableCPUMilli, int64(nodeCount))
-	if !ok {
-		return managedK8STopology{}, fmt.Errorf("переменная %s переполняет общий бюджет CPU", EnvManagedK8SNodeCount)
-	}
-	clusterAvailableRAMMiB, ok := multiplyInt64(nodeAvailableRAMMiB, int64(nodeCount))
-	if !ok {
-		return managedK8STopology{}, fmt.Errorf("переменная %s переполняет общий бюджет RAM", EnvManagedK8SNodeCount)
-	}
-
-	return managedK8STopology{
-		nodeCount:                nodeCount,
-		nodeCapacityCPUMilli:     nodeCapacityCPUMilli,
-		nodeCapacityRAMMiB:       nodeCapacityRAMMiB,
-		nodeReservedCPUMilli:     nodeReservedCPUMilli,
-		nodeReservedRAMMiB:       nodeReservedRAMMiB,
-		nodeAvailableCPUMilli:    nodeAvailableCPUMilli,
-		nodeAvailableRAMMiB:      nodeAvailableRAMMiB,
-		clusterAvailableCPUMilli: clusterAvailableCPUMilli,
-		clusterAvailableRAMMiB:   clusterAvailableRAMMiB,
+	return managedK8SCapacity{
+		clusterVCPU:       clusterVCPU,
+		clusterRAMGB:      clusterRAMGB,
+		availableCPUMilli: availableCPUMilli,
+		availableRAMMiB:   availableRAMMiB,
 	}, nil
+}
+
+func percentageFloor(value, percentage int64) (int64, bool) {
+	weighted, ok := multiplyInt64(value, percentage)
+	if !ok {
+		return 0, false
+	}
+
+	return weighted / 100, true
 }
 
 var domainPattern = regexp.MustCompile(
@@ -293,16 +274,6 @@ func requiredPositiveInt64(name string) (int64, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("переменная %s должна быть положительным целым числом", name)
-	}
-
-	return parsed, nil
-}
-
-func requiredNonnegativeInt64(name string) (int64, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || parsed < 0 {
-		return 0, fmt.Errorf("переменная %s должна быть неотрицательным целым числом", name)
 	}
 
 	return parsed, nil

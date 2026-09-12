@@ -9,6 +9,8 @@ operator_image=${4:?задайте образ оператора}
 valkey_image=${5:?задайте образ Valkey}
 pause_image=${6:-rancher/mirrored-pause:3.10.2}
 image_archive=${7:-$run_dir/k3s-images.tar}
+envoy_gateway_image=${8:-docker.io/envoyproxy/gateway:v1.8.4}
+envoy_image=${9:-docker.io/envoyproxy/envoy:distroless-v1.38.4@sha256:b28fbee81528c5b6e8857412e5e0f48ea5baa0199cf73ab611aa7f88a808eba7}
 envtest_version=1.35.0
 
 run_logged() {
@@ -60,10 +62,12 @@ artifacts)
 valkey)
     run_logged valkey-image docker pull "$valkey_image"
     run_logged pause-image docker pull "$pause_image"
+    run_logged envoy-gateway-image docker pull "$envoy_gateway_image"
+    run_logged envoy-image docker pull "$envoy_image"
     ;;
 bundle)
     run_logged k3s-image-bundle docker save --output "$image_archive" \
-        "$operator_image" "$valkey_image" "$pause_image"
+        "$operator_image" "$valkey_image" "$pause_image" "$envoy_gateway_image" "$envoy_image"
     ;;
 *)
     echo "prepare-operator-tests: неизвестный режим $mode" >&2

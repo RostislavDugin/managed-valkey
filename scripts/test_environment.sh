@@ -337,11 +337,19 @@ load_image_into_k3s() {
     "$repo_root/scripts/load_k3s_image.sh" "$@"
 }
 
-preload_e2e_valkey_image() {
+preload_k3s_image_archive() {
+    local archive=${MANAGED_VALKEY_K3S_IMAGE_ARCHIVE:-}
+    local -a nodes=("$@")
+
+    [[ -n "$archive" ]] || return 0
+    load_image_into_k3s "$MANAGED_VALKEY_COMPOSE_PROJECT" --archive "$archive" "${nodes[@]}"
+}
+
+preload_valkey_image() {
     local image=${MANAGED_VALKEY_VALKEY_IMAGE:-valkey/valkey:8.1.9} node
     local -a nodes=("$@")
 
-    [[ "$MV_SUITE" == e2e ]] || return 0
+    [[ "$MV_SUITE" == e2e || "$MV_SUITE" == integration ]] || return 0
     docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
     load_image_into_k3s "$MANAGED_VALKEY_COMPOSE_PROJECT" "$image" "${nodes[@]}"
 
@@ -350,7 +358,7 @@ preload_e2e_valkey_image() {
     for node in "${nodes[@]}"; do
         printf '%s\t%s\n' "$node" "$image" >>"$state_dir/preloaded-images.tsv"
     done
-    log "e2e образ Valkey загружен на ${#nodes[@]} ноды: $image"
+    log "$MV_SUITE образ Valkey загружен, число нод: ${#nodes[@]}, образ: $image"
 }
 
 public_node_for_suite() {
@@ -429,8 +437,9 @@ prepare_cluster() {
     export MANAGED_VALKEY_ENVOY_EXTERNAL_TRAFFIC_POLICY
     export MANAGED_VALKEY_COMPOSE_PROJECT MANAGED_VALKEY_DOCKER_NETWORK
     export MANAGED_VALKEY_CA_FILE VALKEY_BASE_DOMAIN
+    preload_k3s_image_archive "${services[@]}"
     "$repo_root/scripts/k3s_bootstrap.sh"
-    preload_e2e_valkey_image "${services[@]}"
+    preload_valkey_image "${services[@]}"
 
     if [[ "$BOOTSTRAP_PROFILE" == full ]]; then
         public_node=$(public_node_for_suite "$MV_SUITE")

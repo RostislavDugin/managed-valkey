@@ -26,13 +26,13 @@ columns = [
     "timeout",
 ]
 required_matrix = {
-    *(f"HA-{number:02d}" for number in range(1, 9)),
+    *(f"HA-{number:02d}" for number in range(1, 12)),
     *(f"FP-{number:02d}" for number in range(1, 13)),
-    *(f"ND-{number:02d}" for number in range(1, 10)),
+    *(f"ND-{number:02d}" for number in range(1, 12)),
     *(f"NT-{number:02d}" for number in range(1, 7)),
     *(f"OP-{number:02d}" for number in range(1, 9)),
-    *(f"RZ-{number:02d}" for number in range(1, 12)),
-    *(f"PW-{number:02d}" for number in range(1, 11)),
+    *(f"RZ-{number:02d}" for number in range(1, 13)),
+    *(f"PW-{number:02d}" for number in range(1, 12)),
     *(f"DL-{number:02d}" for number in range(1, 5)),
     "CT-09",
     "CT-10",

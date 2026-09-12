@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -122,34 +123,29 @@ func Test_LoadConfig_WithInvalidValkeyValues_ReturnsVariableError(t *testing.T) 
 		value string
 	}{
 		{
-			name:  "отсутствующее число нод возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeCount,
+			name:  "отсутствующая суммарная ёмкость CPU возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SClusterVCPU,
 			value: "",
 		},
 		{
-			name:  "отсутствующая ёмкость CPU ноды возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeCapacityVCPU,
+			name:  "отсутствующая суммарная ёмкость RAM возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SClusterRAMGB,
 			value: "",
 		},
 		{
-			name:  "отсутствующая ёмкость RAM ноды возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeCapacityRAMGB,
-			value: "",
+			name:  "нулевая суммарная ёмкость CPU возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SClusterVCPU,
+			value: "0",
 		},
 		{
-			name:  "отсутствующий резерв CPU возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeReservedCPUMilli,
-			value: "",
-		},
-		{
-			name:  "отсутствующий резерв RAM возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeReservedRAMMiB,
-			value: "",
-		},
-		{
-			name:  "отрицательный резерв RAM возвращает ошибку переменной окружения",
-			env:   config.EnvManagedK8SNodeReservedRAMMiB,
+			name:  "отрицательная суммарная ёмкость RAM возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SClusterRAMGB,
 			value: "-1",
+		},
+		{
+			name:  "дробная суммарная ёмкость CPU возвращает ошибку переменной окружения",
+			env:   config.EnvManagedK8SClusterVCPU,
+			value: "1.5",
 		},
 		{
 			name:  "дробный максимум CPU возвращает ошибку переменной окружения",
@@ -192,70 +188,83 @@ func Test_LoadConfig_WithInvalidValkeyValues_ReturnsVariableError(t *testing.T) 
 	}
 }
 
-func Test_LoadConfig_WithThreeNodesAndInfrastructureReserve_CalculatesAvailableBudgets(t *testing.T) {
+func Test_LoadConfig_WithTwelveVCPUAndFortyEightGiB_CalculatesAvailableBudgets(t *testing.T) {
 	setValidEnv(t)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("загрузить конфигурацию: %v", err)
 	}
-	if cfg.ManagedK8SNodeCount != 3 ||
-		cfg.ManagedK8SNodeCapacityCPUMilli != 4000 ||
-		cfg.ManagedK8SNodeCapacityRAMMiB != 16384 ||
-		cfg.ManagedK8SNodeReservedCPUMilli != 500 ||
-		cfg.ManagedK8SNodeReservedRAMMiB != 1024 ||
-		cfg.ManagedK8SNodeAvailableCPUMilli != 3500 ||
-		cfg.ManagedK8SNodeAvailableRAMMiB != 15360 ||
-		cfg.ManagedK8SClusterAvailableCPUMilli != 10500 ||
-		cfg.ManagedK8SClusterAvailableRAMMiB != 46080 {
+	if cfg.ManagedK8SClusterVCPU != 12 ||
+		cfg.ManagedK8SClusterRAMGB != 48 ||
+		cfg.ManagedK8SClusterAvailableCPUMilli != 10200 ||
+		cfg.ManagedK8SClusterAvailableRAMMiB != 44236 {
 		t.Fatalf("неверный бюджет управляемого кластера: %+v", cfg)
 	}
 }
 
-func Test_LoadConfig_WithInfrastructureUsingWholeNode_ReturnsReserveVariableError(t *testing.T) {
-	tests := []struct {
-		name  string
-		env   string
-		value string
-	}{
-		{name: "CPU", env: config.EnvManagedK8SNodeReservedCPUMilli, value: "4000"},
-		{name: "RAM", env: config.EnvManagedK8SNodeReservedRAMMiB, value: "16384"},
+func Test_LoadConfig_WithFourVCPUAndSixteenGiB_CalculatesAvailableBudgets(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvManagedK8SClusterVCPU, "4")
+	t.Setenv(config.EnvManagedK8SClusterRAMGB, "16")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузить конфигурацию: %v", err)
 	}
-
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			setValidEnv(t)
-			t.Setenv(testCase.env, testCase.value)
-
-			_, err := config.Load()
-			if err == nil || !strings.Contains(err.Error(), testCase.env) {
-				t.Fatalf("ошибка %v, ожидалось имя %s", err, testCase.env)
-			}
-		})
+	if cfg.ManagedK8SClusterAvailableCPUMilli != 3400 || cfg.ManagedK8SClusterAvailableRAMMiB != 14745 {
+		t.Fatalf("неверный бюджет управляемого кластера: %+v", cfg)
 	}
 }
 
-func Test_LoadConfig_WithLegacyClusterBudget_ReturnsLegacyVariableError(t *testing.T) {
-	for _, legacy := range []string{config.EnvLegacyManagedK8SNodeVCPU, config.EnvLegacyManagedK8SNodeRAMGB} {
-		t.Run(legacy, func(t *testing.T) {
+func Test_LoadConfig_WithFractionalPercentageResult_RoundsAvailableBudgetDown(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv(config.EnvManagedK8SClusterVCPU, "1")
+	t.Setenv(config.EnvManagedK8SClusterRAMGB, "1")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("загрузить конфигурацию: %v", err)
+	}
+	if cfg.ManagedK8SClusterAvailableCPUMilli != 850 || cfg.ManagedK8SClusterAvailableRAMMiB != 921 {
+		t.Fatalf("неверно округлённый бюджет управляемого кластера: %+v", cfg)
+	}
+}
+
+func Test_LoadConfig_WithDeprecatedManagedKubernetesVariable_ReturnsVariableError(t *testing.T) {
+	deprecated := []string{
+		config.EnvManagedK8SNodeCount,
+		config.EnvManagedK8SNodeCapacityVCPU,
+		config.EnvManagedK8SNodeCapacityRAMGB,
+		config.EnvManagedK8SNodeReservedCPUMilli,
+		config.EnvManagedK8SNodeReservedRAMMiB,
+		config.EnvLegacyManagedK8SNodeVCPU,
+		config.EnvLegacyManagedK8SNodeRAMGB,
+	}
+	for _, name := range deprecated {
+		t.Run(name+" останавливает запуск", func(t *testing.T) {
 			setValidEnv(t)
-			t.Setenv(legacy, "12")
+			t.Setenv(name, "12")
 
 			_, err := config.Load()
-			if err == nil || !strings.Contains(err.Error(), legacy) {
-				t.Fatalf("ошибка %v, ожидалось имя %s", err, legacy)
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("ошибка %v, ожидалось имя %s", err, name)
 			}
 		})
 	}
 }
 
 func Test_LoadConfig_WithOverflowingClusterCapacity_ReturnsVariableError(t *testing.T) {
-	setValidEnv(t)
-	t.Setenv(config.EnvManagedK8SNodeCapacityVCPU, "9223372036854775807")
+	for _, name := range []string{config.EnvManagedK8SClusterVCPU, config.EnvManagedK8SClusterRAMGB} {
+		t.Run(name+" останавливает запуск", func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(name, "9223372036854775807")
 
-	_, err := config.Load()
-	if err == nil || !strings.Contains(err.Error(), config.EnvManagedK8SNodeCapacityVCPU) {
-		t.Fatalf("ошибка %v, ожидалось имя %s", err, config.EnvManagedK8SNodeCapacityVCPU)
+			_, err := config.Load()
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("ошибка %v, ожидалось имя %s", err, name)
+			}
+		})
 	}
 }
 
@@ -272,11 +281,20 @@ func setValidEnv(t *testing.T) {
 	t.Setenv(config.EnvValkeyVCPUPriceCoinsPerHour, "125")
 	t.Setenv(config.EnvValkeyRAMGBPriceCoinsPerHour, "50")
 	t.Setenv(config.EnvValkeyMetricsRetention, "168h")
-	t.Setenv(config.EnvManagedK8SNodeCount, "3")
-	t.Setenv(config.EnvManagedK8SNodeCapacityVCPU, "4")
-	t.Setenv(config.EnvManagedK8SNodeCapacityRAMGB, "16")
-	t.Setenv(config.EnvManagedK8SNodeReservedCPUMilli, "500")
-	t.Setenv(config.EnvManagedK8SNodeReservedRAMMiB, "1024")
-	t.Setenv(config.EnvLegacyManagedK8SNodeVCPU, "")
-	t.Setenv(config.EnvLegacyManagedK8SNodeRAMGB, "")
+	t.Setenv(config.EnvManagedK8SClusterVCPU, "12")
+	t.Setenv(config.EnvManagedK8SClusterRAMGB, "48")
+	for _, name := range []string{
+		config.EnvManagedK8SNodeCount,
+		config.EnvManagedK8SNodeCapacityVCPU,
+		config.EnvManagedK8SNodeCapacityRAMGB,
+		config.EnvManagedK8SNodeReservedCPUMilli,
+		config.EnvManagedK8SNodeReservedRAMMiB,
+		config.EnvLegacyManagedK8SNodeVCPU,
+		config.EnvLegacyManagedK8SNodeRAMGB,
+	} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("удалить переменную %s: %v", name, err)
+		}
+	}
 }

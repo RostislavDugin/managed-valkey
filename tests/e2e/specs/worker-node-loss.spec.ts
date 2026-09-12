@@ -39,7 +39,7 @@ test(
       const recoveredAt = await waitForWriteFailureAndRecovery(failure, faultStartedAt);
       expect(failure.primaryCloseEvents()).toBeGreaterThan(0);
       expect(recoveredAt - faultStartedAt).toBeLessThanOrEqual(2 * 60_000);
-      await kubernetes.waitForDegradedHAOnTwoNodes(created.slug);
+      await kubernetes.waitForHealthyHAOnTwoNodes(created.slug);
       await fault.restore();
       await kubernetes.waitForHealthyHA(created.slug);
       assertReadOnlyContinuity(failure, faultStartedAt, Date.now());

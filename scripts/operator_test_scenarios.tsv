@@ -1,5 +1,5 @@
 scenario	test_pattern	nodes	envoy_replicas	memory_mib	estimated_seconds	timeout
-ct14-ha03-capacity	^Test_CT14HA03_ReconcilePendingReplica_WhenCapacityReturns_MarksInstanceRunning$	4	2	3072	360	20m
+ct14-ha03-capacity	^Test_CT14HA03_ReconcilePendingReplica_WhenCapacityReturns_MarksInstanceRunning$	3	1	2560	300	20m
 ha05-pdb	^Test_HA05_EvictPod_WhenTwoPodsAreReady_IsRejectedByPDB$	3	1	2560	120	20m
 fp01-fp03-sigkill-ha	^Test_FP01FP02FP03_RecoverHA_WhenPrimaryOrReplicaReceivesSIGKILL_PreservesDataAndRoles$	3	1	2560	240	20m
 fp01-fp03-sigkill-single	^Test_FP01FP02FP03_RecoverSingle_WhenProcessReceivesSIGKILL_ReplacesProcessWithEmptyCache$	1	1	2048	120	20m
@@ -24,9 +24,11 @@ fp10-replicas-lost	^Test_FP10_RecoverBothLostReplicas_WhenReplacementsAreSynchro
 fp05-fp11-operator-down	^Test_FP05FP11_RecoverHA_WhenAllProcessesStopWhileOperatorIsDown_RebuildsClusterWithEmptyCache$	3	1	2560	240	22m
 fp05-clean-exit-single	^Test_FP05_RecoverSingle_WhenProcessExitsCleanlyWhileOperatorIsDown_ReplacesWithoutRestart$	1	1	2048	120	20m
 op01-operator-sigkill	^Test_OP01_RecoverClusterOperator_AfterSIGKILL_ResumesWithNewLeaseHolderWithoutDataLoss$	3	1	2560	180	22m
-ct06-manual-fencing	^Test_CT06_ResumeFailover_AfterManualFencingConfirmsStoppedAgent_PreservesData$	4	2	3072	300	22m
+ct06-manual-fencing	^Test_CT06_ResumeFailover_AfterManualFencingConfirmsStoppedAgent_PreservesData$	4	2	6144	600	22m
 nd04-operator-primary-loss	^Test_ND04_RecoverHA_WhenOperatorAndPrimaryWorkerAreDestroyed_ReplacesOperatorAndFailsOver$	4	2	3072	360	22m
-nd05-no-spare	^Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_WaitsForCleanAgentAndRestoresComposition$	3	2	2560	300	22m
+nd05-no-spare	^Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_RestoresCompositionOnSurvivingNodes$	3	2	2560	300	22m
+nd10-two-process-loss-primary-survives	^Test_ND10_RecoverHA_WhenWorkerWithTwoProcessesIsDestroyedAndPrimarySurvives_RestoresOnRemainingNode$	2	1	3072	360	22m
+nd11-two-process-loss-replica-survives	^Test_ND11_RecoverHA_WhenWorkerWithTwoProcessesIsDestroyedAndReplicaSurvives_RestoresOnRemainingNode$	2	1	3072	360	22m
 nd01-primary-worker-loss	^Test_ND01_RecoverHA_WhenPrimaryWorkerIsDestroyed_FailsOverAndRestoresOnSpareNode$	4	2	3072	360	22m
 nd02-replica-worker-loss	^Test_ND02_RecoverHA_WhenReplicaWorkerIsDestroyed_ReplacesReplicaOnSpareNode$	4	2	3072	300	22m
 nd03-single-worker-loss	^Test_ND03_RecoverSingle_WhenWorkerIsDestroyed_StartsEmptyReplacementWithStableCredentials$	2	1	2560	240	22m
@@ -34,6 +36,9 @@ nd06-worker-envoy-loss	^Test_ND06_RecoverHA_WhenWorkerWithEnvoyIsDestroyed_Prese
 ct14-nd07-nd09-stop-loss	^Test_CT14ND07ND08ND09_ResumeProcessRecovery_WhenNodeIsDestroyedDuringStopAndOperatorRestarts_UsesCurrentNodeIdentity$	4	2	3072	480	22m
 ha01-ha04-ha07-lifecycle	^Test_HA01HA04HA07FP04PW01RZ02RZ03_RunHALifecycle_WithFailuresAndMutations_PreservesAvailabilityAndData$	3	1	2560	480	18m
 ha02-ha04-ha06-isolation	^Test_HA02HA04HA06_CreateHA_WhenOperatorRestarts_EnforcesInitialSafetyAndInstanceIsolation$	3	2	2560	300	18m
+ha09-one-node-placement	^Test_HA09_CreateHA_WithOneAvailableNode_RunsWithThreeColocatedProcesses$	1	1	3072	180	18m
+ha10-two-node-placement	^Test_HA10_CreateHA_WithTwoAvailableNodes_RunsWithThreeProcessesAcrossBothNodes$	2	1	3072	180	18m
+ha11-three-node-placement	^Test_HA11_CreateHA_WithThreeAvailableNodes_RunsWithOneProcessPerNode$	3	1	3072	180	18m
 pw01-rz01-single-mutation	^Test_PW01RZ01_RotatePasswordAndResizeSingle_PreservesDataAndCredentials$	1	1	2048	180	18m
 pw08-fenced-rotation	^Test_PW08_RotatePassword_WithFencedProcess_KeepsApplicationAccessDisabledUntilRecovery$	3	1	2560	180	22m
 pw03-rotation-restart	^Test_PW03_ResumePasswordRotation_AfterRestartsAndUnknownResults_CompletesEveryStage$	3	1	2560	480	22m
@@ -43,6 +48,7 @@ pw07-agent-loss	^Test_PW07_RotatePassword_WhenAgentIsDestroyedWithoutReplacement
 pw04-primary-rotation	^Test_PW04_RotatePassword_WhenPrimaryFails_UsesTargetPasswordDuringFailover$	3	1	2560	240	22m
 pw09-stable-rotation	^Test_PW09_ObserveCompletedPasswordRotation_WithoutFurtherChanges_KeepsConnectionsAndUsesCurrentPasswordForReplacement$	3	1	2560	240	22m
 pw10-operation-order	^Test_PW10_ApplyPasswordResizeAndDeletion_WhenRequestedTogether_OrdersAndPreemptsOperationsSafely$	3	1	2560	300	22m
+pw11-rz12-one-node-mutations	^Test_PW11RZ12_RotatePasswordAndResizeHA_WithProcessesOnOneNode_PreservesDataAndComposition$	1	1	3072	360	27m
 dl01-unknown-candidate-deletion	^Test_DL01_DeleteInstance_WhenFailoverCandidateOutcomeIsUnknown_WaitsForTerminationEvidence$	3	1	2560	180	22m
 dl01-shrink-deletion	^Test_DL01_DeleteInstance_WhenHAShrinkIsInProgress_WaitsForTerminationEvidence$	3	1	2560	180	22m
 dl01-password-deletion	^Test_DL01_DeleteInstance_WhenPasswordRotationIsInProgress_WaitsForTerminationEvidence$	3	1	2560	180	22m

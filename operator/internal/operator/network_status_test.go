@@ -319,6 +319,62 @@ func Test_NetworkVerification_WithOneUnchangedEnvoy_AllowsNonNetworkOperations(t
 	}
 }
 
+func Test_ApplyNetworkVerification_WhenEnvoyAdminIsUnavailableAfterTransientFailure_RestoresOperationalPhase(
+	t *testing.T,
+) {
+	instance := completeAcceptedInstance()
+	instance.Status.AcceptedConfiguration.Mode = valkeyv1alpha1.ValkeyModeHA
+	instance.Status.Initialized = true
+	instance.Status.Phase = valkeyv1alpha1.InstancePhaseUnavailable
+	instance.Status.Reason = "NETWORK_NOT_READY"
+	syncedAt := metav1.Now()
+	primary := failoverNode(0, valkeyv1alpha1.NodeRolePrimary, "history-a", 10, nil)
+	firstReplica := failoverNode(1, valkeyv1alpha1.NodeRoleReplica, "history-a", 10, &syncedAt)
+	secondReplica := failoverNode(2, valkeyv1alpha1.NodeRoleReplica, "history-a", 10, &syncedAt)
+	for _, process := range []*valkeyv1alpha1.NodeStatus{&primary, &firstReplica, &secondReplica} {
+		process.AppEnabled = true
+		process.AppPasswordVersion = instance.Status.AcceptedConfiguration.PasswordVersion
+	}
+	instance.Status.Nodes = []valkeyv1alpha1.NodeStatus{primary, firstReplica, secondReplica}
+	setPrimaryIdentity(&instance.Status, primary)
+	setCondition(
+		instance,
+		&instance.Status,
+		conditionTypePublicReady,
+		metav1.ConditionTrue,
+		"Admitted",
+		"primary доступен",
+	)
+	processes := []valkeyv1alpha1.EnvoyProcessStatus{{
+		PodUID: "envoy-1", NodeName: "worker-1", NodeUID: "node-1", ContainerID: "containerd://1",
+	}}
+	instance.Status.Network = &valkeyv1alpha1.NetworkStatus{
+		VerificationStatus:  valkeyv1alpha1.NetworkVerificationPending,
+		DesiredFingerprint:  "same",
+		VerifiedFingerprint: "same",
+		EnvoyProcesses:      processes,
+	}
+	verification := envoyVerification{
+		status:    valkeyv1alpha1.NetworkVerificationUnknown,
+		reason:    "EnvoyAdminUnavailable",
+		processes: processes,
+	}
+
+	applyNetworkVerification(
+		instance,
+		&instance.Status,
+		verification,
+		"same",
+		verification.reason,
+		"admin API недоступен",
+		time.Now(),
+	)
+
+	if instance.Status.Phase != valkeyv1alpha1.InstancePhaseRunning || instance.Status.Reason != "" {
+		t.Fatalf("рабочая фаза не восстановлена: %+v", instance.Status)
+	}
+}
+
 func Test_CertificateResourceRules_WithDevelopmentAndProduction_UseEnvironmentSpecificRequirements(t *testing.T) {
 	ctx := context.Background()
 	withoutCertificate := fake.NewClientBuilder().WithScheme(NewScheme()).Build()

@@ -177,6 +177,9 @@ func applyNetworkVerification(
 		conditionStatus = metav1.ConditionTrue
 	case valkeyv1alpha1.NetworkVerificationUnknown:
 		conditionStatus = metav1.ConditionUnknown
+		if networkVerificationAllowsOperations(status.Network, verification, desiredFingerprint) {
+			applyOperationalPhase(instance, status)
+		}
 	default:
 		if status.Initialized && reason != "EnvoyRefreshPending" {
 			status.Phase = valkeyv1alpha1.InstancePhaseUnavailable

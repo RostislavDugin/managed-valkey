@@ -268,21 +268,27 @@ export class KubernetesController {
     );
   }
 
-  async waitForDegradedHAOnTwoNodes(slug: string) {
+  async waitForHealthyHAOnTwoNodes(slug: string) {
     await waitUntil(
       async () => {
         try {
           const status = (await this.readResource(slug)).status;
-          const ready =
-            status?.nodes?.filter((process) => process.readiness && !process.termination).length ??
-            0;
-          return status?.phase === 'degraded' && ready === 2;
+          const processes = status?.nodes ?? [];
+          const hostnames = new Set(processes.map((process) => process.nodeName));
+          return (
+            status?.phase === 'running' &&
+            processes.length === 3 &&
+            processes.every(
+              (process) => process.readiness && !process.termination && process.role
+            ) &&
+            hostnames.size === 2
+          );
         } catch {
           return false;
         }
       },
-      `HA ${slug} в degraded с двумя готовыми процессами`,
-      2 * 60_000
+      `HA ${slug} в running с тремя готовыми процессами на двух нодах`,
+      3 * 60_000
     );
   }
 

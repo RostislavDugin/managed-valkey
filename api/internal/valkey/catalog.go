@@ -80,7 +80,7 @@ func (c Catalog) HasSize(size Size) bool {
 }
 
 func (c Catalog) PriceCoinsPerHour(mode domain.ValkeyInstanceMode, size Size) (int64, error) {
-	nodes, err := NodeCount(mode)
+	processes, err := ProcessCount(mode)
 	if err != nil {
 		return 0, err
 	}
@@ -88,25 +88,25 @@ func (c Catalog) PriceCoinsPerHour(mode domain.ValkeyInstanceMode, size Size) (i
 		return 0, ErrInvalidSize
 	}
 
-	perNode := c.Pricing.VCPUCoinsPerHour*int64(size.VCPU) +
+	perProcess := c.Pricing.VCPUCoinsPerHour*int64(size.VCPU) +
 		c.Pricing.RAMGBCoinsPerHour*int64(size.RAMGB)
 
-	return perNode * int64(nodes), nil
+	return perProcess * int64(processes), nil
 }
 
 func Reserve(mode domain.ValkeyInstanceMode, desired, applied Size) (Size, error) {
-	nodes, err := NodeCount(mode)
+	processes, err := ProcessCount(mode)
 	if err != nil {
 		return Size{}, err
 	}
 
 	return Size{
-		VCPU:  nodes * max(desired.VCPU, applied.VCPU),
-		RAMGB: nodes * max(desired.RAMGB, applied.RAMGB),
+		VCPU:  processes * max(desired.VCPU, applied.VCPU),
+		RAMGB: processes * max(desired.RAMGB, applied.RAMGB),
 	}, nil
 }
 
-func NodeCount(mode domain.ValkeyInstanceMode) (int, error) {
+func ProcessCount(mode domain.ValkeyInstanceMode) (int, error) {
 	switch mode {
 	case domain.ValkeyInstanceModeSingle:
 		return 1, nil

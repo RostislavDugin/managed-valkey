@@ -19,7 +19,7 @@ func (r capacityRepository) GetValkeyCapacityUsage(context.Context, uuid.UUID) (
 	return r.usage, nil
 }
 
-func Test_Capacity_WithConfiguredTopology_ReturnsRepositoryUsage(t *testing.T) {
+func Test_Capacity_WithConfiguredAggregateBudget_ReturnsRoundedLimitAndRepositoryUsage(t *testing.T) {
 	repository := capacityRepository{usage: store.ValkeyCapacityUsage{
 		MaxVCPU: 4, MaxRAMGB: 12, UserUsedVCPU: 3, UserUsedRAMGB: 6,
 		ClusterUsedVCPU: 9, ClusterUsedRAMGB: 30, Instances: 5,
@@ -31,7 +31,7 @@ func Test_Capacity_WithConfiguredTopology_ReturnsRepositoryUsage(t *testing.T) {
 		nil,
 		nil,
 		valkeydomain.Catalog{},
-		valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 14336},
+		valkeydomain.ClusterCapacity{CPUMilli: 10200, RAMMiB: 44236},
 		nil,
 	)
 
@@ -44,7 +44,7 @@ func Test_Capacity_WithConfiguredTopology_ReturnsRepositoryUsage(t *testing.T) {
 		capacity.User.Used != (valkeydomain.CapacityResources{VCPU: 3, RAMGB: 6}) {
 		t.Fatalf("неверный личный бюджет: %+v", capacity.User)
 	}
-	if capacity.Cluster.Limit != (valkeydomain.CapacityResources{VCPU: 9, RAMGB: 42}) ||
+	if capacity.Cluster.Limit != (valkeydomain.CapacityResources{VCPU: 10, RAMGB: 43}) ||
 		capacity.Cluster.Used != (valkeydomain.CapacityResources{VCPU: 9, RAMGB: 30}) {
 		t.Fatalf("неверный общий бюджет: %+v", capacity.Cluster)
 	}

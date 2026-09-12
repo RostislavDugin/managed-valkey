@@ -406,7 +406,7 @@ func Test_ReconcileLegacyStatefulSet_WithUserWorkload_BlocksDirectPods(t *testin
 	}
 }
 
-func Test_DesiredPodAndDisruptionBudget_WithHAMode_CreateAntiAffineProcessAndMinimumAvailability(
+func Test_DesiredPodAndDisruptionBudget_WithHAMode_CreateSoftTopologySpreadAndMinimumAvailability(
 	t *testing.T,
 ) {
 	instance := completeAcceptedInstance()
@@ -419,15 +419,18 @@ func Test_DesiredPodAndDisruptionBudget_WithHAMode_CreateAntiAffineProcessAndMin
 		container.RestartPolicy != nil || len(container.RestartPolicyRules) != 0 {
 		t.Fatalf("неверная политика HA Pod: %+v", pod.Spec)
 	}
-	affinity := pod.Spec.Affinity
-	if affinity == nil || affinity.PodAntiAffinity == nil ||
-		len(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 1 {
-		t.Fatalf("HA не требует разнесения процессов: %+v", affinity)
+	if pod.Spec.Affinity != nil {
+		t.Fatalf("HA получил обязательное affinity: %+v", pod.Spec.Affinity)
 	}
-	term := affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0]
-	if term.TopologyKey != corev1.LabelHostname || term.LabelSelector == nil ||
-		!maps.Equal(term.LabelSelector.MatchLabels, workloadLabels(instance.Name)) {
-		t.Fatalf("неверное правило anti-affinity: %+v", term)
+	if len(pod.Spec.TopologySpreadConstraints) != 1 {
+		t.Fatalf("HA не получил мягкое распределение: %+v", pod.Spec.TopologySpreadConstraints)
+	}
+	constraint := pod.Spec.TopologySpreadConstraints[0]
+	if constraint.MaxSkew != 1 || constraint.TopologyKey != corev1.LabelHostname ||
+		constraint.WhenUnsatisfiable != corev1.ScheduleAnyway || constraint.MinDomains != nil ||
+		constraint.LabelSelector == nil ||
+		!maps.Equal(constraint.LabelSelector.MatchLabels, workloadLabels(instance.Name)) {
+		t.Fatalf("неверное мягкое распределение: %+v", constraint)
 	}
 
 	pdb := desiredPodDisruptionBudget(instance)
@@ -440,6 +443,15 @@ func Test_DesiredPodAndDisruptionBudget_WithHAMode_CreateAntiAffineProcessAndMin
 	if len(services) != 3 || services[2].Name != instance.Name+"-replicas" ||
 		services[2].Spec.Selector[applicationRoleLabel] != string(valkeyv1alpha1.NodeRoleReplica) {
 		t.Fatalf("неверный Service реплик: %+v", services)
+	}
+}
+
+func Test_DesiredPod_WithSingleMode_HasNoTopologySpreadConstraint(t *testing.T) {
+	instance := completeAcceptedInstance()
+	pod := desiredPod(instance, 0, "cache-a1b2c3-config-digest", "valkey/valkey:8.1.9", nil)
+
+	if pod.Spec.Affinity != nil || len(pod.Spec.TopologySpreadConstraints) != 0 {
+		t.Fatalf("single получил ограничение распределения: %+v", pod.Spec)
 	}
 }
 

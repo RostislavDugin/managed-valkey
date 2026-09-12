@@ -98,9 +98,9 @@ func Test_CreateAndResizeValkey_WithConcurrentRequestsAtClusterLimit_ShareCluste
 	}
 }
 
-func Test_CreateValkeys_WithConcurrentRequestsAtPlacementLimit_AcceptsOnlyOne(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 12288}
-	config := testAPIConfig{clusterTopology: &topology}
+func Test_CreateValkeys_WithConcurrentRequestsThatOnlyViolatePlacement_AcceptsBoth(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 9000, RAMMiB: 36864}
+	config := testAPIConfig{clusterCapacity: &cluster}
 	first := newHTTPTestAPI(t, config)
 	second := newHTTPTestAPI(t, config)
 	seedOwner := first.registerAccount(t, "")
@@ -117,19 +117,18 @@ func Test_CreateValkeys_WithConcurrentRequestsAtPlacementLimit_AcceptsOnlyOne(t 
 		createSizedRequest(second, secondCandidate, "placement-second", 2, 8, uuid.NewString()),
 	)
 
-	assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
-	assertOnePlacementCapacityError(t, responses)
+	assertStatuses(t, responses, http.StatusAccepted, http.StatusAccepted)
 	assertDatabaseCount(t, first.database.DB().Model(&store.ValkeyInstance{}).Where(
 		"user_id IN ?", []uuid.UUID{firstCandidate.ID, secondCandidate.ID},
-	), 1)
+	), 2)
 	assertDatabaseCount(t, first.database.DB().Model(&store.IdempotencyKey{}).Where(
 		"user_id IN ?", []uuid.UUID{firstCandidate.ID, secondCandidate.ID},
-	), 1)
+	), 2)
 }
 
-func Test_CreateAndResizeValkey_WithConcurrentRequestsAtPlacementLimit_AcceptsOnlyOne(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 12288}
-	config := testAPIConfig{clusterTopology: &topology}
+func Test_CreateAndResizeValkey_WithConcurrentRequestsThatOnlyViolatePlacement_AcceptsBoth(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 9000, RAMMiB: 36864}
+	config := testAPIConfig{clusterCapacity: &cluster}
 	first := newHTTPTestAPI(t, config)
 	second := newHTTPTestAPI(t, config)
 	fixedOwner := first.registerAccount(t, "")
@@ -150,12 +149,11 @@ func Test_CreateAndResizeValkey_WithConcurrentRequestsAtPlacementLimit_AcceptsOn
 		createSizedRequest(second, createOwner, "create-competing-for-node", 2, 8, uuid.NewString()),
 	)
 
-	assertStatuses(t, responses, http.StatusAccepted, http.StatusUnprocessableEntity)
-	assertOnePlacementCapacityError(t, responses)
+	assertStatuses(t, responses, http.StatusAccepted, http.StatusAccepted)
 	created := countRows(t, first, &store.ValkeyInstance{}, "user_id = ?", createOwner.ID)
 	resized := loadValkey(t, first, resizable.ID)
-	if (created == 1 && resized.VCPU != 1) || (created == 0 && resized.VCPU != 2) {
-		t.Fatalf("приняты обе операции или ни одной: создано=%d, размер=%d/%d", created, resized.VCPU, resized.RAMGB)
+	if created != 1 || resized.VCPU != 2 || resized.RAMGB != 8 {
+		t.Fatalf("не обе операции приняты: создано=%d, размер=%d/%d", created, resized.VCPU, resized.RAMGB)
 	}
 }
 
@@ -459,23 +457,6 @@ func createSizedRequest(
 			"Content-Type": "application/json", "Idempotency-Key": key,
 		}),
 	}
-}
-
-func assertOnePlacementCapacityError(t *testing.T, responses []testResponse) {
-	t.Helper()
-
-	for _, response := range responses {
-		if response.StatusCode < 400 {
-			continue
-		}
-		errorBody := assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
-		if errorBody.Error.Details["reason"] != "placement_capacity" {
-			t.Fatalf("неверная причина отказа: %+v", errorBody)
-		}
-
-		return
-	}
-	t.Fatal("ответ с ошибкой размещения отсутствует")
 }
 
 func resizeRequest(vcpu, ramGB int) func(*testAPI, testAccount, uuid.UUID) concurrentRequest {

@@ -822,6 +822,73 @@ func openPersistentConnection(
 	return result
 }
 
+func waitForPublicValkeyConnection(
+	t *testing.T,
+	address string,
+	instance *testInstance,
+	caFile string,
+) *persistentConnection {
+	t.Helper()
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatalf("прочитать CA: %v", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		t.Fatal("сертификат стенда не добавлен в пул доверия")
+	}
+
+	var result *persistentConnection
+	var lastErr error
+	err = wait.PollUntilContextTimeout(
+		t.Context(),
+		500*time.Millisecond,
+		time.Minute,
+		true,
+		func(context.Context) (bool, error) {
+			dialer := &net.Dialer{Timeout: 3 * time.Second}
+			conn, dialErr := tls.DialWithDialer(dialer, "tcp", address, &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				ServerName: instance.hostname,
+				RootCAs:    roots,
+			})
+			if dialErr != nil {
+				lastErr = dialErr
+				return false, nil
+			}
+			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+			request := fmt.Sprintf(
+				"*3\r\n$4\r\nAUTH\r\n$3\r\napp\r\n$%d\r\n%s\r\n",
+				len(instance.password),
+				instance.password,
+			)
+			if _, writeErr := io.WriteString(conn, request); writeErr != nil {
+				lastErr = writeErr
+				_ = conn.Close()
+				return false, nil
+			}
+			reader := bufio.NewReader(conn)
+			response, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				lastErr = readErr
+				_ = conn.Close()
+				return false, nil
+			}
+			if response != "+OK\r\n" {
+				lastErr = fmt.Errorf("AUTH вернул неожиданный ответ")
+				_ = conn.Close()
+				return false, nil
+			}
+			result = &persistentConnection{conn: conn, read: reader, stop: func() {}}
+			return true, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("дождаться подключения через Envoy: %v: %v", err, lastErr)
+	}
+	return result
+}
+
 func dialPersistentConnection(
 	t *testing.T,
 	address string,

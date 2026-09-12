@@ -29,7 +29,7 @@ export function newValkeyClient(endpoint: ValkeyEndpoint, reconnect = false) {
     tls: tlsOptions(endpoint.host),
     lazyConnect: true,
     connectTimeout: 1_000,
-    commandTimeout: 2_000,
+    commandTimeout: reconnect ? 1_000 : 2_000,
     enableOfflineQueue: false,
     maxRetriesPerRequest: 0,
     retryStrategy: reconnect ? () => 100 : () => null,

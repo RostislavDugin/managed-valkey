@@ -5,3 +5,5 @@ root := justfile_directory() / "../.."
 test:
     cd {{ root }} && scripts/check_integration_test_catalog.sh && \
         scripts/test_environment.sh exec integration -- scripts/test_integrations.sh
+
+test-full: test

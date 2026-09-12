@@ -16,7 +16,7 @@ results_dir = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
 catalog_path = pathlib.Path(sys.argv[3])
 matrix_sources = {}
-for prefix, last in (("HA", 8), ("FP", 12), ("ND", 9), ("NT", 6), ("OP", 8), ("RZ", 11), ("PW", 10), ("DL", 4)):
+for prefix, last in (("HA", 11), ("FP", 12), ("ND", 11), ("NT", 6), ("OP", 8), ("RZ", 12), ("PW", 11), ("DL", 4)):
     matrix_sources.update({f"{prefix}-{number:02d}": "k3s" for number in range(1, last + 1)})
 matrix_sources.update({f"CT-{number:02d}": "unit+envtest" for number in (1, 2, 6, 7)})
 matrix_sources.update({f"CT-{number:02d}": "envtest" for number in (3, 4, 5, 8)})

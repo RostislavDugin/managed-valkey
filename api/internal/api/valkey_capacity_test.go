@@ -30,8 +30,8 @@ type capacityResources struct {
 }
 
 func Test_GetValkeyCapacity_WithInstancesFromDifferentOwners_ReturnsPersonalAndClusterReserve(t *testing.T) {
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &valkeydomain.ClusterTopology{
-		NodeCount: 3, NodeCPUMilli: 4000, NodeRAMMiB: 16384,
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &valkeydomain.ClusterCapacity{
+		CPUMilli: 10200, RAMMiB: 44236,
 	}})
 	account := app.registerAccount(t, "")
 	otherAccount := app.registerAccount(t, "")
@@ -75,12 +75,26 @@ func Test_GetValkeyCapacity_WithInstancesFromDifferentOwners_ReturnsPersonalAndC
 		capacity.User.Used != (capacityResources{VCPU: 6, RAMGB: 12}) {
 		t.Fatalf("неверный личный бюджет: %+v", capacity.User)
 	}
-	if capacity.Cluster.Limit != (capacityResources{VCPU: 12, RAMGB: 48}) ||
+	if capacity.Cluster.Limit != (capacityResources{VCPU: 10, RAMGB: 43}) ||
 		capacity.Cluster.Used != (capacityResources{VCPU: 8, RAMGB: 16}) {
 		t.Fatalf("неверный общий бюджет: %+v", capacity.Cluster)
 	}
 	if capacity.Instances.Limit != 32 || capacity.Instances.Used != 2 {
 		t.Fatalf("неверный предел инстансов: %+v", capacity.Instances)
+	}
+}
+
+func Test_GetValkeyCapacity_WithPhysicalFourVCPUAndSixteenGiB_ReturnsReservedAggregateLimit(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 3400, RAMMiB: 14745}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
+	account := app.registerAccount(t, "")
+
+	response := app.requestJSON(t, http.MethodGet, "/v1/managed/valkey/capacity", nil, bearer(account.Token))
+	assertStatus(t, response, http.StatusOK)
+	capacity := decodeResponse[capacityResponse](t, response)
+
+	if capacity.Cluster.Limit != (capacityResources{VCPU: 3, RAMGB: 14}) {
+		t.Fatalf("неверный общий бюджет: %+v", capacity.Cluster)
 	}
 }
 

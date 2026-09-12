@@ -3,29 +3,11 @@ import { expect, test } from '../src/fixtures.ts';
 import { assertValkeyReadWrite, minimumSize, scenarioIdentity } from '../src/scenario.ts';
 import { actionDelayFromEnvironment, UserActions } from '../src/user-actions.ts';
 
-type PositiveTopologyVariable =
-  | 'MANAGED_K8S_NODE_COUNT'
-  | 'MANAGED_K8S_NODE_CAPACITY_VCPU'
-  | 'MANAGED_K8S_NODE_CAPACITY_RAM_GB';
-
-type NonnegativeTopologyVariable =
-  | 'MANAGED_K8S_NODE_RESERVED_CPU_MILLI'
-  | 'MANAGED_K8S_NODE_RESERVED_RAM_MIB';
-
-function positiveTopologyValue(name: PositiveTopologyVariable) {
-  const raw = process.env[name];
-  if (!raw || !/^\d+$/.test(raw) || Number.parseInt(raw, 10) <= 0) {
-    throw new Error(`${name} должен содержать положительное целое число`);
-  }
-  return Number.parseInt(raw, 10);
-}
-
-function nonnegativeTopologyValue(name: NonnegativeTopologyVariable) {
-  const raw = process.env[name];
-  if (!raw || !/^\d+$/.test(raw)) {
-    throw new Error(`${name} должен содержать неотрицательное целое число`);
-  }
-  return Number.parseInt(raw, 10);
+interface CapacityResponse {
+  cluster: {
+    limit: { vcpu: number; ram_gb: number };
+    used: { vcpu: number; ram_gb: number };
+  };
 }
 
 const personalQuota = { vcpu: 4, ramGb: 12 };
@@ -39,24 +21,25 @@ test(
     }
 
     let activeAccount = await console.register('cluster-capacity-0');
+    const capacityResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        /\/v1\/managed\/valkey\/capacity$/.test(response.url()) &&
+        response.ok()
+    );
     await console.openCreatePage();
     const catalog = await console.readSizeCatalog();
     const minimum = minimumSize(catalog);
-    const nodeCount = positiveTopologyValue('MANAGED_K8S_NODE_COUNT');
-    const availableCpuMilli =
-      positiveTopologyValue('MANAGED_K8S_NODE_CAPACITY_VCPU') * 1000 -
-      nonnegativeTopologyValue('MANAGED_K8S_NODE_RESERVED_CPU_MILLI');
-    const availableRamMiB =
-      positiveTopologyValue('MANAGED_K8S_NODE_CAPACITY_RAM_GB') * 1024 -
-      nonnegativeTopologyValue('MANAGED_K8S_NODE_RESERVED_RAM_MIB');
-    const capacityPerNode = Math.min(
-      Math.floor(availableCpuMilli / (minimum.vcpu * 1000)),
-      Math.floor(availableRamMiB / (minimum.ramGb * 1024))
+    const aggregate = (await (await capacityResponse).json()) as CapacityResponse;
+    const availableVcpu = aggregate.cluster.limit.vcpu - aggregate.cluster.used.vcpu;
+    const availableRamGb = aggregate.cluster.limit.ram_gb - aggregate.cluster.used.ram_gb;
+    const capacity = Math.min(
+      Math.floor(availableVcpu / minimum.vcpu),
+      Math.floor(availableRamGb / minimum.ramGb)
     );
-    const capacity = capacityPerNode * nodeCount;
     if (capacity < 2 || capacity >= 32) {
       throw new Error(
-        `Топология допускает ${capacity} минимальных инстансов; для сценария нужно от 2 до 31`
+        `Суммарный остаток допускает ${capacity} минимальных инстансов; для сценария нужно от 2 до 31`
       );
     }
 

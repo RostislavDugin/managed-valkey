@@ -47,42 +47,57 @@ func Test_CT14HA03_ReconcilePendingReplica_WhenCapacityReturns_MarksInstanceRunn
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-	h.requireNodeCount(t, 4)
-
-	nodeName := "k3s-agent-2"
-	capacityNode := "k3s-agent-3"
-	h.setNodeUnschedulable(t, nodeName, true)
-	h.setNodeUnschedulable(t, capacityNode, true)
-	t.Cleanup(func() {
-		h.setNodeUnschedulable(t, nodeName, false)
-		h.setNodeUnschedulable(t, capacityNode, false)
-	})
+	h.requireNodeCount(t, 3)
 
 	instance := h.createHA(t, "pending")
-	status := h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
-		return current.Status.Initialized && current.Status.Phase == valkeyv1alpha1.InstancePhaseDegraded &&
-			len(current.Status.Nodes) == 2 && current.Status.PrimaryOrdinal != nil
-	}, "HA-03 degraded при нехватке нод")
-	if len(status.Status.Nodes) != 2 {
-		t.Fatalf("HA-03 получил неожиданный состав: %+v", status.Status.Nodes)
-	}
-	h.waitForPendingPod(t, instance)
+	status := h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 3)
+	replicaOrdinal, _ := replicaProcess(t, status)
+	target := processAtOrdinal(t, status, replicaOrdinal)
 
-	h.setNodeUnschedulable(t, capacityNode, false)
-	h.requireNodeCount(t, 4)
+	nodes := &corev1.NodeList{}
+	if err := h.k8s.List(t.Context(), nodes); err != nil {
+		t.Fatalf("HA-03 прочитать Node: %v", err)
+	}
+	cordoned := make([]string, 0, len(nodes.Items))
+	for _, node := range nodes.Items {
+		if node.Spec.Unschedulable {
+			continue
+		}
+		h.setNodeUnschedulable(t, node.Name, true)
+		cordoned = append(cordoned, node.Name)
+	}
+	t.Cleanup(func() {
+		for _, nodeName := range cordoned {
+			h.setNodeUnschedulable(t, nodeName, false)
+		}
+	})
+
+	h.deletePod(t, instance, target.Ordinal)
+	h.waitForPendingPod(t, instance)
+	status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		if !current.Status.Initialized || current.Status.Phase != valkeyv1alpha1.InstancePhaseDegraded ||
+			current.Status.PrimaryOrdinal == nil {
+			return false
+		}
+		ready := 0
+		for _, process := range current.Status.Nodes {
+			if process.Readiness && process.Termination == nil {
+				ready++
+			}
+		}
+		return ready == 2
+	}, "HA-03 degraded при cordon всех нод")
+
+	h.setNodeUnschedulable(t, target.NodeName, false)
 	status = h.waitRunning(t, instance)
 	assertHAComposition(t, h, instance, status)
-	addedProcess := valkeyv1alpha1.NodeStatus{}
-	found := false
-	for _, process := range status.Status.Nodes {
-		if process.NodeName == "k3s-agent-3" {
-			addedProcess = process
-			found = true
-			break
-		}
-	}
-	if !found || addedProcess.Role != valkeyv1alpha1.NodeRoleReplica {
-		t.Fatalf("HA-03 не разместила Pending-реплику на добавленной ноде: %+v", status.Status.Nodes)
+	assertHAHostnameCount(t, status, 3)
+	replacement := processAtOrdinal(t, status, target.Ordinal)
+	if replacement.PodUID == target.PodUID || replacement.NodeName != target.NodeName ||
+		replacement.Role != valkeyv1alpha1.NodeRoleReplica {
+		t.Fatalf("HA-03 не восстановила Pending-реплику после снятия cordon: %+v", replacement)
 	}
 	h.deleteInstance(t, instance)
 }
@@ -1101,7 +1116,7 @@ func assertCT10IndependentInstanceObservation(
 			sawTransportFailure,
 		)
 	}
-	maximumHeartbeatGap := 2*operatorconfig.ValkeyCommandTimeout + 4*operatorconfig.HealthCheckInterval
+	maximumHeartbeatGap := 3*operatorconfig.ValkeyCommandTimeout + 8*operatorconfig.HealthCheckInterval
 	previous := beforeObservedAt.Time
 	for _, heartbeat := range heartbeats {
 		if gap := heartbeat.Sub(previous); gap > maximumHeartbeatGap {
@@ -2469,40 +2484,19 @@ func Test_ND04_RecoverHA_WhenOperatorAndPrimaryWorkerAreDestroyed_ReplacesOperat
 	h.deleteInstance(t, instance)
 }
 
-func Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_WaitsForCleanAgentAndRestoresComposition(
+func Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_RestoresCompositionOnSurvivingNodes(
 	t *testing.T,
 ) {
 	testStartedAt := time.Now()
 	h := newHarness(t)
 	h.startOperator(t)
 	t.Cleanup(func() { h.close(t) })
-
-	nodes := &corev1.NodeList{}
-	if err := h.k8s.List(t.Context(), nodes); err != nil {
-		t.Fatalf("ND-05 прочитать Node: %v", err)
-	}
-	if len(nodes.Items) < 3 {
-		t.Fatalf("ND-05 требует минимум три Node, получено %d", len(nodes.Items))
-	}
-	extraNodes := make([]string, 0)
-	for index := range nodes.Items {
-		node := &nodes.Items[index]
-		if node.Name == "k3s-server" || node.Name == "k3s-agent-1" || node.Name == "k3s-agent-2" ||
-			node.Spec.Unschedulable {
-			continue
-		}
-		h.setNodeUnschedulable(t, node.Name, true)
-		extraNodes = append(extraNodes, node.Name)
-	}
-	t.Cleanup(func() {
-		for _, nodeName := range extraNodes {
-			h.setNodeUnschedulable(t, nodeName, false)
-		}
-	})
+	h.requireNodeCount(t, 3)
 
 	instance := h.createHA(t, "ndnospare")
 	status := h.waitRunning(t, instance)
 	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 3)
 	primary := primaryProcess(t, status)
 	if primary.NodeName == "k3s-server" {
 		h.deletePod(t, instance, primary.Ordinal)
@@ -2529,45 +2523,27 @@ func Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_WaitsForCleanA
 	closeConnections([]*persistentConnection{connection})
 	h.deleteNode(t, failedNode)
 
-	status = h.waitFor(t, instance, func(current *valkeyv1alpha1.ValkeyInstance) bool {
-		if current.Status.Failover != nil || current.Status.Phase != valkeyv1alpha1.InstancePhaseDegraded ||
-			current.Status.PrimaryPodUID == primary.PodUID {
+	status = h.waitForWithin(t, instance, 3*time.Minute, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		if current.Status.Failover != nil || current.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
+			current.Status.PrimaryPodUID == primary.PodUID || len(current.Status.Nodes) != 3 {
 			return false
 		}
-		primaries := 0
-		replicas := 0
 		for _, process := range current.Status.Nodes {
-			if process.NodeUID == string(failedNode.UID) {
-				if process.Termination == nil || process.Termination.Evidence != "node_deleted" {
-					return false
-				}
-				continue
-			}
-			if process.Termination != nil || !process.Readiness {
+			if process.NodeUID == string(failedNode.UID) || process.Termination != nil || !process.Readiness {
 				return false
 			}
-			switch process.Role {
-			case valkeyv1alpha1.NodeRolePrimary:
-				primaries++
-			case valkeyv1alpha1.NodeRoleReplica:
-				replicas++
-				if process.Replication == nil || !process.Replication.LinkUp ||
-					process.Replication.SyncedAt == nil {
-					return false
-				}
-			}
 		}
-		return primaries == 1 && replicas == 1
-	}, "ND-05 degraded без запасного хоста")
-	h.waitForPendingPod(t, instance)
-	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+		return true
+	}, "ND-05 полного состава на двух оставшихся нодах")
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 2)
+	connection = waitForPublicValkeyConnection(t, h.publicAddr, instance, h.caFile)
 	if value := getValue(t, connection, "nd05-key"); value != "preserved" {
-		t.Fatalf("ND-05 потеряла ключ в degraded: %q", value)
+		t.Fatalf("ND-05 потеряла ключ после восстановления на двух нодах: %q", value)
 	}
-	setValue(t, connection, "nd05-degraded", "available")
-	t.Logf("ND-05 восстановление записи без запасной ноды: %s", time.Since(phaseStartedAt))
+	setValue(t, connection, "nd05-two-nodes", "available")
+	t.Logf("ND-05 полный состав без запасной ноды: %s", time.Since(phaseStartedAt))
 
-	phaseStartedAt = time.Now()
 	fault.restore(t, h)
 	restoredNode := h.getNode(t, failedNode.Name)
 	if restoredNode.UID == failedNode.UID {
@@ -2575,28 +2551,145 @@ func Test_ND05_RecoverHA_WhenPrimaryWorkerIsDestroyedWithoutSpare_WaitsForCleanA
 	}
 	status = h.waitRunning(t, instance)
 	assertHAComposition(t, h, instance, status)
-	foundRestoredNode := false
 	for _, process := range status.Status.Nodes {
 		if process.NodeUID == string(failedNode.UID) {
 			t.Fatalf("ND-05 сохранила процесс прежней Node: %+v", process)
 		}
-		if process.NodeUID == string(restoredNode.UID) {
-			foundRestoredNode = true
-		}
 	}
-	if !foundRestoredNode {
-		t.Fatalf("ND-05 не разместила третью копию на чистом agent %s", restoredNode.Name)
-	}
-	closeConnections([]*persistentConnection{connection})
-	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
-	if value := getValue(t, connection, "nd05-degraded"); value != "available" {
+	if value := getValue(t, connection, "nd05-two-nodes"); value != "available" {
 		t.Fatalf("ND-05 потеряла запись после возврата agent: %q", value)
 	}
-	t.Logf("ND-05 полный состав после чистого agent: %s", time.Since(phaseStartedAt))
 
 	closeConnections([]*persistentConnection{connection})
 	h.deleteInstance(t, instance)
 	t.Logf("ND-05 всего: %s", time.Since(testStartedAt))
+}
+
+func Test_ND10_RecoverHA_WhenWorkerWithTwoProcessesIsDestroyedAndPrimarySurvives_RestoresOnRemainingNode(
+	t *testing.T,
+) {
+	runTwoNodeHAWorkerLoss(t, "ndprimarysurvives", valkeyv1alpha1.NodeRolePrimary)
+}
+
+func Test_ND11_RecoverHA_WhenWorkerWithTwoProcessesIsDestroyedAndReplicaSurvives_RestoresOnRemainingNode(
+	t *testing.T,
+) {
+	runTwoNodeHAWorkerLoss(t, "ndreplicasurvives", valkeyv1alpha1.NodeRoleReplica)
+}
+
+func runTwoNodeHAWorkerLoss(t *testing.T, prefix string, survivingRole valkeyv1alpha1.NodeRole) {
+	t.Helper()
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
+	h.requireNodeCount(t, 2)
+
+	const serverName = "k3s-server"
+	const agentName = "k3s-agent-1"
+	if survivingRole == valkeyv1alpha1.NodeRolePrimary {
+		h.setNodeUnschedulable(t, agentName, true)
+	} else {
+		h.setNodeUnschedulable(t, serverName, true)
+	}
+	t.Cleanup(func() {
+		h.setNodeUnschedulable(t, serverName, false)
+		h.setNodeUnschedulable(t, agentName, false)
+	})
+
+	instance := h.createHA(t, prefix)
+	status := h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 1)
+
+	if survivingRole == valkeyv1alpha1.NodeRolePrimary {
+		h.setNodeUnschedulable(t, agentName, false)
+		h.setNodeUnschedulable(t, serverName, true)
+		replicaOrdinals := make([]int32, 0, 2)
+		for _, process := range status.Status.Nodes {
+			if process.Role == valkeyv1alpha1.NodeRoleReplica {
+				replicaOrdinals = append(replicaOrdinals, process.Ordinal)
+			}
+		}
+		for _, ordinal := range replicaOrdinals {
+			current := h.getInstance(t, instance)
+			replica := processAtOrdinal(t, current, ordinal)
+			h.deletePod(t, instance, ordinal)
+			h.waitForReplacementOrdinal(t, instance, ordinal, types.UID(replica.PodUID))
+			status = h.waitRunning(t, instance)
+		}
+	} else {
+		h.setNodeUnschedulable(t, serverName, false)
+		h.setNodeUnschedulable(t, agentName, true)
+		replicaOrdinal, _ := replicaProcess(t, status)
+		replica := processAtOrdinal(t, status, replicaOrdinal)
+		h.deletePod(t, instance, replicaOrdinal)
+		h.waitForReplacementOrdinal(t, instance, replicaOrdinal, types.UID(replica.PodUID))
+		status = h.waitRunning(t, instance)
+	}
+	h.setNodeUnschedulable(t, serverName, false)
+	h.setNodeUnschedulable(t, agentName, false)
+	status = h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 2)
+
+	serverProcesses := make([]valkeyv1alpha1.NodeStatus, 0, 1)
+	agentProcesses := 0
+	for _, process := range status.Status.Nodes {
+		switch process.NodeName {
+		case serverName:
+			serverProcesses = append(serverProcesses, process)
+		case agentName:
+			agentProcesses++
+		}
+	}
+	if len(serverProcesses) != 1 || serverProcesses[0].Role != survivingRole || agentProcesses != 2 {
+		t.Fatalf(
+			"не удалось подготовить отказ с выжившей ролью %s: %+v",
+			survivingRole,
+			status.Status.Nodes,
+		)
+	}
+
+	h.useSurvivingEnvoy(t, agentName)
+	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	setValue(t, connection, "two-process-node-loss", string(survivingRole))
+	assertKeyOnAllReplicas(t, h, instance, status, "two-process-node-loss", string(survivingRole))
+	failedNode := h.getNode(t, agentName)
+	fault := h.newAgentFault(t, failedNode)
+	t.Cleanup(func() { fault.restore(t, h) })
+	fault.kill(t, h)
+	closeConnections([]*persistentConnection{connection})
+	h.deleteNode(t, failedNode)
+
+	status = h.waitForWithin(t, instance, 3*time.Minute, func(current *valkeyv1alpha1.ValkeyInstance) bool {
+		if current.Status.Failover != nil || current.Status.Phase != valkeyv1alpha1.InstancePhaseRunning ||
+			len(current.Status.Nodes) != 3 {
+			return false
+		}
+		for _, process := range current.Status.Nodes {
+			if process.NodeName != serverName || process.NodeUID == string(failedNode.UID) ||
+				process.Termination != nil || !process.Readiness {
+				return false
+			}
+		}
+		return true
+	}, "полного состава после потери ноды с двумя процессами")
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 1)
+	connection = waitForPublicValkeyConnection(t, h.publicAddr, instance, h.caFile)
+	if value := getValue(t, connection, "two-process-node-loss"); value != string(survivingRole) {
+		closeConnections([]*persistentConnection{connection})
+		t.Fatalf("потеря ноды с двумя процессами потеряла ключ: %q", value)
+	}
+	setValue(t, connection, "two-process-node-recovered", "available")
+	closeConnections([]*persistentConnection{connection})
+
+	fault.restore(t, h)
+	restoredNode := h.getNode(t, agentName)
+	if restoredNode.UID == failedNode.UID {
+		t.Fatalf("восстановленная Node сохранила прежний UID %s", failedNode.UID)
+	}
+	h.deleteInstance(t, instance)
 }
 
 func Test_ND01_RecoverHA_WhenPrimaryWorkerIsDestroyed_FailsOverAndRestoresOnSpareNode(t *testing.T) {

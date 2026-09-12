@@ -1,4 +1,4 @@
-import { getNodeCount, type ValkeyInstance, type ValkeyMode, type ValkeySize } from './valkey';
+import { getProcessCount, type ValkeyInstance, type ValkeyMode, type ValkeySize } from './valkey';
 
 export interface QuotaAmount {
   vcpu: number;
@@ -38,10 +38,10 @@ export interface CapacityCheck {
 }
 
 export function getInstanceReserve(instance: ValkeyInstance): QuotaAmount {
-  const nodes = getNodeCount(instance.mode);
+  const processes = getProcessCount(instance.mode);
   return {
-    vcpu: nodes * Math.max(instance.vcpu, instance.appliedVcpu),
-    ramGb: nodes * Math.max(instance.ramGb, instance.appliedRamGb),
+    vcpu: processes * Math.max(instance.vcpu, instance.appliedVcpu),
+    ramGb: processes * Math.max(instance.ramGb, instance.appliedRamGb),
   };
 }
 
@@ -51,10 +51,10 @@ export function checkQuota(
   current?: ValkeyInstance
 ): QuotaCheck {
   const previous = current ? getInstanceReserve(current) : { vcpu: 0, ramGb: 0 };
-  const nodes = getNodeCount(candidate.mode);
+  const processes = getProcessCount(candidate.mode);
   const required = {
-    vcpu: nodes * Math.max(candidate.size.vcpu, current?.appliedVcpu ?? 0),
-    ramGb: nodes * Math.max(candidate.size.ramGb, current?.appliedRamGb ?? 0),
+    vcpu: processes * Math.max(candidate.size.vcpu, current?.appliedVcpu ?? 0),
+    ramGb: processes * Math.max(candidate.size.ramGb, current?.appliedRamGb ?? 0),
   };
   const requested = {
     vcpu: quota.usage.vcpu - previous.vcpu + required.vcpu,

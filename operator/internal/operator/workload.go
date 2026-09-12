@@ -273,13 +273,13 @@ func desiredPod(
 			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
 		},
 	}
-	var affinity *corev1.Affinity
+	var topologySpreadConstraints []corev1.TopologySpreadConstraint
 	if accepted.Mode == valkeyv1alpha1.ValkeyModeHA {
-		affinity = &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
-				TopologyKey:   corev1.LabelHostname,
-			}},
+		topologySpreadConstraints = []corev1.TopologySpreadConstraint{{
+			MaxSkew:           1,
+			TopologyKey:       corev1.LabelHostname,
+			WhenUnsatisfiable: corev1.ScheduleAnyway,
+			LabelSelector:     &metav1.LabelSelector{MatchLabels: maps.Clone(selectorLabels)},
 		}}
 	}
 
@@ -290,7 +290,7 @@ func desiredPod(
 			Subdomain:                     accepted.Slug + "-hl",
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			TerminationGracePeriodSeconds: &terminationGracePeriod,
-			Affinity:                      affinity,
+			TopologySpreadConstraints:     topologySpreadConstraints,
 			Containers: []corev1.Container{{
 				Name:            "valkey",
 				Image:           image,

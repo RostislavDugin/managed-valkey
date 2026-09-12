@@ -67,6 +67,46 @@ type deletionActionPoint struct {
 	uninstall func()
 }
 
+func Test_PW11RZ12_RotatePasswordAndResizeHA_WithProcessesOnOneNode_PreservesDataAndComposition(t *testing.T) {
+	h := newHarness(t)
+	h.startOperator(t)
+	t.Cleanup(func() { h.close(t) })
+	h.requireNodeCount(t, 1)
+
+	instance := h.createHA(t, "hamutation")
+	status := h.waitRunning(t, instance)
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 1)
+	servicePasswords := h.servicePasswords(t, instance)
+
+	connection := openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	setValue(t, connection, "ha-key", "preserved")
+	oldPassword := instance.password
+	newPassword := "colocated-" + mustUUIDv7(t)
+	h.rotatePassword(t, instance, newPassword, 2)
+	status = h.waitForPasswordVersion(t, instance, 2)
+	assertConnectionClosed(t, connection, false)
+	closeConnections([]*persistentConnection{connection})
+	assertHAComposition(t, h, instance, status)
+	assertHAHostnameCount(t, status, 1)
+	assertPasswordsOnAllProcesses(t, h, instance, oldPassword, newPassword)
+	if current := h.servicePasswords(t, instance); current != servicePasswords {
+		t.Fatal("ротация совместно размещённого HA изменила служебные пароли")
+	}
+
+	instance.password = newPassword
+	connection = openPersistentConnection(t, h.publicAddr, instance, h.caFile, false, func() {})
+	if value := getValue(t, connection, "ha-key"); value != "preserved" {
+		closeConnections([]*persistentConnection{connection})
+		t.Fatalf("ротация совместно размещённого HA потеряла ключ: %q", value)
+	}
+	connection = resizeHAAndAssertPreserved(t, h, instance, connection, 2, 2, 3, "preserved")
+	status = h.getInstance(t, instance)
+	assertHAHostnameCount(t, status, 1)
+	closeConnections([]*persistentConnection{connection})
+	h.deleteInstance(t, instance)
+}
+
 func newDeletionActionPoint(
 	t *testing.T,
 	namespace string,
@@ -843,6 +883,23 @@ func Test_PW07_RotatePassword_WhenAgentIsDestroyedWithoutReplacementCapacity_Com
 	failedNode := h.getNode(t, target.NodeName)
 	fault := h.newAgentFault(t, failedNode)
 	t.Cleanup(func() { fault.restore(t, h) })
+	nodes := &corev1.NodeList{}
+	if err := h.k8s.List(t.Context(), nodes); err != nil {
+		t.Fatalf("PW-07 прочитать Node: %v", err)
+	}
+	cordoned := make([]string, 0, len(nodes.Items)-1)
+	for _, node := range nodes.Items {
+		if node.Name == failedNode.Name || node.Spec.Unschedulable {
+			continue
+		}
+		h.setNodeUnschedulable(t, node.Name, true)
+		cordoned = append(cordoned, node.Name)
+	}
+	t.Cleanup(func() {
+		for _, nodeName := range cordoned {
+			h.setNodeUnschedulable(t, nodeName, false)
+		}
+	})
 	fault.kill(t, h)
 	closeConnections([]*persistentConnection{connection})
 	h.deleteNode(t, failedNode)
@@ -892,6 +949,10 @@ func Test_PW07_RotatePassword_WhenAgentIsDestroyedWithoutReplacementCapacity_Com
 	if current := h.servicePasswords(t, instance); current != servicePasswords {
 		t.Fatal("PW-07 изменила служебные пароли")
 	}
+	for _, nodeName := range cordoned {
+		h.setNodeUnschedulable(t, nodeName, false)
+	}
+	cordoned = nil
 
 	h.deleteInstance(t, instance)
 }
@@ -2571,19 +2632,13 @@ func Test_RZ04_ResizeHA_WhenReplacementHasNoCapacity_KeepsAcceptedRolloutUnappli
 		t.Fatalf("RZ-04 не сохранила принятую цель: %+v", status.Status.Rollout)
 	}
 	target := processForIdentity(t, status.Status.Nodes, *status.Status.Rollout.Process)
-	occupied := map[string]bool{}
-	for _, process := range status.Status.Nodes {
-		if process.Ordinal != target.Ordinal {
-			occupied[process.NodeName] = true
-		}
-	}
 	nodes := &corev1.NodeList{}
 	if err := h.k8s.List(t.Context(), nodes); err != nil {
 		t.Fatalf("RZ-04 прочитать Node: %v", err)
 	}
-	cordoned := make([]string, 0, len(nodes.Items)-len(occupied))
+	cordoned := make([]string, 0, len(nodes.Items))
 	for _, node := range nodes.Items {
-		if occupied[node.Name] || node.Spec.Unschedulable {
+		if node.Spec.Unschedulable {
 			continue
 		}
 		h.setNodeUnschedulable(t, node.Name, true)

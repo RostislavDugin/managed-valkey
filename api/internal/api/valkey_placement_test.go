@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +12,9 @@ import (
 	valkeydomain "github.com/RostislavDugin/managed-valkey/api/internal/valkey"
 )
 
-func Test_CreateValkey_WhenClusterCapacityIsFragmented_ReturnsPlacementDetailsWithoutPartialRows(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 3, NodeCPUMilli: 3000, NodeRAMMiB: 12288}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_WhenAggregateBudgetFits_AcceptsWithoutPlacementCheck(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 8000, RAMMiB: 32768}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	seedOwner := app.registerAccount(t, "")
 	candidateOwner := app.registerAccount(t, "")
 	setUserQuota(t, app, seedOwner.ID, 32, 128)
@@ -25,67 +24,27 @@ func Test_CreateValkey_WhenClusterCapacityIsFragmented_ReturnsPlacementDetailsWi
 			"name": "fragment-" + string(rune('a'+index)), "vcpu": 2, "ram_gb": 8,
 		})
 	}
-	beforeInstances := countRows(t, app, &store.ValkeyInstance{}, "user_id = ?", candidateOwner.ID)
-	beforeAudit := countRows(t, app, &store.AuditLog{}, "user_id = ?", candidateOwner.ID)
-	beforePeriods := countRows(t, app, &store.BillingPeriod{}, "user_id = ?", candidateOwner.ID)
-	beforeKeys := countRows(t, app, &store.IdempotencyKey{}, "user_id = ?", candidateOwner.ID)
-
 	response := createValkeyWithKey(t, app, candidateOwner, uuid.NewString(), map[string]any{
-		"name": "does-not-fit", "prefix": "place", "vcpu": 2, "ram_gb": 8,
+		"name": "aggregate-boundary", "prefix": "place", "vcpu": 2, "ram_gb": 8,
 	})
-	errorBody := assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
-	if errorBody.Error.Details["reason"] != "placement_capacity" {
-		t.Fatalf("неверная причина: %+v", errorBody)
-	}
-	missing := errorBody.Error.Details["missing"].(map[string]any)
-	if missing["vcpu"] != float64(0) || missing["ram_gb"] != float64(0) {
-		t.Fatalf("общий дефицит при фрагментации не равен нулю: %+v", missing)
-	}
-	placement := errorBody.Error.Details["placement"].(map[string]any)
-	if placement["node_count"] != float64(3) || placement["required_distinct_nodes"] != float64(1) {
-		t.Fatalf("неверная топология в ответе: %+v", placement)
-	}
-	process := placement["process"].(map[string]any)
-	nodeBudget := placement["node_budget"].(map[string]any)
-	if process["cpu_milli"] != float64(2000) || process["ram_mib"] != float64(8192) ||
-		nodeBudget["cpu_milli"] != float64(3000) || nodeBudget["ram_mib"] != float64(12288) {
-		t.Fatalf("неверные единицы размещения: %+v", placement)
-	}
-	for _, secret := range []string{seedOwner.ID.String(), "fragment-a", "fragment-b", "fragment-c"} {
-		if strings.Contains(string(response.Body), secret) {
-			t.Fatalf("ответ раскрыл чужой инстанс %q: %s", secret, response.Body)
-		}
-	}
-	if countRows(t, app, &store.ValkeyInstance{}, "user_id = ?", candidateOwner.ID) != beforeInstances ||
-		countRows(t, app, &store.AuditLog{}, "user_id = ?", candidateOwner.ID) != beforeAudit ||
-		countRows(t, app, &store.BillingPeriod{}, "user_id = ?", candidateOwner.ID) != beforePeriods ||
-		countRows(t, app, &store.IdempotencyKey{}, "user_id = ?", candidateOwner.ID) != beforeKeys {
-		t.Fatal("отказ по размещению оставил частичные строки")
-	}
+	assertStatus(t, response, http.StatusAccepted)
 }
 
-func Test_CreateValkey_WithHAAndOnlyTwoNodes_ReturnsPlacementCapacity(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 2, NodeCPUMilli: 4000, NodeRAMMiB: 16384}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_WithHAWithinAggregateBudget_AcceptsWithoutNodeCount(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 8000, RAMMiB: 32768}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
 	setUserQuota(t, app, owner.ID, 32, 128)
 
 	response := createValkeyWithKey(t, app, owner, uuid.NewString(), map[string]any{
-		"name": "ha-needs-three", "prefix": "place", "mode": "ha", "vcpu": 1, "ram_gb": 4,
+		"name": "ha-processes", "prefix": "place", "mode": "ha", "vcpu": 1, "ram_gb": 4,
 	})
-	errorBody := assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
-	if errorBody.Error.Details["reason"] != "placement_capacity" {
-		t.Fatalf("неверная причина: %+v", errorBody)
-	}
-	placement := errorBody.Error.Details["placement"].(map[string]any)
-	if placement["required_distinct_nodes"] != float64(3) {
-		t.Fatalf("неверное число разных нод: %+v", placement)
-	}
+	assertStatus(t, response, http.StatusAccepted)
 }
 
-func Test_CreateValkey_WhenPersonalAndPlacementLimitsFail_ReturnsPersonalQuotaFirst(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 2, NodeCPUMilli: 4000, NodeRAMMiB: 16384}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_WhenPersonalQuotaFails_ReturnsPersonalQuota(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 8000, RAMMiB: 32768}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
 
 	response := createValkeyWithKey(t, app, owner, uuid.NewString(), map[string]any{
@@ -97,9 +56,9 @@ func Test_CreateValkey_WhenPersonalAndPlacementLimitsFail_ReturnsPersonalQuotaFi
 	}
 }
 
-func Test_CreateValkey_WhenClusterAndPlacementLimitsFail_ReturnsClusterQuotaFirst(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 2, NodeCPUMilli: 2000, NodeRAMMiB: 8192}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_WhenAggregateBudgetFails_ReturnsClusterQuota(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 4000, RAMMiB: 16384}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
 	setUserQuota(t, app, owner.ID, 32, 128)
 
@@ -112,19 +71,18 @@ func Test_CreateValkey_WhenClusterAndPlacementLimitsFail_ReturnsClusterQuotaFirs
 	}
 }
 
-func Test_CreateValkey_WhenPlacementCheckTimesOut_ReturnsUnavailableWithoutPartialRows(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{
-		NodeCount: 3, NodeCPUMilli: 4000, NodeRAMMiB: 16384, PlacementTimeout: -time.Nanosecond,
-	}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_WithPhysicalFourVCPUAndSixteenGiB_RejectsReservedInfrastructureCapacity(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 3400, RAMMiB: 14745}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
+	setUserQuota(t, app, owner.ID, 8, 32)
 	key := uuid.NewString()
 
 	response := createValkeyWithKey(t, app, owner, key, map[string]any{
-		"name": "timeout", "prefix": "place", "vcpu": 1, "ram_gb": 1,
+		"name": "uses-reserve", "prefix": "place", "vcpu": 4, "ram_gb": 16,
 	})
-	errorBody := assertError(t, response, http.StatusServiceUnavailable, string(apierr.CodeUnavailable))
-	if errorBody.Error.Details["reason"] != "placement_check_timeout" {
+	errorBody := assertError(t, response, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
+	if errorBody.Error.Details["reason"] != "cluster_quota" {
 		t.Fatalf("неверная причина: %+v", errorBody)
 	}
 	assertDatabaseCount(t, app.database.DB().Model(&store.ValkeyInstance{}).Where("user_id = ?", owner.ID), 0)
@@ -132,8 +90,8 @@ func Test_CreateValkey_WhenPlacementCheckTimesOut_ReturnsUnavailableWithoutParti
 }
 
 func Test_ResizeValkey_WhenReplacingOwnReservation_DoesNotCountItTwice(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 1, NodeCPUMilli: 2000, NodeRAMMiB: 8192}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 2000, RAMMiB: 8192}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
 	setUserQuota(t, app, owner.ID, 8, 32)
 	instance := createValkey(t, app, owner, map[string]any{"name": "replace-reserve", "vcpu": 1, "ram_gb": 4})
@@ -150,9 +108,9 @@ func Test_ResizeValkey_WhenReplacingOwnReservation_DoesNotCountItTwice(t *testin
 	assertStatus(t, response, http.StatusAccepted)
 }
 
-func Test_CreateValkey_AfterUnconfirmedReduction_HoldsOldPlacementUntilAppliedSizeChanges(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 2, NodeCPUMilli: 2500, NodeRAMMiB: 10240}
-	app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+func Test_CreateValkey_AfterUnconfirmedReduction_HoldsOldAggregateReserveUntilAppliedSizeChanges(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 4000, RAMMiB: 16384}
+	app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 	owner := app.registerAccount(t, "")
 	setUserQuota(t, app, owner.ID, 32, 128)
 	shrinking := createValkey(t, app, owner, map[string]any{
@@ -174,8 +132,8 @@ func Test_CreateValkey_AfterUnconfirmedReduction_HoldsOldPlacementUntilAppliedSi
 		"name": "held-capacity", "vcpu": 2, "ram_gb": 8,
 	})
 	errorBody := assertError(t, rejected, http.StatusUnprocessableEntity, string(apierr.CodeNotEnoughResources))
-	if errorBody.Error.Details["reason"] != "placement_capacity" {
-		t.Fatalf("неподтверждённое уменьшение освободило размещение: %+v", errorBody)
+	if errorBody.Error.Details["reason"] != "cluster_quota" {
+		t.Fatalf("неподтверждённое уменьшение освободило суммарный резерв: %+v", errorBody)
 	}
 
 	if err := app.database.DB().
@@ -194,8 +152,8 @@ func Test_CreateValkey_AfterUnconfirmedReduction_HoldsOldPlacementUntilAppliedSi
 }
 
 func Test_ResizeValkey_AfterClusterBudgetDecrease_AllowsNonIncreasingReservation(t *testing.T) {
-	largeTopology := valkeydomain.ClusterTopology{NodeCount: 1, NodeCPUMilli: 4000, NodeRAMMiB: 16384}
-	large := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &largeTopology})
+	largeCluster := valkeydomain.ClusterCapacity{CPUMilli: 4000, RAMMiB: 16384}
+	large := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &largeCluster})
 	owner := large.registerAccount(t, "")
 	setUserQuota(t, large, owner.ID, 8, 32)
 	instance := createValkey(t, large, owner, map[string]any{
@@ -203,8 +161,8 @@ func Test_ResizeValkey_AfterClusterBudgetDecrease_AllowsNonIncreasingReservation
 	})
 	makeValkeyReady(t, large, instance.ID)
 
-	smallTopology := valkeydomain.ClusterTopology{NodeCount: 1, NodeCPUMilli: 1000, NodeRAMMiB: 4096}
-	small := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &smallTopology})
+	smallCluster := valkeydomain.ClusterCapacity{CPUMilli: 1000, RAMMiB: 4096}
+	small := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &smallCluster})
 	response := small.requestJSON(
 		t,
 		http.MethodPost,
@@ -243,8 +201,8 @@ func Test_CreateValkey_WhenExistingInstanceIsErrorOrDeleting_HoldsCapacityUntilD
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			topology := valkeydomain.ClusterTopology{NodeCount: 1, NodeCPUMilli: 1000, NodeRAMMiB: 1024}
-			app := newHTTPTestAPI(t, testAPIConfig{clusterTopology: &topology})
+			cluster := valkeydomain.ClusterCapacity{CPUMilli: 1000, RAMMiB: 1024}
+			app := newHTTPTestAPI(t, testAPIConfig{clusterCapacity: &cluster})
 			owner := app.registerAccount(t, "")
 			candidateOwner := app.registerAccount(t, "")
 			instance := createValkey(t, app, owner, map[string]any{"name": "held-reserve"})
@@ -280,9 +238,9 @@ func Test_CreateValkey_WhenExistingInstanceIsErrorOrDeleting_HoldsCapacityUntilD
 	}
 }
 
-func Test_CreateValkey_WithConcurrentIdempotentPlacementRetry_ReservesOnce(t *testing.T) {
-	topology := valkeydomain.ClusterTopology{NodeCount: 1, NodeCPUMilli: 1000, NodeRAMMiB: 1024}
-	config := testAPIConfig{clusterTopology: &topology}
+func Test_CreateValkey_WithConcurrentIdempotentAggregateRetry_ReservesOnce(t *testing.T) {
+	cluster := valkeydomain.ClusterCapacity{CPUMilli: 1000, RAMMiB: 1024}
+	config := testAPIConfig{clusterCapacity: &cluster}
 	first := newHTTPTestAPI(t, config)
 	second := newHTTPTestAPI(t, config)
 	owner := first.registerAccount(t, "")

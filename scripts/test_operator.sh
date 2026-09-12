@@ -17,6 +17,8 @@ binary="$run_dir/operator-integration.test"
 operator_image="managed-valkey/operator:$run_id"
 valkey_image=valkey/valkey:8.1.9
 pause_image=rancher/mirrored-pause:3.10.2
+envoy_gateway_image=docker.io/envoyproxy/gateway:v1.8.4
+envoy_image='docker.io/envoyproxy/envoy:distroless-v1.38.4@sha256:b28fbee81528c5b6e8857412e5e0f48ea5baa0199cf73ab611aa7f88a808eba7'
 image_archive="$run_dir/k3s-images.tar"
 max_parallel=${MV_OPERATOR_TEST_MAX_PARALLEL:-12}
 network_memory_mib=${MV_OPERATOR_NETWORK_TEST_MEMORY_MIB:-6144}
@@ -241,7 +243,8 @@ reserve_preparation_resources
 for preparation in fast artifacts valkey; do
     ((signal_status == 0)) || exit "$signal_status"
     setsid "$prepare_script" "$preparation" \
-        "$run_dir" "$binary" "$operator_image" "$valkey_image" "$pause_image" "$image_archive" &
+        "$run_dir" "$binary" "$operator_image" "$valkey_image" "$pause_image" "$image_archive" \
+        "$envoy_gateway_image" "$envoy_image" &
     preparation_by_pid[$!]=$preparation
 done
 
@@ -254,7 +257,8 @@ done
 ((signal_status == 0)) || exit "$signal_status"
 
 setsid "$prepare_script" bundle \
-    "$run_dir" "$binary" "$operator_image" "$valkey_image" "$pause_image" "$image_archive" &
+    "$run_dir" "$binary" "$operator_image" "$valkey_image" "$pause_image" "$image_archive" \
+    "$envoy_gateway_image" "$envoy_image" &
 preparation_by_pid[$!]=bundle
 for pid in "${!preparation_by_pid[@]}"; do
     [[ "${preparation_by_pid[$pid]}" == bundle ]] || continue

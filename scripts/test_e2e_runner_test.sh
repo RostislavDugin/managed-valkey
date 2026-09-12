@@ -67,16 +67,13 @@ process_is_live() {
 
 run_script() {
     local state=$1
-    local topology=(
-        MANAGED_K8S_NODE_COUNT=3
-        MANAGED_K8S_NODE_CAPACITY_VCPU=7
-        MANAGED_K8S_NODE_CAPACITY_RAM_GB=23
-        MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123
-        MANAGED_K8S_NODE_RESERVED_RAM_MIB=456
+    local capacity=(
+		MANAGED_K8S_CLUSTER_VCPU=21
+		MANAGED_K8S_CLUSTER_RAM_GB=69
     )
 
-    if [[ ${MV_E2E_USE_DEFAULT_TOPOLOGY:-} == 1 ]]; then
-        topology=()
+    if [[ ${MV_E2E_USE_DEFAULT_CAPACITY:-} == 1 ]]; then
+		capacity=()
     fi
 
     env \
@@ -101,7 +98,7 @@ run_script() {
         OPERATOR_KUBECONFIG="$state/operator.kubeconfig" \
         TEST_DATABASE_URL=postgres://test \
         VALKEY_BASE_DOMAIN=e2e.valkey.localhost \
-        "${topology[@]}" \
+        "${capacity[@]}" \
         "$repo_root/scripts/test_e2e.sh"
 }
 
@@ -116,22 +113,14 @@ rg -q '^VALKEY_ENVOY_PROCESSES=2$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_INTEGRATION_REQUEST_CPU=100m$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_INTEGRATION_REQUEST_MEMORY=128Mi$' "$normal_state/started/operator.env"
 rg -q '^VALKEY_PUBLIC_PORT=41379$' "$normal_state/started/operator.env"
-rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$normal_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=7$' "$normal_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=23$' "$normal_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123$' "$normal_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=456$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_CLUSTER_VCPU=21$' "$normal_state/started/api.env"
+rg -q '^MANAGED_K8S_CLUSTER_RAM_GB=69$' "$normal_state/started/api.env"
 rg -q '^MANAGED_VALKEY_E2E_ACTION_DELAY_MS=0$' "$normal_state/started/playwright.env"
 rg -q '^MANAGED_VALKEY_E2E_SCROLL_PAUSE_MS=0$' "$normal_state/started/playwright.env"
 rg -q ' test$' "$normal_state/started/playwright.args"
 rg -q '^MANAGED_VALKEY_E2E_ADMIN_KUBECONFIG=' "$normal_state/started/playwright.env"
 rg -q '^MANAGED_VALKEY_E2E_COMPOSE_PROJECT=managed-valkey-e2e-shell-test$' \
     "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=7$' "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=23$' "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=123$' "$normal_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=456$' "$normal_state/started/playwright.env"
 secret_values_file="$normal_state/e2e-secret-values"
 rg --fixed-strings --line-regexp --quiet testpassword "$secret_values_file"
 jwt_secret=$(awk -F= '$1 == "JWT_SECRET" { print $2 }' "$normal_state/started/api.env")
@@ -146,16 +135,9 @@ done <"$normal_state/processes.tsv"
 
 defaults_state="$temporary/defaults"
 prepare_state "$defaults_state"
-MV_E2E_USE_DEFAULT_TOPOLOGY=1 run_script "$defaults_state"
-rg -q '^MANAGED_K8S_NODE_COUNT=3$' "$defaults_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_VCPU=4$' "$defaults_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_CAPACITY_RAM_GB=16$' "$defaults_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=2000$' "$defaults_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=8192$' "$defaults_state/started/api.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_CPU_MILLI=2000$' \
-    "$defaults_state/started/playwright.env"
-rg -q '^MANAGED_K8S_NODE_RESERVED_RAM_MIB=8192$' \
-    "$defaults_state/started/playwright.env"
+MV_E2E_USE_DEFAULT_CAPACITY=1 run_script "$defaults_state"
+rg -q '^MANAGED_K8S_CLUSTER_VCPU=12$' "$defaults_state/started/api.env"
+rg -q '^MANAGED_K8S_CLUSTER_RAM_GB=48$' "$defaults_state/started/api.env"
 
 group_state="$temporary/group"
 prepare_state "$group_state"

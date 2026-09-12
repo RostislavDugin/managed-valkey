@@ -30,8 +30,9 @@ import (
 )
 
 const (
-	syncWaitTimeout      = 20 * time.Second
-	testMetricsRetention = 168 * time.Hour
+	syncWaitTimeout               = 20 * time.Second
+	kubernetesDeletionWaitTimeout = 60 * time.Second
+	testMetricsRetention          = 168 * time.Hour
 )
 
 type interceptUpdateClient struct {
@@ -1879,7 +1880,7 @@ func removeInstanceFinalizer(t *testing.T, app *testAPI, resource *valkeyv1alpha
 func waitForKubernetesDeletion(t *testing.T, app *testAPI, namespace, slug string) {
 	t.Helper()
 
-	deadline := time.Now().Add(syncWaitTimeout)
+	deadline := time.Now().Add(kubernetesDeletionWaitTimeout)
 	for time.Now().Before(deadline) {
 		namespaceErr := app.adminKubernetes.Get(
 			context.Background(), client.ObjectKey{Name: namespace}, &corev1.Namespace{},
@@ -1921,7 +1922,7 @@ func waitForHTTPNotFound(t *testing.T, app *testAPI, account testAccount, instan
 func completeDeletionWithoutOperator(t *testing.T, app *testAPI, slug string, instanceID uuid.UUID) {
 	t.Helper()
 
-	deadline := time.Now().Add(syncWaitTimeout)
+	deadline := time.Now().Add(kubernetesDeletionWaitTimeout)
 	finalizerRemoved := false
 	for time.Now().Before(deadline) {
 		service := valkeysync.NewService(app.database, app.kubernetes, app.logger, testMetricsRetention)

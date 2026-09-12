@@ -16,13 +16,9 @@ import (
 
 const InstanceLimit = 32
 
-const DefaultPlacementCheckTimeout = 100 * time.Millisecond
-
-type ClusterTopology struct {
-	NodeCount        int
-	NodeCPUMilli     int64
-	NodeRAMMiB       int64
-	PlacementTimeout time.Duration
+type ClusterCapacity struct {
+	CPUMilli int64
+	RAMMiB   int64
 }
 
 type Repository interface {
@@ -43,7 +39,6 @@ type Repository interface {
 	UpdateValkeyIntent(context.Context, *gorm.DB, uuid.UUID, map[string]any) error
 	AcquireValkeyMutationLock(context.Context, *gorm.DB) error
 	ValkeyUsage(context.Context, *gorm.DB, *uuid.UUID) (store.ResourceUsage, error)
-	ValkeyReservations(context.Context, *gorm.DB) ([]store.ValkeyReservation, error)
 	GetQuotaInTx(context.Context, *gorm.DB, uuid.UUID) (store.UserQuota, error)
 	CreateBillingPeriod(context.Context, *gorm.DB, *store.BillingPeriod) error
 	CloseBillingPeriod(context.Context, *gorm.DB, uuid.UUID, time.Time, domain.BillingPeriodEndReason) error
@@ -75,7 +70,7 @@ type Service struct {
 	databaseClock DatabaseClock
 	clock         Clock
 	catalog       Catalog
-	topology      ClusterTopology
+	cluster       ClusterCapacity
 	slugs         SlugGenerator
 }
 
@@ -86,16 +81,12 @@ func NewService(
 	databaseClock DatabaseClock,
 	clock Clock,
 	catalog Catalog,
-	topology ClusterTopology,
+	cluster ClusterCapacity,
 	slugs SlugGenerator,
 ) *Service {
-	if topology.PlacementTimeout == 0 {
-		topology.PlacementTimeout = DefaultPlacementCheckTimeout
-	}
-
 	return &Service{
 		repository: repository, txRunner: txRunner, audit: auditWriter, databaseClock: databaseClock, clock: clock,
-		catalog: catalog, topology: topology, slugs: slugs,
+		catalog: catalog, cluster: cluster, slugs: slugs,
 	}
 }
 
@@ -108,8 +99,8 @@ func (s *Service) Capacity(ctx context.Context, actor Actor) (Capacity, error) {
 	if err != nil {
 		return Capacity{}, apierr.WrapInternal(err)
 	}
-	clusterVCPU := int(s.topology.NodeCPUMilli * int64(s.topology.NodeCount) / 1000)
-	clusterRAMGB := int(s.topology.NodeRAMMiB * int64(s.topology.NodeCount) / 1024)
+	clusterVCPU := int(s.cluster.CPUMilli / 1000)
+	clusterRAMGB := int(s.cluster.RAMMiB / 1024)
 
 	return Capacity{
 		User: CapacityBudget{
