@@ -129,6 +129,14 @@ fi
 if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == namespace/valkey-system ]]; then
     exit 0
 fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
+    ${3:-} == rollout && ${4:-} == status ]]; then
+    [[ $TEST_KUBECTL_MODE != metrics-deployment-unavailable ]]
+    exit
+fi
+if [[ $TEST_KUBECTL_MODE == metrics-deployment-unavailable ]]; then
+    exit 0
+fi
 if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == apiservice/v1beta1.metrics.k8s.io ]]; then
     [[ $TEST_KUBECTL_MODE != metrics-api-unavailable ]]
     exit
@@ -311,10 +319,27 @@ grep -Fq 'upgrade --install metrics-server metrics-server/metrics-server --versi
     "$state_dir/helm.log"
 grep -Fq -- '--namespace kube-system --set replicas=1 --set-string image.tag=v0.9.0' \
     "$state_dir/helm.log"
+if grep -Fq -- '--wait' "$state_dir/helm.log"; then
+    echo "Helm ожидает Deployment без диагностики" >&2
+    exit 1
+fi
 if grep -Fq -- '--kubelet-insecure-tls' "$state_dir/helm.log"; then
     echo "проверка TLS kubelet отключена" >&2
     exit 1
 fi
+
+run_case metrics-deployment-unavailable "$work_dir/metrics-deployment-unavailable.log"
+[[ $case_status == 1 ]]
+grep -Fq 'rollout status deployment/metrics-server --timeout=180s' \
+    "$state_dir/kubectl.log"
+grep -Fq 'get deployment,pods -l app.kubernetes.io/instance=metrics-server -o wide' \
+    "$state_dir/kubectl.log"
+grep -Fq 'describe deployment metrics-server' "$state_dir/kubectl.log"
+grep -Fq 'logs deployment/metrics-server --all-containers=true --tail=200' \
+    "$state_dir/kubectl.log"
+grep -Fq 'describe apiservice v1beta1.metrics.k8s.io' "$state_dir/kubectl.log"
+grep -Fq 'Deployment metrics-server не достиг состояния Available' \
+    "$work_dir/metrics-deployment-unavailable.log"
 
 run_case metrics-success "$work_dir/metrics-success.log"
 [[ $case_status == 0 ]]

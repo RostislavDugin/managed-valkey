@@ -201,9 +201,19 @@ helm upgrade --install metrics-server metrics-server/metrics-server \
     --version "$metrics_server_chart_version" \
     --namespace kube-system \
     --set replicas=1 \
-    --set-string image.tag="$metrics_server_version" \
-    --wait \
-    --timeout 10m
+    --set-string image.tag="$metrics_server_version"
+if ! kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s; then
+    kubectl -n kube-system get deployment,pods \
+        -l app.kubernetes.io/instance=metrics-server \
+        -o wide >&2 || true
+    kubectl -n kube-system describe deployment metrics-server >&2 || true
+    kubectl -n kube-system logs deployment/metrics-server \
+        --all-containers=true \
+        --tail=200 >&2 || true
+    kubectl describe apiservice v1beta1.metrics.k8s.io >&2 || true
+    echo "Deployment metrics-server не достиг состояния Available" >&2
+    exit 1
+fi
 if ! kubectl wait --for=condition=Available \
     apiservice/v1beta1.metrics.k8s.io \
     --timeout=180s; then
