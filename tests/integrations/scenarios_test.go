@@ -536,17 +536,34 @@ func Test_CreateSingleValkey_WithRealApiAndOperator_BecomesReachableAndRunning(t
 	if err != nil || currentCredentials.Host != current.Host || currentCredentials.HostRO != current.HostRO {
 		t.Fatalf("credentials не вернул оба адреса: credentials=%+v error=%v", currentCredentials, err)
 	}
-	platformStatus, err := harness.api.Health(ctx)
+	platformHealthContext, cancelPlatformHealth := context.WithTimeout(context.Background(), conditionTimeout)
+	lastPlatformHealth, err := waitForCondition(
+		platformHealthContext,
+		harness.processes,
+		pollInterval,
+		func(ctx context.Context) (string, bool, error) {
+			observed, healthErr := harness.api.Health(ctx)
+			if healthErr != nil {
+				return healthErr.Error(), false, nil
+			}
+			encoded, _ := json.Marshal(observed)
+			healthy := observed.Status == "ok" &&
+				observed.Checks.PostgreSQL.Status == "ok" &&
+				observed.Checks.Kubernetes.Status == "ok" &&
+				observed.Checks.Operations.Status == "ok" &&
+				observed.Checks.Instances.Status == "ok"
+
+			return string(encoded), healthy, nil
+		},
+	)
+	cancelPlatformHealth()
 	if err != nil {
-		t.Fatalf("/health не ответил: %v", err)
-	}
-	operationsStatus := platformStatus.Checks.Operations.Status
-	if platformStatus.Status != operationsStatus ||
-		(operationsStatus != "ok" && operationsStatus != "warning") ||
-		platformStatus.Checks.PostgreSQL.Status != "ok" ||
-		platformStatus.Checks.Kubernetes.Status != "ok" ||
-		platformStatus.Checks.Instances.Status != "ok" {
-		t.Fatalf("/health не подтвердил состояние платформы: health=%+v", platformStatus)
+		harness.saveLastObservation("platform-health", lastPlatformHealth)
+		t.Fatalf(
+			"/health не подтвердил исправное состояние платформы: %v; последнее наблюдение: %s",
+			err,
+			lastPlatformHealth,
+		)
 	}
 	valkeyStatus, err := harness.api.ValkeyHealth(
 		ctx,
