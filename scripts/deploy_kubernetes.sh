@@ -18,6 +18,7 @@ cert_manager_version=v1.21.1
 metrics_server_chart_version=3.14.0
 metrics_server_version=v0.9.0
 metrics_max_age_seconds=60
+metrics_server_values="$repo_root/deploy/prod/metrics-server-values.yaml"
 cert_manager_webhook_host=cert-manager-webhook.valkey.h3llo-demo.com
 cloudflare_token_file=""
 restart_check_pods=()
@@ -48,7 +49,7 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
     exit 1
 fi
 
-for command in kubectl helm docker sed base64 getent awk sort date; do
+for command in kubectl helm docker sed base64 getent awk sort date jq; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "не установлена команда $command" >&2
         exit 1
@@ -201,7 +202,27 @@ helm upgrade --install metrics-server metrics-server/metrics-server \
     --version "$metrics_server_chart_version" \
     --namespace kube-system \
     --set replicas=1 \
-    --set-string image.tag="$metrics_server_version"
+    --set-string image.tag="$metrics_server_version" \
+    --values "$metrics_server_values"
+metrics_server_host_aliases=$(kubectl get nodes -o json | jq -c '
+    [.items[] |
+        {
+            ip: ([.status.addresses[] | select(.type == "InternalIP") | .address][0]),
+            hostnames: [.metadata.name]
+        } |
+        select(.ip != null)
+    ]
+')
+if [[ $(jq length <<<"$metrics_server_host_aliases") -ne ${#worker_nodes[@]} ]]; then
+    echo "не для всех рабочих нод найден InternalIP" >&2
+    exit 1
+fi
+metrics_server_patch=$(jq -cn \
+    --argjson host_aliases "$metrics_server_host_aliases" \
+    '{spec: {template: {spec: {hostAliases: $host_aliases}}}}')
+kubectl -n kube-system patch deployment metrics-server \
+    --type=merge \
+    --patch "$metrics_server_patch"
 if ! kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s; then
     kubectl -n kube-system get deployment,pods \
         -l app.kubernetes.io/instance=metrics-server \

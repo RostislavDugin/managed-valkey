@@ -33,7 +33,9 @@ if [[ ${1:-} == get && ${2:-} == statefulsets.apps ]]; then
     exit 0
 fi
 if [[ ${1:-} == get && ${2:-} == nodes ]]; then
-    if [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
+    if [[ ${3:-} == -o && ${4:-} == json ]]; then
+        printf '%s\n' '{"items":[{"metadata":{"name":"node-a"},"status":{"addresses":[{"type":"InternalIP","address":"10.17.0.35"}]}}]}'
+    elif [[ $TEST_KUBECTL_MODE == broken-node-network ]]; then
         if [[ $* == *InternalIP* ]]; then
             printf '%s\n' 10.17.0.26 10.17.0.27
         else
@@ -127,6 +129,10 @@ if [[ ${1:-} == apply && ${2:-} == -f && ${3:-} == */deploy/prod/namespace.yaml 
     exit 73
 fi
 if [[ $metrics_mode == true && ${1:-} == wait && ${3:-} == namespace/valkey-system ]]; then
+    exit 0
+fi
+if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
+    ${3:-} == patch && ${4:-} == deployment && ${5:-} == metrics-server ]]; then
     exit 0
 fi
 if [[ $metrics_mode == true && ${1:-} == -n && ${2:-} == kube-system &&
@@ -319,6 +325,8 @@ grep -Fq 'upgrade --install metrics-server metrics-server/metrics-server --versi
     "$state_dir/helm.log"
 grep -Fq -- '--namespace kube-system --set replicas=1 --set-string image.tag=v0.9.0' \
     "$state_dir/helm.log"
+grep -Fq -- "--values $repo_root/deploy/prod/metrics-server-values.yaml" \
+    "$state_dir/helm.log"
 if grep -Fq -- '--wait' "$state_dir/helm.log"; then
     echo "Helm ожидает Deployment без диагностики" >&2
     exit 1
@@ -327,6 +335,16 @@ if grep -Fq -- '--kubelet-insecure-tls' "$state_dir/helm.log"; then
     echo "проверка TLS kubelet отключена" >&2
     exit 1
 fi
+grep -Fxq '  - --kubelet-preferred-address-types=Hostname,InternalDNS,InternalIP,ExternalDNS,ExternalIP' \
+    "$repo_root/deploy/prod/metrics-server-values.yaml"
+if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-values.yaml"; then
+    echo "проверка TLS kubelet отключена в значениях chart" >&2
+    exit 1
+fi
+grep -Fq -- '-n kube-system patch deployment metrics-server --type=merge --patch' \
+    "$state_dir/kubectl.log"
+grep -Fq -- '"hostAliases":[{"ip":"10.17.0.35","hostnames":["node-a"]}]' \
+    "$state_dir/kubectl.log"
 
 run_case metrics-deployment-unavailable "$work_dir/metrics-deployment-unavailable.log"
 [[ $case_status == 1 ]]
