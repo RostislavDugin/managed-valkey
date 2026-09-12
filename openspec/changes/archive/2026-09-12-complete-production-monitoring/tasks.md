@@ -4,6 +4,7 @@
 - [x] 1.2 Добавить ограниченное ожидание `Available` для `v1beta1.metrics.k8s.io` и свежего неотрицательного CPU `operator-0` при запросе от имени учётной записи оператора; покрыть успешный ответ, недоступный API, отказ RBAC и истечение срока в `scripts/deploy_kubernetes_test.sh`, затем запустить этот тест.
 - [x] 1.3 Обновить `SYSTEM.md` и `SYSTEM-DETAIL.md`: описать Metrics Server как часть production-инфраструктуры и проверку выпуска; проверить точные ссылки и названия поиском `rg -n 'Metrics Server|metrics.k8s.io' SYSTEM.md SYSTEM-DETAIL.md`.
 - [x] 1.4 Перенести набор CA kubelet из репозитория в `PRODUCTION_KUBELET_CA`, проверять каждый сертификат и запас срока действия, перезапускать Metrics Server при изменении контрольной суммы и покрыть ошибку и ротацию с двумя CA в `scripts/deploy_kubernetes_test.sh`.
+- [x] 1.5 Настроить обновление Metrics Server с `maxSurge: 0` и `maxUnavailable: 1`, чтобы единственная нода освобождала порт `4443` перед запуском нового Pod; собирать журналы обоих Pod при ошибке rollout.
 
 ## 2. Короткие пропуски графика
 

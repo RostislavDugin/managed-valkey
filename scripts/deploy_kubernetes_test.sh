@@ -369,6 +369,9 @@ grep -Fxq '  - --kubelet-certificate-authority=/etc/kubelet-ca/ca.crt' \
 grep -Fxq 'containerPort: 4443' "$repo_root/deploy/prod/metrics-server-values.yaml"
 grep -Fxq 'hostNetwork:' "$repo_root/deploy/prod/metrics-server-values.yaml"
 grep -Fxq '  enabled: true' "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq 'updateStrategy:' "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq '    maxSurge: 0' "$repo_root/deploy/prod/metrics-server-values.yaml"
+grep -Fxq '    maxUnavailable: 1' "$repo_root/deploy/prod/metrics-server-values.yaml"
 if rg -Fq -- '--kubelet-insecure-tls' "$repo_root/deploy/prod/metrics-server-values.yaml"; then
     echo "проверка TLS kubelet отключена в значениях chart" >&2
     exit 1
@@ -422,7 +425,7 @@ grep -Fq 'rollout status deployment/metrics-server --timeout=180s' \
 grep -Fq 'get deployment,pods -l app.kubernetes.io/instance=metrics-server -o wide' \
     "$state_dir/kubectl.log"
 grep -Fq 'describe deployment metrics-server' "$state_dir/kubectl.log"
-grep -Fq 'logs deployment/metrics-server --all-containers=true --tail=200' \
+grep -Fq 'logs -l app.kubernetes.io/instance=metrics-server --all-containers=true --prefix=true --tail=200' \
     "$state_dir/kubectl.log"
 grep -Fq 'describe apiservice v1beta1.metrics.k8s.io' "$state_dir/kubectl.log"
 grep -Fq 'Deployment metrics-server не достиг состояния Available' \

@@ -295,8 +295,10 @@ if ! kubectl -n kube-system rollout status deployment/metrics-server --timeout=1
         -l app.kubernetes.io/instance=metrics-server \
         -o wide >&2 || true
     kubectl -n kube-system describe deployment metrics-server >&2 || true
-    kubectl -n kube-system logs deployment/metrics-server \
+    kubectl -n kube-system logs \
+        -l app.kubernetes.io/instance=metrics-server \
         --all-containers=true \
+        --prefix=true \
         --tail=200 >&2 || true
     kubectl describe apiservice v1beta1.metrics.k8s.io >&2 || true
     echo "Deployment metrics-server не достиг состояния Available" >&2

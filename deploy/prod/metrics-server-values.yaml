@@ -12,6 +12,12 @@ containerPort: 4443
 hostNetwork:
   enabled: true
 
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+
 extraVolumeMounts:
   - name: kubelet-ca
     mountPath: /etc/kubelet-ca
