@@ -41,6 +41,21 @@ cleanup() {
 
 trap cleanup EXIT
 
+retry() {
+    local attempt
+
+    for attempt in {1..5}; do
+        if "$@"; then
+            return 0
+        fi
+        if ((attempt < 5)); then
+            echo "попытка $attempt не удалась, повтор через 10 с" >&2
+            sleep 10
+        fi
+    done
+    return 1
+}
+
 if [[ ! $release_sha =~ ^[0-9a-f]{40}$ ]]; then
     echo "SHA должен состоять из 40 строчных шестнадцатеричных символов" >&2
     exit 2
@@ -323,7 +338,7 @@ fi
 kubectl apply --server-side --force-conflicts -f \
     "https://github.com/kubernetes-sigs/gateway-api/releases/download/${gateway_api_version}/experimental-install.yaml"
 
-helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+retry helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
     --version "$envoy_gateway_version" \
     --namespace envoy-gateway-system \
     --create-namespace \
@@ -331,7 +346,7 @@ helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
     --wait \
     --timeout 10m
 
-helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+retry helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
     --version "$cert_manager_version" \
     --namespace cert-manager \
     --create-namespace \

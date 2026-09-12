@@ -267,6 +267,15 @@ printf '%s\n' "$*" >>"$TEST_HELM_LOG"
 if [[ $TEST_KUBECTL_MODE != metrics-* ]]; then
     exit 2
 fi
+if [[ $TEST_KUBECTL_MODE == metrics-helm-retry &&
+    $* == *'upgrade --install envoy-gateway '* ]]; then
+    retry_count=$(<"$TEST_KUBECTL_STATE/helm-retry-count")
+    retry_count=$((retry_count + 1))
+    printf '%s\n' "$retry_count" >"$TEST_KUBECTL_STATE/helm-retry-count"
+    if ((retry_count < 3)); then
+        exit 1
+    fi
+fi
 if [[ $* == 'repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update' ]]; then
     exit 0
 fi
@@ -313,6 +322,7 @@ run_case() {
     : >"$state_dir/kubectl.log"
     : >"$state_dir/helm.log"
     : >"$state_dir/pods.yaml"
+    printf '0\n' >"$state_dir/helm-retry-count"
 
     set +e
     PATH="$fake_bin:$PATH" \
@@ -441,6 +451,13 @@ grep -Fq -- '--as=system:serviceaccount:valkey-system:managed-valkey-operator -n
     "$state_dir/kubectl.log"
 grep -Fq 'Kubernetes подготовлен, адрес Envoy: 203.0.113.10' \
     "$work_dir/metrics-success.log"
+
+run_case metrics-helm-retry "$work_dir/metrics-helm-retry.log"
+[[ $case_status == 0 ]]
+[[ $(grep -Fc 'upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm' \
+    "$state_dir/helm.log") == 3 ]]
+grep -Fq 'попытка 1 не удалась, повтор через 10 с' "$work_dir/metrics-helm-retry.log"
+grep -Fq 'попытка 2 не удалась, повтор через 10 с' "$work_dir/metrics-helm-retry.log"
 
 run_case metrics-api-unavailable "$work_dir/metrics-api-unavailable.log"
 [[ $case_status == 1 ]]
